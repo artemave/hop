@@ -1,0 +1,9 @@
+{
+  "dustCommand": "bunx dust",
+  "checks": [
+    {
+      "name": "test",
+      "command": "bun test"
+    }
+  ]
+}
