@@ -19,7 +19,6 @@ implement
 
 ## Blocked By
 
-- [Implement session entry, switching, and listing](implement-session-entry-switching-and-listing.md)
 - [Implement role-based terminals and run routing](implement-role-based-terminals-and-run-routing.md)
 - [Implement shared Neovim lifecycle and editing](implement-shared-neovim-lifecycle-and-editing.md)
 - [Implement the session browser command](implement-the-session-browser-command.md)

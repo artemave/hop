@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
-from hop.app import HopError, build_default_services, execute_command
+from hop.app import build_default_services, execute_command
 from hop.commands import (
     BrowserCommand,
     Command,
@@ -16,6 +16,7 @@ from hop.commands import (
     SwitchSessionCommand,
     TermCommand,
 )
+from hop.errors import HopError
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -14,16 +14,10 @@ from hop.commands import (
     SwitchSessionCommand,
     TermCommand,
 )
-from hop.session import ProjectSession, derive_workspace_name, resolve_project_session
-
-
-class HopError(RuntimeError):
-    """Base error for hop command execution."""
-
-
-class IntegrationNotImplementedError(HopError):
-    """Raised when a command reaches an integration scaffold that is not wired yet."""
-
+from hop.commands.session import enter_project_session, list_sessions, switch_session
+from hop.errors import HopError, IntegrationNotImplementedError
+from hop.session import ProjectSession, resolve_project_session
+from hop.sway import SwayIpcAdapter
 
 class SwayAdapter(Protocol):
     def switch_to_workspace(self, workspace_name: str) -> None: ...
@@ -71,14 +65,16 @@ def execute_command(
 
     match command:
         case EnterSessionCommand():
-            session = resolve_project_session(current_directory)
-            services.sway.switch_to_workspace(session.workspace_name)
-            services.kitty.ensure_terminal(session, role="shell")
+            enter_project_session(
+                current_directory,
+                sway=services.sway,
+                terminals=services.kitty,
+            )
         case SwitchSessionCommand(session_name=session_name):
-            services.sway.switch_to_workspace(derive_workspace_name(session_name))
+            switch_session(session_name, sway=services.sway)
         case ListSessionsCommand():
-            for workspace in services.sway.list_session_workspaces():
-                print(workspace.removeprefix("p:"))
+            for session_name in list_sessions(sway=services.sway):
+                print(session_name)
         case EditCommand(target=target):
             session = _switch_to_current_session(current_directory, services=services)
             if target is None:
@@ -100,7 +96,7 @@ def execute_command(
 
 def build_default_services() -> HopServices:
     return HopServices(
-        sway=_MissingSwayAdapter(),
+        sway=SwayIpcAdapter(),
         kitty=_MissingKittyAdapter(),
         neovim=_MissingNeovimAdapter(),
         browser=_MissingBrowserAdapter(),
@@ -115,18 +111,6 @@ def _switch_to_current_session(
     session = resolve_project_session(cwd)
     services.sway.switch_to_workspace(session.workspace_name)
     return session
-
-
-class _MissingSwayAdapter:
-    def switch_to_workspace(self, workspace_name: str) -> None:
-        raise IntegrationNotImplementedError(
-            f"Sway workspace switching is not implemented yet for {workspace_name!r}."
-        )
-
-    def list_session_workspaces(self, *, prefix: str = "p:") -> Sequence[str]:
-        raise IntegrationNotImplementedError(
-            f"Sway workspace listing is not implemented yet for prefix {prefix!r}."
-        )
 
 
 class _MissingKittyAdapter:

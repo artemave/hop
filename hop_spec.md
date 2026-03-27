@@ -95,6 +95,7 @@ From inside a project directory:
 - switch to that session (workspace)
 - create it if it does not exist
 - ensure at least one terminal window exists (role `shell`)
+- reuse the existing `shell` terminal when it already exists
 
 ---
 
@@ -104,6 +105,11 @@ From inside a project directory:
 hop switch <session>
 ```
 
+Behavior:
+
+- focus workspace `p:<session>`
+- create that workspace if it does not exist yet
+
 ---
 
 ### List sessions
@@ -111,6 +117,12 @@ hop switch <session>
 ```bash
 hop list
 ```
+
+Behavior:
+
+- discover live Sway workspaces whose names start with `p:`
+- print session names without the `p:` prefix
+- print one session per line in alphabetical order
 
 ---
 

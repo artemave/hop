@@ -19,7 +19,7 @@ implement
 
 ## Blocked By
 
-- [Implement session entry, switching, and listing](implement-session-entry-switching-and-listing.md)
+(none)
 
 ## Definition of Done
 
