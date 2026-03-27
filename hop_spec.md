@@ -193,12 +193,19 @@ hop run "ls"
 
 Behavior:
 
+- resolve the current session from the caller's working directory
+- switch to workspace `p:<session>`
 - find terminal with given role
 - if missing → create it
-- send command to that terminal
+- send the exact `<command>` string followed by a trailing newline to that terminal
 - default behavior keeps the current focus while routing the command into the target role terminal
+- return after routing the command; `hop` does not wait for the command to finish or proxy its exit status
 
 Default role: `shell`
+
+External callers that want a stable test runner target should call `hop run --role test "<command>"`.
+
+The `<command>` value is a single CLI argument, so shell callers must quote it.
 
 ---
 

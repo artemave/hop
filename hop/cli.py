@@ -16,6 +16,7 @@ from hop.commands import (
     SwitchSessionCommand,
     TermCommand,
 )
+from hop.commands.run import DEFAULT_RUN_ROLE
 from hop.errors import HopError
 
 
@@ -35,7 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
     term_parser.add_argument("--role", required=True)
 
     run_parser = subparsers.add_parser("run")
-    run_parser.add_argument("--role", default="shell")
+    run_parser.add_argument("--role", default=DEFAULT_RUN_ROLE)
     run_parser.add_argument("command_text")
 
     browser_parser = subparsers.add_parser("browser")

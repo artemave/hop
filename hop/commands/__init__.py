@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from hop.commands.run import DEFAULT_RUN_ROLE
+
 
 @dataclass(frozen=True, slots=True)
 class EnterSessionCommand:
@@ -31,7 +33,7 @@ class TermCommand:
 @dataclass(frozen=True, slots=True)
 class RunCommand:
     command_text: str
-    role: str = "shell"
+    role: str = DEFAULT_RUN_ROLE
 
 
 @dataclass(frozen=True, slots=True)
