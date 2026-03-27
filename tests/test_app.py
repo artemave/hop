@@ -3,7 +3,14 @@ from contextlib import redirect_stdout
 from pathlib import Path
 
 from hop.app import HopServices, execute_command
-from hop.commands import EnterSessionCommand, ListSessionsCommand, RunCommand, SwitchSessionCommand, TermCommand
+from hop.commands import (
+    EditCommand,
+    EnterSessionCommand,
+    ListSessionsCommand,
+    RunCommand,
+    SwitchSessionCommand,
+    TermCommand,
+)
 
 
 class StubSwayAdapter:
@@ -31,11 +38,15 @@ class StubKittyAdapter:
 
 
 class StubNeovimAdapter:
+    def __init__(self) -> None:
+        self.focused_sessions: list[str] = []
+        self.opened_targets: list[tuple[str, str]] = []
+
     def focus(self, session) -> None:
-        raise AssertionError("Neovim should not be called in these tests")
+        self.focused_sessions.append(session.session_name)
 
     def open_target(self, session, *, target: str) -> None:
-        raise AssertionError("Neovim should not be called in these tests")
+        self.opened_targets.append((session.session_name, target))
 
 
 class StubBrowserAdapter:
@@ -113,3 +124,36 @@ def test_execute_command_routes_run_commands_to_role_terminal(tmp_path: Path) ->
     )
     assert services.sway.switched_workspaces == ["p:demo"]
     assert services.kitty.runs == [("demo", "server", "bin/dev")]
+
+
+def test_execute_command_focuses_shared_editor_in_current_session(tmp_path: Path) -> None:
+    project_root = tmp_path / "demo"
+    nested_directory = project_root / "src"
+    nested_directory.mkdir(parents=True)
+    (project_root / ".git").mkdir()
+
+    services = build_services()
+
+    assert execute_command(EditCommand(), cwd=nested_directory, services=services) == 0
+    assert services.sway.switched_workspaces == ["p:demo"]
+    assert services.neovim.focused_sessions == ["demo"]
+
+
+def test_execute_command_routes_edit_targets_to_shared_editor(tmp_path: Path) -> None:
+    project_root = tmp_path / "demo"
+    nested_directory = project_root / "src"
+    nested_directory.mkdir(parents=True)
+    (project_root / ".dust").mkdir()
+
+    services = build_services()
+
+    assert (
+        execute_command(
+            EditCommand(target="app/models/user.rb:42"),
+            cwd=nested_directory,
+            services=services,
+        )
+        == 0
+    )
+    assert services.sway.switched_workspaces == ["p:demo"]
+    assert services.neovim.opened_targets == [("demo", "app/models/user.rb:42")]

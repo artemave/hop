@@ -14,9 +14,11 @@ from hop.commands import (
     SwitchSessionCommand,
     TermCommand,
 )
+from hop.commands.edit import edit_in_session
 from hop.commands.run import run_command
 from hop.commands.session import enter_project_session, list_sessions, switch_session
 from hop.commands.term import focus_terminal
+from hop.editor import SharedNeovimEditorAdapter
 from hop.errors import HopError, IntegrationNotImplementedError
 from hop.kitty import KittyRemoteControlAdapter
 from hop.session import ProjectSession, resolve_project_session
@@ -79,11 +81,12 @@ def execute_command(
             for session_name in list_sessions(sway=services.sway):
                 print(session_name)
         case EditCommand(target=target):
-            session = _switch_to_current_session(current_directory, services=services)
-            if target is None:
-                services.neovim.focus(session)
-            else:
-                services.neovim.open_target(session, target=target)
+            edit_in_session(
+                current_directory,
+                sway=services.sway,
+                neovim=services.neovim,
+                target=target,
+            )
         case TermCommand(role=role):
             focus_terminal(
                 current_directory,
@@ -110,7 +113,7 @@ def build_default_services() -> HopServices:
     return HopServices(
         sway=SwayIpcAdapter(),
         kitty=KittyRemoteControlAdapter(),
-        neovim=_MissingNeovimAdapter(),
+        neovim=SharedNeovimEditorAdapter(),
         browser=_MissingBrowserAdapter(),
     )
 
@@ -140,18 +143,6 @@ class _MissingKittyAdapter:
     ) -> None:
         raise IntegrationNotImplementedError(
             f"Kitty command dispatch is not implemented yet for {session.session_name!r}:{role!r}."
-        )
-
-
-class _MissingNeovimAdapter:
-    def focus(self, session: ProjectSession) -> None:
-        raise IntegrationNotImplementedError(
-            f"Neovim focus is not implemented yet for {session.session_name!r}."
-        )
-
-    def open_target(self, session: ProjectSession, *, target: str) -> None:
-        raise IntegrationNotImplementedError(
-            f"Neovim target opening is not implemented yet for {session.session_name!r}:{target!r}."
         )
 
 

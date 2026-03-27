@@ -134,6 +134,8 @@ hop edit
 
 - ensure session Neovim is running
 - focus it
+- recreate it cleanly if the previous editor was closed with `:qa`
+- reuse the existing session editor instead of creating duplicates
 
 ---
 
@@ -153,7 +155,9 @@ hop edit app/models/user.rb:42
 Behavior:
 
 - ensure Neovim exists
+- focus the shared session editor window
 - open the target in that instance
+- when the target is `path:line`, jump to that line after opening the file
 
 ---
 
@@ -328,6 +332,8 @@ Changing vigun is outside of the scope of hop, but we need to have a contract do
 ## Neovim lifecycle
 
 - Neovim is started when needed (e.g. via `hop edit`)
+- the shared editor is addressed through a deterministic per-session remote server address
+- the editor window is rediscovered through stable Kitty metadata so repeated `hop edit` calls focus the same OS window
 - if Neovim is closed (`:qa`), it can be recreated by:
 
 ```bash

@@ -19,7 +19,6 @@ implement
 
 ## Blocked By
 
-- [Implement shared Neovim lifecycle and editing](implement-shared-neovim-lifecycle-and-editing.md)
 - [Implement the session browser command](implement-the-session-browser-command.md)
 
 ## Definition of Done
