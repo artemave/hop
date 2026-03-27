@@ -14,6 +14,6 @@ describe("repository smoke checks", () => {
     expect(settings).toContain('"name": "test"');
     expect(settings).toContain('"command": "bun test"');
     expect(settings).toContain('"name": "pytest"');
-    expect(settings).toContain('"command": "uv run pytest"');
+    expect(settings).toContain('"command": "python3 -m pytest"');
   });
 });

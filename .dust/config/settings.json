@@ -7,7 +7,7 @@
     },
     {
       "name": "pytest",
-      "command": "uv run pytest"
+      "command": "python3 -m pytest"
     }
   ]
 }
