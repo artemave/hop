@@ -14,8 +14,11 @@ from hop.commands import (
     SwitchSessionCommand,
     TermCommand,
 )
+from hop.commands.run import run_command
 from hop.commands.session import enter_project_session, list_sessions, switch_session
+from hop.commands.term import focus_terminal
 from hop.errors import HopError, IntegrationNotImplementedError
+from hop.kitty import KittyRemoteControlAdapter
 from hop.session import ProjectSession, resolve_project_session
 from hop.sway import SwayIpcAdapter
 
@@ -82,11 +85,20 @@ def execute_command(
             else:
                 services.neovim.open_target(session, target=target)
         case TermCommand(role=role):
-            session = _switch_to_current_session(current_directory, services=services)
-            services.kitty.ensure_terminal(session, role=role)
+            focus_terminal(
+                current_directory,
+                sway=services.sway,
+                terminals=services.kitty,
+                role=role,
+            )
         case RunCommand(role=role, command_text=command_text):
-            session = _switch_to_current_session(current_directory, services=services)
-            services.kitty.run_in_terminal(session, role=role, command=command_text)
+            run_command(
+                current_directory,
+                sway=services.sway,
+                terminals=services.kitty,
+                role=role,
+                command=command_text,
+            )
         case BrowserCommand(url=url):
             session = _switch_to_current_session(current_directory, services=services)
             services.browser.ensure_browser(session, url=url)
@@ -97,7 +109,7 @@ def execute_command(
 def build_default_services() -> HopServices:
     return HopServices(
         sway=SwayIpcAdapter(),
-        kitty=_MissingKittyAdapter(),
+        kitty=KittyRemoteControlAdapter(),
         neovim=_MissingNeovimAdapter(),
         browser=_MissingBrowserAdapter(),
     )

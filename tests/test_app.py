@@ -3,7 +3,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 
 from hop.app import HopServices, execute_command
-from hop.commands import EnterSessionCommand, ListSessionsCommand, SwitchSessionCommand
+from hop.commands import EnterSessionCommand, ListSessionsCommand, RunCommand, SwitchSessionCommand, TermCommand
 
 
 class StubSwayAdapter:
@@ -21,12 +21,13 @@ class StubSwayAdapter:
 class StubKittyAdapter:
     def __init__(self) -> None:
         self.ensured_roles: list[tuple[str, str]] = []
+        self.runs: list[tuple[str, str, str]] = []
 
     def ensure_terminal(self, session, *, role: str) -> None:
         self.ensured_roles.append((session.session_name, role))
 
     def run_in_terminal(self, session, *, role: str, command: str) -> None:
-        raise AssertionError("run_in_terminal should not be called in these tests")
+        self.runs.append((session.session_name, role, command))
 
 
 class StubNeovimAdapter:
@@ -79,3 +80,36 @@ def test_execute_command_lists_sorted_session_names() -> None:
         assert execute_command(ListSessionsCommand(), cwd=Path("/tmp"), services=services) == 0
 
     assert stdout.getvalue() == "alpha\nzeta\n"
+
+
+def test_execute_command_focuses_terminal_role_in_current_session(tmp_path: Path) -> None:
+    project_root = tmp_path / "demo"
+    nested_directory = project_root / "src"
+    nested_directory.mkdir(parents=True)
+    (project_root / ".git").mkdir()
+
+    services = build_services()
+
+    assert execute_command(TermCommand(role="test"), cwd=nested_directory, services=services) == 0
+    assert services.sway.switched_workspaces == ["p:demo"]
+    assert services.kitty.ensured_roles == [("demo", "test")]
+
+
+def test_execute_command_routes_run_commands_to_role_terminal(tmp_path: Path) -> None:
+    project_root = tmp_path / "demo"
+    nested_directory = project_root / "src"
+    nested_directory.mkdir(parents=True)
+    (project_root / ".git").mkdir()
+
+    services = build_services()
+
+    assert (
+        execute_command(
+            RunCommand(role="server", command_text="bin/dev"),
+            cwd=nested_directory,
+            services=services,
+        )
+        == 0
+    )
+    assert services.sway.switched_workspaces == ["p:demo"]
+    assert services.kitty.runs == [("demo", "server", "bin/dev")]

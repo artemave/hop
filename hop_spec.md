@@ -174,6 +174,7 @@ Behavior:
 
 - if a terminal with that role exists → focus it
 - otherwise → create it
+- terminal lookup is keyed by stable Kitty metadata for the session and role, not by ad hoc window IDs
 
 ---
 
@@ -195,6 +196,7 @@ Behavior:
 - find terminal with given role
 - if missing → create it
 - send command to that terminal
+- default behavior keeps the current focus while routing the command into the target role terminal
 
 Default role: `shell`
 
@@ -278,7 +280,7 @@ Kitty must be used to:
 - focus specific windows
 - send commands to specific windows
 
-All this means using kittens api (custom kittens).
+This control path should use Kitty-native remote control surfaces such as the remote control protocol, Python APIs, or kittens rather than shelling out to `kitty @`.
 
 ---
 
@@ -333,6 +335,8 @@ Each window must be identifiable by:
 
 - session (project)
 - role (for terminals)
+
+For Kitty terminals this identity must be encoded as stable metadata on the window itself, so repeated `hop term` and `hop run` calls can rediscover the same role window exactly.
 
 This enables:
 
