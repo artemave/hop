@@ -22,17 +22,22 @@ The system must preserve and improve the current tmux-based workflow, including:
 
 ### Session
 
-A session corresponds to a project.
+A session corresponds to the directory where `hop` is invoked.
 
 A session consists of:
 
-- a project root directory
+- a session root directory
 - a dedicated Sway workspace
 - one Neovim instance
 - multiple terminal windows (each with a role)
 - optionally, a browser window
 
-Session name is derived from the project root directory name.
+The session root is exactly the caller's current working directory when `hop` starts.
+
+- rerunning `hop` from the same directory should attach to the same session
+- running `hop` from a different directory should target a different session rooted there
+
+Session name is derived from the session root directory name.
 
 Workspace naming:
 
@@ -88,12 +93,12 @@ Each session may have a browser window.
 hop
 ```
 
-From inside a project directory:
+From inside the directory you want to treat as the session root:
 
-- determine project root
+- use the current working directory as the session root
 - derive session name
 - switch to that session (workspace)
-- create it if it does not exist
+- attach to the existing session for that directory or create it if it does not exist yet
 - ensure at least one terminal window exists (role `shell`)
 - reuse the existing `shell` terminal when it already exists
 
@@ -197,7 +202,7 @@ hop run "ls"
 
 Behavior:
 
-- resolve the current session from the caller's working directory
+- use the caller's current working directory as the session root
 - switch to workspace `p:<session>`
 - find terminal with given role
 - if missing → create it
@@ -254,7 +259,7 @@ When a file-like target is selected:
 
 1. if absolute path → use directly
 2. else try resolving relative to the terminal window’s current working directory
-3. if not found, try resolving relative to the project root
+3. if not found, try resolving relative to the session root
 4. if still not found → ignore
 
 ---
