@@ -266,6 +266,8 @@ Kitty must be used to:
 - focus specific windows
 - send commands to specific windows
 
+All this means using kittens api (custom kittens).
+
 ---
 
 ## Command routing (Neovim → terminal)
@@ -297,6 +299,8 @@ hop run --role test "<test command>"
 ```
 
 - command appears and runs in the `test` terminal window
+
+Changing vigun is outside of the scope of hop, but we need to have a contract document that can be then used to upgrade vigun.
 
 ---
 
