@@ -4,6 +4,10 @@
     {
       "name": "test",
       "command": "bun test"
+    },
+    {
+      "name": "pytest",
+      "command": "uv run pytest"
     }
   ]
 }

@@ -18,7 +18,7 @@ implement
 
 ## Blocked By
 
-- [Add Python and uv scaffold and session model](add-python-and-uv-scaffold-and-session-model.md)
+(none)
 
 ## Definition of Done
 

@@ -19,7 +19,6 @@ implement
 
 ## Blocked By
 
-- [Add Python and uv scaffold and session model](add-python-and-uv-scaffold-and-session-model.md)
 - [Implement session entry, switching, and listing](implement-session-entry-switching-and-listing.md)
 
 ## Definition of Done

@@ -1,0 +1,25 @@
+[build-system]
+requires = ["hatchling>=1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hop"
+version = "0.1.0"
+description = "Session-oriented workspace CLI for Sway, Kitty, and Neovim."
+readme = "hop_spec.md"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+hop = "hop.cli:main"
+
+[dependency-groups]
+dev = [
+  "pytest>=8.4.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.uv]
+default-groups = ["dev"]
