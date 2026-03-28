@@ -1,6 +1,6 @@
 # Implement hop kill
 
-Add a `kill` subcommand to `hop` that tears down the session resolved from the caller's current working directory by closing all managed windows and removing the session workspace.
+Add a `kill` subcommand to `hop` that tears down the session resolved from the caller's current working directory. It closes all managed windows and removes the session workspace.
 
 ## What to build
 
