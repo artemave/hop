@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, Sequence
 
+from hop.browser import SessionBrowserAdapter
 from hop.commands import (
     BrowserCommand,
     Command,
@@ -21,10 +22,8 @@ from hop.commands.kill import kill_session
 from hop.commands.run import run_command
 from hop.commands.session import enter_project_session, list_sessions, switch_session
 from hop.commands.term import focus_terminal
-from hop.browser import SessionBrowserAdapter
 from hop.editor import SharedNeovimEditorAdapter
-from hop.errors import HopError, IntegrationNotImplementedError
-from hop.kitty import KittyRemoteControlAdapter, KittyWindow
+from hop.kitty import KittyRemoteControlAdapter, KittyWindow, KittyWindowContext
 from hop.session import ProjectSession
 from hop.sway import SwayIpcAdapter, SwayWindow
 
@@ -51,6 +50,8 @@ class KittyAdapter(Protocol):
         role: str,
         command: str,
     ) -> None: ...
+
+    def inspect_window(self, window_id: int) -> KittyWindowContext | None: ...
 
     def list_session_windows(self, session: ProjectSession) -> Sequence[KittyWindow]: ...
 
@@ -142,31 +143,3 @@ def build_default_services() -> HopServices:
         neovim=SharedNeovimEditorAdapter(),
         browser=SessionBrowserAdapter(sway=sway),
     )
-
-
-class _MissingKittyAdapter:
-    def ensure_terminal(self, session: ProjectSession, *, role: str) -> None:
-        raise IntegrationNotImplementedError(
-            f"Kitty terminal routing is not implemented yet for {session.session_name!r}:{role!r}."
-        )
-
-    def run_in_terminal(
-        self,
-        session: ProjectSession,
-        *,
-        role: str,
-        command: str,
-    ) -> None:
-        raise IntegrationNotImplementedError(
-            f"Kitty command dispatch is not implemented yet for {session.session_name!r}:{role!r}."
-        )
-
-    def list_session_windows(self, session: ProjectSession) -> Sequence[KittyWindow]:
-        raise IntegrationNotImplementedError(
-            f"Kitty window listing is not implemented yet for {session.session_name!r}."
-        )
-
-    def close_window(self, window_id: int) -> None:
-        raise IntegrationNotImplementedError(
-            f"Kitty window closing is not implemented yet for window {window_id!r}."
-        )

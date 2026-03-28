@@ -8,7 +8,7 @@ import termios
 import tty
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Protocol
+from typing import Any, Callable, Mapping, Protocol, cast
 
 from hop.errors import HopError
 from hop.session import ProjectSession
@@ -118,27 +118,23 @@ class KittyRemoteControlAdapter:
             msg = "Kitty returned an invalid window listing."
             raise KittyCommandError(msg)
 
-        for os_window in payload:
+        for os_window in cast(list[Any], payload):
             if not isinstance(os_window, Mapping):
                 continue
-            for tab in os_window.get("tabs", ()):
+            for tab in cast(Any, os_window).get("tabs", ()):
                 if not isinstance(tab, Mapping):
                     continue
-                for window_entry in tab.get("windows", ()):
+                for window_entry in cast(Any, tab).get("windows", ()):
                     if not isinstance(window_entry, Mapping):
                         continue
-                    window = _parse_window_context(window_entry)
+                    window = _parse_window_context(cast(Any, window_entry))
                     if window is not None:
                         return window
 
         return None
 
     def list_session_windows(self, session: ProjectSession) -> tuple[KittyWindow, ...]:
-        return tuple(
-            window
-            for window in self._list_windows()
-            if window.project_root == session.project_root
-        )
+        return tuple(window for window in self._list_windows() if window.project_root == session.project_root)
 
     def close_window(self, window_id: int) -> None:
         self._transport.send_command("close-window", {"match": f"id:{window_id}"})
@@ -188,6 +184,9 @@ class KittyRemoteControlAdapter:
             },
         )
 
+    def send_command(self, command_name: str, payload: Mapping[str, object] | None = None) -> object:
+        return self._transport.send_command(command_name, payload)
+
     def _list_windows(self) -> tuple[KittyWindow, ...]:
         response = self._transport.send_command("ls", {"output_format": "json"})
         payload = _coerce_response_data(response)
@@ -197,16 +196,16 @@ class KittyRemoteControlAdapter:
             raise KittyCommandError(msg)
 
         windows: list[KittyWindow] = []
-        for os_window in payload:
+        for os_window in cast(list[Any], payload):
             if not isinstance(os_window, Mapping):
                 continue
-            for tab in os_window.get("tabs", ()):
+            for tab in cast(Any, os_window).get("tabs", ()):
                 if not isinstance(tab, Mapping):
                     continue
-                for window_entry in tab.get("windows", ()):
+                for window_entry in cast(Any, tab).get("windows", ()):
                     if not isinstance(window_entry, Mapping):
                         continue
-                    window = _parse_window(window_entry)
+                    window = _parse_window(cast(Any, window_entry))
                     if window is not None:
                         windows.append(window)
 
@@ -342,17 +341,17 @@ def _decode_response(response: bytes) -> object:
         raise KittyConnectionError(msg)
 
     response_payload = response[len(KITTY_COMMAND_PREFIX) : -len(KITTY_COMMAND_SUFFIX)]
-    parsed = json.loads(response_payload.decode())
-    if isinstance(parsed, Mapping) and parsed.get("ok") is False:
-        error_message = parsed.get("error")
+    parsed: Any = json.loads(response_payload.decode())
+    if isinstance(parsed, Mapping) and cast(Any, parsed).get("ok") is False:
+        error_message = cast(Any, parsed).get("error")
         msg = str(error_message) if error_message else "Kitty rejected a remote control command."
         raise KittyCommandError(msg)
-    return parsed
+    return cast(Any, parsed)
 
 
-def _coerce_response_data(response: object) -> object:
+def _coerce_response_data(response: object) -> Any:
     if isinstance(response, Mapping):
-        data = response.get("data")
+        data = cast(Any, response).get("data")
     else:
         data = response
 
@@ -368,9 +367,7 @@ def _parse_window(window_entry: Mapping[str, object]) -> KittyWindow | None:
         return None
 
     user_vars = _coerce_string_mapping(
-        window_entry.get("user_vars")
-        or window_entry.get("user_variables")
-        or window_entry.get("vars")
+        window_entry.get("user_vars") or window_entry.get("user_variables") or window_entry.get("vars")
     )
     env = _coerce_string_mapping(window_entry.get("env"))
 
@@ -390,9 +387,7 @@ def _parse_window_context(window_entry: Mapping[str, object]) -> KittyWindowCont
         return None
 
     user_vars = _coerce_string_mapping(
-        window_entry.get("user_vars")
-        or window_entry.get("user_variables")
-        or window_entry.get("vars")
+        window_entry.get("user_vars") or window_entry.get("user_variables") or window_entry.get("vars")
     )
     env = _coerce_string_mapping(window_entry.get("env"))
 
@@ -408,13 +403,14 @@ def _parse_window_context(window_entry: Mapping[str, object]) -> KittyWindowCont
     )
 
 
-def _coerce_string_mapping(value: object) -> dict[str, str]:
+def _coerce_string_mapping(value: Any) -> dict[str, str]:
     if isinstance(value, Mapping):
-        return {str(key): str(item) for key, item in value.items() if isinstance(item, str)}
+        m = cast(Any, value)
+        return {str(key): str(item) for key, item in m.items() if isinstance(item, str)}
 
     if isinstance(value, list):
         result: dict[str, str] = {}
-        for item in value:
+        for item in cast(list[Any], value):
             if not isinstance(item, str) or "=" not in item:
                 continue
             key, item_value = item.split("=", 1)
@@ -432,10 +428,10 @@ def _window_cwd_text(window_entry: Mapping[str, object]) -> str | None:
 
     foreground_processes = window_entry.get("foreground_processes")
     if isinstance(foreground_processes, list):
-        for process in foreground_processes:
+        for process in cast(list[Any], foreground_processes):
             if not isinstance(process, Mapping):
                 continue
-            cwd = process.get("cwd")
+            cwd = cast(Any, process).get("cwd")
             if isinstance(cwd, str) and cwd:
                 return cwd
 
@@ -448,7 +444,7 @@ def _path_from_text(value: str | None) -> Path | None:
     return Path(value).expanduser().resolve(strict=False)
 
 
-def _read_until(read_chunk: Any, suffix: bytes) -> bytes:
+def _read_until(read_chunk: Callable[[int], bytes], suffix: bytes) -> bytes:
     chunks: list[bytes] = []
     while True:
         chunk = read_chunk(4096)

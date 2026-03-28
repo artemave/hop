@@ -39,10 +39,7 @@ def switch_session(
     sway: SessionSwayAdapter,
 ) -> str:
     workspaces = sway.list_session_workspaces()
-    matching = [
-        w for w in workspaces
-        if Path(w.removeprefix(SESSION_WORKSPACE_PREFIX)).name == session_name
-    ]
+    matching = [w for w in workspaces if Path(w.removeprefix(SESSION_WORKSPACE_PREFIX)).name == session_name]
     if not matching:
         msg = f"No active session named {session_name!r}."
         raise HopError(msg)
@@ -57,13 +54,6 @@ def list_sessions(
     prefix: str = SESSION_WORKSPACE_PREFIX,
 ) -> tuple[str, ...]:
     workspace_names = sway.list_session_workspaces(prefix=prefix)
-    session_paths = [
-        Path(w.removeprefix(prefix))
-        for w in workspace_names
-        if w.startswith(prefix)
-    ]
+    session_paths = [Path(w.removeprefix(prefix)) for w in workspace_names if w.startswith(prefix)]
     basename_counts: Counter[str] = Counter(p.name for p in session_paths)
-    return tuple(sorted(
-        p.name if basename_counts[p.name] == 1 else str(p)
-        for p in session_paths
-    ))
+    return tuple(sorted(p.name if basename_counts[p.name] == 1 else str(p) for p in session_paths))

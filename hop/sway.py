@@ -7,7 +7,7 @@ import struct
 from dataclasses import dataclass
 from enum import IntEnum
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol, cast
 
 from hop.errors import HopError
 
@@ -119,8 +119,7 @@ class SwayIpcAdapter:
                 focused=bool(workspace_entry.get("focused", False)),
             )
             for workspace_entry in workspace_entries
-            if isinstance(workspace_entry.get("name"), str)
-            and workspace_entry["name"].startswith(prefix)
+            if isinstance(workspace_entry.get("name"), str) and workspace_entry["name"].startswith(prefix)
         ]
         return tuple(sorted(workspace.name for workspace in workspaces))
 
@@ -135,9 +134,7 @@ class SwayIpcAdapter:
         self.run_command(f"[con_id={window_id}] focus")
 
     def move_window_to_workspace(self, window_id: int, workspace_name: str) -> None:
-        self.run_command(
-            f"[con_id={window_id}] move container to workspace {json.dumps(workspace_name)}"
-        )
+        self.run_command(f"[con_id={window_id}] move container to workspace {json.dumps(workspace_name)}")
 
     def mark_window(self, window_id: int, mark: str) -> None:
         self.run_command(f"[con_id={window_id}] mark --add {json.dumps(mark)}")
@@ -165,7 +162,7 @@ def _recv_exact(client: socket.socket, byte_count: int) -> bytes:
 
 
 def _collect_windows(
-    node: object,
+    node: Any,
     *,
     windows: list[SwayWindow],
     workspace_name: str | None = None,
@@ -173,6 +170,7 @@ def _collect_windows(
     if not isinstance(node, dict):
         return
 
+    node = cast(Any, node)
     current_workspace_name = workspace_name
     if node.get("type") == "workspace" and isinstance(node.get("name"), str):
         current_workspace_name = node["name"]
@@ -206,7 +204,8 @@ def _extract_window_class(window_properties: object) -> str | None:
     if not isinstance(window_properties, dict):
         return None
 
-    window_class = window_properties.get("class")
+    wp = cast(Any, window_properties)
+    window_class = wp.get("class")
     if isinstance(window_class, str):
         return window_class
 

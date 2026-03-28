@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from hop.commands.run import DEFAULT_RUN_ROLE, run_command
+from hop.session import ProjectSession
 
 
 class StubSwayAdapter:
@@ -15,7 +16,7 @@ class StubKittyAdapter:
     def __init__(self) -> None:
         self.runs: list[tuple[str, str, str, Path]] = []
 
-    def run_in_terminal(self, session, *, role: str, command: str) -> None:
+    def run_in_terminal(self, session: ProjectSession, *, role: str, command: str) -> None:
         self.runs.append((session.session_name, role, command, session.project_root))
 
 

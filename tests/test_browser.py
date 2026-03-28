@@ -1,5 +1,6 @@
 from pathlib import Path
 from subprocess import CompletedProcess
+from typing import Callable, Sequence
 
 from hop.browser import BrowserCommandError, BrowserLaunchSpec, SessionBrowserAdapter
 from hop.session import ProjectSession
@@ -53,11 +54,11 @@ class StubSwayAdapter:
 
 
 class StubBrowserLauncher:
-    def __init__(self, *, on_launch=None) -> None:
+    def __init__(self, *, on_launch: Callable[[tuple[str, ...]], None] | None = None) -> None:
         self.on_launch = on_launch
         self.commands: list[tuple[tuple[str, ...], Path]] = []
 
-    def launch(self, args, *, cwd: Path) -> None:
+    def launch(self, args: Sequence[str], *, cwd: Path) -> None:
         command = tuple(args)
         self.commands.append((command, cwd))
         if self.on_launch is not None:
@@ -70,7 +71,7 @@ class StubProcessRunner:
         self.returncode = returncode
         self.commands: list[tuple[str, ...]] = []
 
-    def run(self, args):
+    def run(self, args: Sequence[str]) -> CompletedProcess[str]:
         command = tuple(args)
         self.commands.append(command)
         return CompletedProcess(command, self.returncode, self.stdout, "")
@@ -165,9 +166,7 @@ def test_ensure_browser_opens_url_in_existing_session_window() -> None:
     adapter.ensure_browser(build_session(), url="https://example.com")
 
     assert sway.focused_window_ids == [23]
-    assert launcher.commands == [
-        (("brave-browser", "https://example.com"), build_session().project_root)
-    ]
+    assert launcher.commands == [(("brave-browser", "https://example.com"), build_session().project_root)]
 
 
 def test_ensure_browser_launches_new_window_marks_it_and_focuses_it() -> None:

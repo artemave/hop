@@ -15,11 +15,23 @@ hop = "hop.cli:main"
 
 [dependency-groups]
 dev = [
+  "pyright>=1.1.408",
   "pytest>=8.4.0",
+  "ruff>=0.15.8",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.pyright]
+typeCheckingMode = "strict"
+pythonVersion = "3.12"
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
 
 [tool.uv]
 default-groups = ["dev"]

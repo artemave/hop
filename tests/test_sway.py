@@ -1,5 +1,5 @@
-import os
 import json
+import os
 
 from hop.sway import (
     SwayCommandError,
@@ -22,9 +22,7 @@ class StubSwayTransport:
 
 
 def test_switch_to_workspace_uses_run_command_ipc_message() -> None:
-    transport = StubSwayTransport(
-        responses={SwayMessageType.RUN_COMMAND: json.dumps([{"success": True}]).encode()}
-    )
+    transport = StubSwayTransport(responses={SwayMessageType.RUN_COMMAND: json.dumps([{"success": True}]).encode()})
     sway = SwayIpcAdapter(transport=transport)
 
     sway.switch_to_workspace("p:demo")
@@ -35,9 +33,7 @@ def test_switch_to_workspace_uses_run_command_ipc_message() -> None:
 
 
 def test_switch_to_workspace_raises_when_sway_rejects_command() -> None:
-    transport = StubSwayTransport(
-        responses={SwayMessageType.RUN_COMMAND: json.dumps([{"success": False}]).encode()}
-    )
+    transport = StubSwayTransport(responses={SwayMessageType.RUN_COMMAND: json.dumps([{"success": False}]).encode()})
     sway = SwayIpcAdapter(transport=transport)
 
     try:
@@ -49,9 +45,7 @@ def test_switch_to_workspace_raises_when_sway_rejects_command() -> None:
 
 
 def test_run_command_raises_with_rejected_command_text() -> None:
-    transport = StubSwayTransport(
-        responses={SwayMessageType.RUN_COMMAND: json.dumps([{"success": False}]).encode()}
-    )
+    transport = StubSwayTransport(responses={SwayMessageType.RUN_COMMAND: json.dumps([{"success": False}]).encode()})
     sway = SwayIpcAdapter(transport=transport)
 
     try:
@@ -133,9 +127,7 @@ def test_list_windows_flattens_the_sway_tree_with_workspace_context() -> None:
 
 
 def test_window_commands_use_sway_criteria_by_container_id() -> None:
-    transport = StubSwayTransport(
-        responses={SwayMessageType.RUN_COMMAND: json.dumps([{"success": True}]).encode()}
-    )
+    transport = StubSwayTransport(responses={SwayMessageType.RUN_COMMAND: json.dumps([{"success": True}]).encode()})
     sway = SwayIpcAdapter(transport=transport)
 
     sway.focus_window(17)
@@ -150,9 +142,7 @@ def test_window_commands_use_sway_criteria_by_container_id() -> None:
 
 
 def test_close_window_uses_kill_command_with_container_id() -> None:
-    transport = StubSwayTransport(
-        responses={SwayMessageType.RUN_COMMAND: json.dumps([{"success": True}]).encode()}
-    )
+    transport = StubSwayTransport(responses={SwayMessageType.RUN_COMMAND: json.dumps([{"success": True}]).encode()})
     sway = SwayIpcAdapter(transport=transport)
 
     sway.close_window(42)
@@ -163,9 +153,7 @@ def test_close_window_uses_kill_command_with_container_id() -> None:
 
 
 def test_remove_workspace_switches_focus_to_trigger_sway_cleanup() -> None:
-    transport = StubSwayTransport(
-        responses={SwayMessageType.RUN_COMMAND: json.dumps([{"success": True}]).encode()}
-    )
+    transport = StubSwayTransport(responses={SwayMessageType.RUN_COMMAND: json.dumps([{"success": True}]).encode()})
     sway = SwayIpcAdapter(transport=transport)
 
     sway.remove_workspace("p:/tmp/demo")

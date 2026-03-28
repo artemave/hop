@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Mapping
 
 from hop.kitty import KittyRemoteControlAdapter
 from hop.session import ProjectSession
@@ -7,9 +8,9 @@ from hop.session import ProjectSession
 class StubKittyTransport:
     def __init__(self, responses: list[object]) -> None:
         self._responses = list(responses)
-        self.commands: list[tuple[str, dict[str, object] | None]] = []
+        self.commands: list[tuple[str, Mapping[str, object] | None]] = []
 
-    def send_command(self, command_name: str, payload: dict[str, object] | None = None) -> object:
+    def send_command(self, command_name: str, payload: Mapping[str, object] | None = None) -> object:
         self.commands.append((command_name, payload))
         if not self._responses:
             return {"ok": True}

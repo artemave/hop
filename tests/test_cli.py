@@ -1,5 +1,4 @@
 import pytest
-
 from hop.cli import parse_command
 from hop.commands import (
     BrowserCommand,

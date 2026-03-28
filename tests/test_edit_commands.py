@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from hop.commands.edit import edit_in_session
+from hop.session import ProjectSession
 
 
 class StubSwayAdapter:
@@ -16,10 +17,10 @@ class StubNeovimAdapter:
         self.focused_sessions: list[str] = []
         self.opened_targets: list[tuple[str, str]] = []
 
-    def focus(self, session) -> None:
+    def focus(self, session: ProjectSession) -> None:
         self.focused_sessions.append(session.session_name)
 
-    def open_target(self, session, *, target: str) -> None:
+    def open_target(self, session: ProjectSession, *, target: str) -> None:
         self.opened_targets.append((session.session_name, target))
 
 

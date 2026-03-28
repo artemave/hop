@@ -2,6 +2,7 @@ from pathlib import Path
 
 from hop.commands.session import enter_project_session, list_sessions, switch_session
 from hop.errors import HopError
+from hop.session import ProjectSession
 
 
 class StubSwayAdapter:
@@ -20,7 +21,7 @@ class StubTerminalAdapter:
     def __init__(self) -> None:
         self.ensured_terminals: list[tuple[str, str, Path]] = []
 
-    def ensure_terminal(self, session, *, role: str) -> None:
+    def ensure_terminal(self, session: ProjectSession, *, role: str) -> None:
         self.ensured_terminals.append((session.session_name, role, session.project_root))
 
 

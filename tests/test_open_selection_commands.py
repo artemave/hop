@@ -2,6 +2,7 @@ from pathlib import Path
 
 from hop.commands.open_selection import open_selection_in_window
 from hop.kitty import KittyWindowContext
+from hop.session import ProjectSession
 
 
 class StubSwayAdapter:
@@ -26,7 +27,7 @@ class StubNeovimAdapter:
     def __init__(self) -> None:
         self.opened_targets: list[tuple[str, str]] = []
 
-    def open_target(self, session, *, target: str) -> None:
+    def open_target(self, session: ProjectSession, *, target: str) -> None:
         self.opened_targets.append((session.session_name, target))
 
 
@@ -34,7 +35,7 @@ class StubBrowserAdapter:
     def __init__(self) -> None:
         self.urls: list[tuple[str, str | None]] = []
 
-    def ensure_browser(self, session, *, url: str | None) -> None:
+    def ensure_browser(self, session: ProjectSession, *, url: str | None) -> None:
         self.urls.append((session.session_name, url))
 
 

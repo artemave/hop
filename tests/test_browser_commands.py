@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from hop.commands.browser import focus_browser
+from hop.session import ProjectSession
 
 
 class StubSwayAdapter:
@@ -15,7 +16,7 @@ class StubBrowserAdapter:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str | None, Path]] = []
 
-    def ensure_browser(self, session, *, url: str | None) -> None:
+    def ensure_browser(self, session: ProjectSession, *, url: str | None) -> None:
         self.calls.append((session.session_name, url, session.project_root))
 
 

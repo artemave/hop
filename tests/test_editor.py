@@ -1,19 +1,21 @@
 import hashlib
+import subprocess
 from pathlib import Path
+from typing import Any, Mapping, Sequence, cast
 
-from hop.editor import SharedNeovimEditorAdapter, _build_remote_open_command
+from hop.editor import SharedNeovimEditorAdapter, build_remote_open_command
 from hop.session import ProjectSession
 
 
 class StubKittyTransport:
-    def __init__(self, responses: list[object], *, on_launch=None) -> None:
+    def __init__(self, responses: list[object], *, on_launch: object = None) -> None:
         self._responses = list(responses)
         self._on_launch = on_launch
-        self.commands: list[tuple[str, dict[str, object] | None]] = []
+        self.commands: list[tuple[str, Mapping[str, object] | None]] = []
 
-    def send_command(self, command_name: str, payload: dict[str, object] | None = None) -> object:
+    def send_command(self, command_name: str, payload: Mapping[str, object] | None = None) -> object:
         self.commands.append((command_name, payload))
-        if command_name == "launch" and self._on_launch is not None and payload is not None:
+        if command_name == "launch" and callable(self._on_launch) and payload is not None:
             self._on_launch(payload)
         if not self._responses:
             return {"ok": True}
@@ -28,18 +30,17 @@ class StubProcessRunner:
     def activate(self, address: str) -> None:
         self.active_servers.add(address)
 
-    def run(self, args: list[str]):
-        from subprocess import CompletedProcess
+    def run(self, args: Sequence[str]) -> subprocess.CompletedProcess[str]:
+        args_list = list(args)
+        self.commands.append(args_list)
 
-        self.commands.append(args)
+        if "--remote-expr" in args_list:
+            address = args_list[args_list.index("--server") + 1]
+            return subprocess.CompletedProcess(args_list, 0 if address in self.active_servers else 1, "", "")
 
-        if "--remote-expr" in args:
-            address = args[args.index("--server") + 1]
-            return CompletedProcess(args, 0 if address in self.active_servers else 1, "", "")
-
-        if "--remote-send" in args:
-            address = args[args.index("--server") + 1]
-            return CompletedProcess(args, 0 if address in self.active_servers else 1, "", "")
+        if "--remote-send" in args_list:
+            address = args_list[args_list.index("--server") + 1]
+            return subprocess.CompletedProcess(args_list, 0 if address in self.active_servers else 1, "", "")
 
         raise AssertionError(f"Unexpected process command: {args}")
 
@@ -113,7 +114,7 @@ def test_focus_recreates_editor_after_neovim_exits(tmp_path: Path) -> None:
     def activate_server(payload: dict[str, object]) -> None:
         args = payload["args"]
         assert isinstance(args, list)
-        runner.activate(str(args[2]))
+        runner.activate(str(cast(list[Any], args)[2]))
 
     transport = StubKittyTransport([{"ok": True}], on_launch=activate_server)
     runtime_dir = tmp_path / "hop"
@@ -219,9 +220,9 @@ def test_open_target_focuses_editor_and_routes_path_with_line(tmp_path: Path) ->
     ]
 
 
-def test_build_remote_open_command_preserves_plain_paths() -> None:
+def testbuild_remote_open_command_preserves_plain_paths() -> None:
     assert (
-        _build_remote_open_command("app/models/user.rb")
+        build_remote_open_command("app/models/user.rb")
         == "<Cmd>execute 'drop ' . fnameescape('app/models/user.rb')<CR>"
     )
 

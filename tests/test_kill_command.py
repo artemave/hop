@@ -1,6 +1,8 @@
 from pathlib import Path
 
 from hop.commands.kill import kill_session
+from hop.kitty import KittyWindow
+from hop.session import ProjectSession
 from hop.sway import SwayWindow
 
 
@@ -33,16 +35,11 @@ class StubKittyAdapter:
         self._window_ids = window_ids
         self.closed_windows: list[int] = []
 
-    def list_session_windows(self, session) -> list[object]:
-        return [_FakeKittyWindow(wid) for wid in self._window_ids]
+    def list_session_windows(self, session: ProjectSession) -> list[KittyWindow]:
+        return [KittyWindow(id=wid, session_name=None, role=None, project_root=None) for wid in self._window_ids]
 
     def close_window(self, window_id: int) -> None:
         self.closed_windows.append(window_id)
-
-
-class _FakeKittyWindow:
-    def __init__(self, window_id: int) -> None:
-        self.id = window_id
 
 
 def test_kill_session_closes_all_kitty_managed_windows(tmp_path: Path) -> None:

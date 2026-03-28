@@ -11,7 +11,6 @@ from typing import Any, Callable
 
 from ._compat import ParametrizeConfig
 
-
 ROOT = Path.cwd()
 TESTS_DIR = ROOT / "tests"
 
@@ -49,7 +48,9 @@ def build_kwargs(func: Callable[..., Any], names: tuple[str, ...], values: tuple
 temp_dirs: list[tempfile.TemporaryDirectory[str]] = []
 
 
-def run_case(module_path: Path, test_name: str, func: Callable[..., Any], case_index: int | None = None) -> tuple[bool, str]:
+def run_case(
+    module_path: Path, test_name: str, func: Callable[..., Any], case_index: int | None = None
+) -> tuple[bool, str]:
     label = f"{module_path.relative_to(ROOT)}::{test_name}"
     if case_index is not None:
         label = f"{label}[{case_index}]"
@@ -60,6 +61,7 @@ def run_case(module_path: Path, test_name: str, func: Callable[..., Any], case_i
             kwargs = build_kwargs(func, (), ())
             func(**kwargs)
         else:
+            assert case_index is not None
             names = parametrize.names
             values = parametrize.values[case_index]
             kwargs = build_kwargs(func, names, values)
@@ -112,7 +114,6 @@ def run() -> int:
     if failures:
         for failure in failures:
             print(failure, file=sys.stderr)
-        total = passed + len(failures)
         print(f"{len(failures)} failed, {passed} passed in 0.00s", file=sys.stderr)
         return 1
 

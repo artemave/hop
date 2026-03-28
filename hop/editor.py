@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import gettempdir
-from typing import Mapping, Protocol, Sequence
+from typing import Any, Mapping, Protocol, Sequence, cast
 
 from hop.errors import HopError
 from hop.kitty import KittyCommandError, KittyRemoteControlAdapter, KittyTransport
@@ -66,7 +66,7 @@ class SharedNeovimEditorAdapter:
     def open_target(self, session: ProjectSession, *, target: str) -> None:
         self._ensure_editor(session)
         self._focus_editor_window(session)
-        self._send_remote_keys(session, _build_remote_open_command(target))
+        self._send_remote_keys(session, build_remote_open_command(target))
 
     def _ensure_editor(self, session: ProjectSession) -> None:
         address = self._remote_address(session)
@@ -81,10 +81,10 @@ class SharedNeovimEditorAdapter:
         window = self._find_editor_window(session)
         if window is None:
             return
-        self._kitty._transport.send_command("focus-window", {"match": f"id:{window.id}"})
+        self._kitty.send_command("focus-window", {"match": f"id:{window.id}"})
 
     def _launch_editor(self, session: ProjectSession, *, address: Path) -> None:
-        self._kitty._transport.send_command(
+        self._kitty.send_command(
             "launch",
             {
                 "args": [NVIM_COMMAND, "--listen", str(address)],
@@ -109,22 +109,22 @@ class SharedNeovimEditorAdapter:
         )
 
     def _find_editor_window(self, session: ProjectSession) -> EditorWindow | None:
-        response = self._kitty._transport.send_command("ls", {"output_format": "json"})
+        response = self._kitty.send_command("ls", {"output_format": "json"})
         payload = _coerce_response_data(response)
         if not isinstance(payload, list):
             raise KittyCommandError("Kitty returned an invalid window listing.")
 
         windows: list[EditorWindow] = []
-        for os_window in payload:
+        for os_window in cast(list[Any], payload):
             if not isinstance(os_window, Mapping):
                 continue
-            for tab in os_window.get("tabs", ()):
+            for tab in cast(Any, os_window).get("tabs", ()):
                 if not isinstance(tab, Mapping):
                     continue
-                for window_entry in tab.get("windows", ()):
+                for window_entry in cast(Any, tab).get("windows", ()):
                     if not isinstance(window_entry, Mapping):
                         continue
-                    window = _parse_editor_window(window_entry)
+                    window = _parse_editor_window(cast(Any, window_entry))
                     if window is None:
                         continue
                     if window.project_root == session.project_root and window.is_editor:
@@ -199,7 +199,7 @@ def _resolve_runtime_dir(runtime_dir: Path | str | None) -> Path:
     return path
 
 
-def _build_remote_open_command(target: str) -> str:
+def build_remote_open_command(target: str) -> str:
     path_text, line_number = _split_target(target)
     escaped_path = _quote_vimscript_string(path_text)
     commands = [f"<Cmd>execute 'drop ' . fnameescape('{escaped_path}')<CR>"]
@@ -224,9 +224,9 @@ def _remove_stale_socket(address: Path) -> None:
         address.unlink(missing_ok=True)
 
 
-def _coerce_response_data(response: object) -> object:
+def _coerce_response_data(response: object) -> Any:
     if isinstance(response, Mapping):
-        data = response.get("data")
+        data = cast(Any, response).get("data")
     else:
         data = response
 
@@ -245,9 +245,7 @@ def _parse_editor_window(window_entry: Mapping[str, object]) -> EditorWindow | N
         return None
 
     user_vars = _coerce_string_mapping(
-        window_entry.get("user_vars")
-        or window_entry.get("user_variables")
-        or window_entry.get("vars")
+        window_entry.get("user_vars") or window_entry.get("user_variables") or window_entry.get("vars")
     )
     env = _coerce_string_mapping(window_entry.get("env"))
 
@@ -269,13 +267,14 @@ def _path_from_text(value: str | None) -> Path | None:
     return Path(value).expanduser().resolve(strict=False)
 
 
-def _coerce_string_mapping(value: object) -> dict[str, str]:
+def _coerce_string_mapping(value: Any) -> dict[str, str]:
     if isinstance(value, Mapping):
-        return {str(key): str(item) for key, item in value.items() if isinstance(item, str)}
+        m = cast(Any, value)
+        return {str(key): str(item) for key, item in m.items() if isinstance(item, str)}
 
     if isinstance(value, list):
         result: dict[str, str] = {}
-        for item in value:
+        for item in cast(list[Any], value):
             if not isinstance(item, str) or "=" not in item:
                 continue
             key, item_value = item.split("=", 1)

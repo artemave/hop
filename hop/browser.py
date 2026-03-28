@@ -116,10 +116,7 @@ class SessionBrowserAdapter:
         url: str | None,
     ) -> SwayWindow:
         browser_spec = self._browser_spec_for_session()
-        known_window_ids = {
-            window.id
-            for window in self._browser_windows(browser_spec)
-        }
+        known_window_ids = {window.id for window in self._browser_windows(browser_spec)}
         self._launcher.launch(
             _build_browser_command(browser_spec, url=url, new_window=True),
             cwd=session.project_root,
@@ -138,11 +135,7 @@ class SessionBrowserAdapter:
     ) -> SwayWindow:
         deadline = time.monotonic() + self._discovery_timeout_seconds
         while time.monotonic() < deadline:
-            windows = [
-                window
-                for window in self._browser_windows(browser_spec)
-                if window.id not in known_window_ids
-            ]
+            windows = [window for window in self._browser_windows(browser_spec) if window.id not in known_window_ids]
             if windows:
                 return max(windows, key=lambda window: window.id)
             time.sleep(self._discovery_poll_interval_seconds)
@@ -152,19 +145,11 @@ class SessionBrowserAdapter:
 
     def _find_session_window(self, session: ProjectSession) -> SwayWindow | None:
         session_mark = _session_browser_mark(session)
-        windows = [
-            window
-            for window in self._sway.list_windows()
-            if session_mark in window.marks
-        ]
+        windows = [window for window in self._sway.list_windows() if session_mark in window.marks]
         if not windows:
             return None
 
-        workspace_windows = [
-            window
-            for window in windows
-            if window.workspace_name == session.workspace_name
-        ]
+        workspace_windows = [window for window in windows if window.workspace_name == session.workspace_name]
         if workspace_windows:
             return min(workspace_windows, key=lambda window: window.id)
 
@@ -287,11 +272,7 @@ def _read_desktop_entry(desktop_entry_path: Path) -> tuple[str | None, str | Non
 
 
 def _parse_desktop_exec(exec_line: str) -> tuple[str, ...]:
-    return tuple(
-        token
-        for token in shlex.split(exec_line)
-        if not token.startswith("%") and "%" not in token
-    )
+    return tuple(token for token in shlex.split(exec_line) if not token.startswith("%") and "%" not in token)
 
 
 def _build_window_identifiers(

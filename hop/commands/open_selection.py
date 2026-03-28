@@ -4,7 +4,7 @@ from typing import Protocol
 
 from hop.kitty import KittyWindowContext
 from hop.session import ProjectSession, resolve_project_session
-from hop.targets import ResolvedFileTarget, ResolvedUrlTarget, resolve_visible_output_target
+from hop.targets import ResolvedUrlTarget, resolve_visible_output_target
 
 
 class OpenSelectionSwayAdapter(Protocol):
@@ -54,7 +54,7 @@ def open_selection_in_window(
 
     if isinstance(resolved_target, ResolvedUrlTarget):
         browser.ensure_browser(session, url=resolved_target.url)
-    elif isinstance(resolved_target, ResolvedFileTarget):
+    else:
         neovim.open_target(session, target=resolved_target.editor_target)
 
     return session

@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from hop.commands.term import focus_terminal
+from hop.session import ProjectSession
 
 
 class StubSwayAdapter:
@@ -15,7 +16,7 @@ class StubKittyAdapter:
     def __init__(self) -> None:
         self.ensured: list[tuple[str, str, Path]] = []
 
-    def ensure_terminal(self, session, *, role: str) -> None:
+    def ensure_terminal(self, session: ProjectSession, *, role: str) -> None:
         self.ensured.append((session.session_name, role, session.project_root))
 
 
