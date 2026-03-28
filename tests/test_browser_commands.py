@@ -35,5 +35,5 @@ def test_focus_browser_switches_to_workspace_and_routes_url(tmp_path: Path) -> N
     )
 
     assert session.session_name == "src"
-    assert sway.switched_workspaces == ["p:src"]
+    assert sway.switched_workspaces == [f"p:{nested_directory}"]
     assert browser.calls == [("src", "https://example.com", nested_directory)]

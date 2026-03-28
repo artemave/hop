@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from collections import Counter
 from pathlib import Path
 from typing import Protocol, Sequence
 
-from hop.session import ProjectSession, derive_workspace_name, resolve_project_session
+from hop.errors import HopError
+from hop.session import ProjectSession, resolve_project_session
 
 SESSION_WORKSPACE_PREFIX = "p:"
 SHELL_TERMINAL_ROLE = "shell"
@@ -36,7 +38,15 @@ def switch_session(
     *,
     sway: SessionSwayAdapter,
 ) -> str:
-    workspace_name = derive_workspace_name(session_name)
+    workspaces = sway.list_session_workspaces()
+    matching = [
+        w for w in workspaces
+        if Path(w.removeprefix(SESSION_WORKSPACE_PREFIX)).name == session_name
+    ]
+    if not matching:
+        msg = f"No active session named {session_name!r}."
+        raise HopError(msg)
+    workspace_name = sorted(matching)[0]
     sway.switch_to_workspace(workspace_name)
     return workspace_name
 
@@ -46,12 +56,14 @@ def list_sessions(
     sway: SessionSwayAdapter,
     prefix: str = SESSION_WORKSPACE_PREFIX,
 ) -> tuple[str, ...]:
-    return tuple(
-        sorted(
-            {
-                workspace_name.removeprefix(prefix)
-                for workspace_name in sway.list_session_workspaces(prefix=prefix)
-                if workspace_name.startswith(prefix)
-            }
-        )
-    )
+    workspace_names = sway.list_session_workspaces(prefix=prefix)
+    session_paths = [
+        Path(w.removeprefix(prefix))
+        for w in workspace_names
+        if w.startswith(prefix)
+    ]
+    basename_counts: Counter[str] = Counter(p.name for p in session_paths)
+    return tuple(sorted(
+        p.name if basename_counts[p.name] == 1 else str(p)
+        for p in session_paths
+    ))

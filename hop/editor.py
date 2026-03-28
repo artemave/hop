@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -39,6 +40,7 @@ class EditorWindow:
     id: int
     session_name: str | None
     is_editor: bool
+    project_root: Path | None
 
 
 class SharedNeovimEditorAdapter:
@@ -125,7 +127,7 @@ class SharedNeovimEditorAdapter:
                     window = _parse_editor_window(window_entry)
                     if window is None:
                         continue
-                    if window.session_name == session.session_name and window.is_editor:
+                    if window.project_root == session.project_root and window.is_editor:
                         windows.append(window)
 
         if not windows:
@@ -172,7 +174,8 @@ class SharedNeovimEditorAdapter:
             raise NeovimCommandError(msg)
 
     def _remote_address(self, session: ProjectSession) -> Path:
-        return self._runtime_dir / f"hop-{_sanitize_session_name(session.session_name)}.sock"
+        root_hash = hashlib.sha256(str(session.project_root).encode()).hexdigest()[:16]
+        return self._runtime_dir / f"hop-{root_hash}.sock"
 
 
 class _SubprocessRunner:
@@ -194,12 +197,6 @@ def _resolve_runtime_dir(runtime_dir: Path | str | None) -> Path:
 
     path.mkdir(parents=True, exist_ok=True)
     return path
-
-
-def _sanitize_session_name(session_name: str) -> str:
-    characters = [character if character.isalnum() or character in ("-", "_") else "-" for character in session_name]
-    sanitized = "".join(characters).strip("-")
-    return sanitized or "session"
 
 
 def _build_remote_open_command(target: str) -> str:
@@ -256,12 +253,20 @@ def _parse_editor_window(window_entry: Mapping[str, object]) -> EditorWindow | N
 
     editor_flag = user_vars.get(HOP_EDITOR_VAR) or env.get(HOP_EDITOR_ENV_VAR)
     session_name = user_vars.get("hop_session") or env.get("HOP_SESSION")
+    project_root_text = user_vars.get("hop_project_root") or env.get("HOP_PROJECT_ROOT")
 
     return EditorWindow(
         id=window_id,
         session_name=session_name,
         is_editor=editor_flag == "1",
+        project_root=_path_from_text(project_root_text),
     )
+
+
+def _path_from_text(value: str | None) -> Path | None:
+    if value is None:
+        return None
+    return Path(value).expanduser().resolve(strict=False)
 
 
 def _coerce_string_mapping(value: object) -> dict[str, str]:

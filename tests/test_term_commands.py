@@ -35,5 +35,5 @@ def test_focus_terminal_switches_to_workspace_and_routes_by_role(tmp_path: Path)
     )
 
     assert session.session_name == "src"
-    assert sway.switched_workspaces == ["p:src"]
+    assert sway.switched_workspaces == [f"p:{nested_directory}"]
     assert kitty.ensured == [("src", "test", nested_directory)]

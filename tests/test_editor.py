@@ -1,3 +1,4 @@
+import hashlib
 from pathlib import Path
 
 from hop.editor import SharedNeovimEditorAdapter, _build_remote_open_command
@@ -48,13 +49,20 @@ def build_session() -> ProjectSession:
     return ProjectSession(
         project_root=project_root,
         session_name="demo",
-        workspace_name="p:demo",
+        workspace_name=f"p:{project_root}",
     )
+
+
+def _session_socket_name(project_root: Path) -> str:
+    root_hash = hashlib.sha256(str(project_root).encode()).hexdigest()[:16]
+    return f"hop-{root_hash}.sock"
 
 
 def test_focus_reuses_existing_session_editor_window(tmp_path: Path) -> None:
     runner = StubProcessRunner()
-    address = str((tmp_path / "hop" / "hop-demo.sock").resolve())
+    project_root = build_session().project_root
+    socket_name = _session_socket_name(project_root)
+    address = str((tmp_path / "hop" / socket_name).resolve())
     runner.activate(address)
     transport = StubKittyTransport(
         [
@@ -70,6 +78,7 @@ def test_focus_reuses_existing_session_editor_window(tmp_path: Path) -> None:
                                         "user_vars": {
                                             "hop_session": "demo",
                                             "hop_editor": "1",
+                                            "hop_project_root": str(project_root),
                                         },
                                     }
                                 ]
@@ -109,7 +118,9 @@ def test_focus_recreates_editor_after_neovim_exits(tmp_path: Path) -> None:
     transport = StubKittyTransport([{"ok": True}], on_launch=activate_server)
     runtime_dir = tmp_path / "hop"
     runtime_dir.mkdir()
-    stale_socket = runtime_dir / "hop-demo.sock"
+    project_root = build_session().project_root
+    socket_name = _session_socket_name(project_root)
+    stale_socket = runtime_dir / socket_name
     stale_socket.write_text("stale")
     adapter = SharedNeovimEditorAdapter(
         kitty_transport=transport,
@@ -154,7 +165,9 @@ def test_focus_recreates_editor_after_neovim_exits(tmp_path: Path) -> None:
 
 def test_open_target_focuses_editor_and_routes_path_with_line(tmp_path: Path) -> None:
     runner = StubProcessRunner()
-    address = str((tmp_path / "hop" / "hop-demo.sock").resolve())
+    project_root = build_session().project_root
+    socket_name = _session_socket_name(project_root)
+    address = str((tmp_path / "hop" / socket_name).resolve())
     runner.activate(address)
     transport = StubKittyTransport(
         [
@@ -170,6 +183,7 @@ def test_open_target_focuses_editor_and_routes_path_with_line(tmp_path: Path) ->
                                         "env": {
                                             "HOP_SESSION": "demo",
                                             "HOP_EDITOR": "1",
+                                            "HOP_PROJECT_ROOT": str(project_root),
                                         },
                                     }
                                 ]
@@ -210,3 +224,57 @@ def test_build_remote_open_command_preserves_plain_paths() -> None:
         _build_remote_open_command("app/models/user.rb")
         == "<Cmd>execute 'drop ' . fnameescape('app/models/user.rb')<CR>"
     )
+
+
+def test_editor_does_not_reuse_window_from_different_directory_with_same_basename(tmp_path: Path) -> None:
+    runner = StubProcessRunner()
+    project_root = build_session().project_root
+    socket_name = _session_socket_name(project_root)
+    address = str((tmp_path / "hop" / socket_name).resolve())
+    runner.activate(address)
+
+    other_project_root = Path("/tmp/other/demo").resolve()
+    transport = StubKittyTransport(
+        [
+            {
+                "ok": True,
+                "data": [
+                    {
+                        "tabs": [
+                            {
+                                "windows": [
+                                    {
+                                        "id": 77,
+                                        "user_vars": {
+                                            "hop_session": "demo",
+                                            "hop_editor": "1",
+                                            "hop_project_root": str(other_project_root),
+                                        },
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ],
+            },
+        ]
+    )
+    adapter = SharedNeovimEditorAdapter(
+        kitty_transport=transport,
+        process_runner=runner,
+        runtime_dir=tmp_path / "hop",
+    )
+
+    adapter.focus(build_session())
+
+    assert all(cmd[0] != "focus-window" for cmd in transport.commands)
+
+
+def test_editor_uses_distinct_sockets_for_same_basename_directories(tmp_path: Path) -> None:
+    project_root_a = Path("/tmp/project_a/myapp").resolve()
+    project_root_b = Path("/tmp/project_b/myapp").resolve()
+
+    socket_a = _session_socket_name(project_root_a)
+    socket_b = _session_socket_name(project_root_b)
+
+    assert socket_a != socket_b

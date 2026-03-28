@@ -21,7 +21,7 @@ def build_session() -> ProjectSession:
     return ProjectSession(
         project_root=project_root,
         session_name="demo",
-        workspace_name="p:demo",
+        workspace_name=f"p:{project_root}",
     )
 
 
@@ -40,6 +40,7 @@ def test_ensure_terminal_focuses_existing_role_window() -> None:
                                         "user_vars": {
                                             "hop_session": "demo",
                                             "hop_role": "test",
+                                            "hop_project_root": str(build_session().project_root),
                                         },
                                     }
                                 ]
@@ -115,6 +116,7 @@ def test_run_in_terminal_reuses_existing_role_window() -> None:
                                         "env": {
                                             "HOP_SESSION": "demo",
                                             "HOP_ROLE": "shell",
+                                            "HOP_PROJECT_ROOT": str(build_session().project_root),
                                         },
                                     }
                                 ]
@@ -153,6 +155,7 @@ def test_run_in_terminal_creates_missing_role_window_and_routes_command() -> Non
                                         "user_vars": {
                                             "hop_session": "demo",
                                             "hop_role": "test",
+                                            "hop_project_root": str(build_session().project_root),
                                         },
                                     }
                                 ]
@@ -243,3 +246,38 @@ def test_inspect_window_reads_project_root_and_cwd_from_kitty_metadata() -> None
     assert window.role == "shell"
     assert window.project_root == project_root
     assert window.cwd == terminal_cwd
+
+
+def test_ensure_terminal_does_not_reuse_window_from_different_directory_with_same_basename() -> None:
+    other_project_root = Path("/tmp/other/demo").resolve()
+    transport = StubKittyTransport(
+        [
+            {
+                "ok": True,
+                "data": [
+                    {
+                        "tabs": [
+                            {
+                                "windows": [
+                                    {
+                                        "id": 42,
+                                        "user_vars": {
+                                            "hop_session": "demo",
+                                            "hop_role": "shell",
+                                            "hop_project_root": str(other_project_root),
+                                        },
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ],
+            },
+            {"ok": True},
+        ]
+    )
+    adapter = KittyRemoteControlAdapter(transport=transport)
+
+    adapter.ensure_terminal(build_session(), role="shell")
+
+    assert transport.commands[1][0] == "launch"

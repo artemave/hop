@@ -68,5 +68,5 @@ def test_main_smoke_routes_vigun_test_command(tmp_path: Path) -> None:
         os.chdir(original_cwd)
         hop.cli.build_default_services = original_build_default_services
 
-    assert services.sway.switched_workspaces == ["p:src"]
+    assert services.sway.switched_workspaces == [f"p:{nested_directory.resolve()}"]
     assert services.kitty.runs == [("src", "test", command, nested_directory.resolve())]

@@ -52,6 +52,7 @@ class KittyWindow:
     id: int
     session_name: str | None
     role: str | None
+    project_root: Path | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,7 +137,7 @@ class KittyRemoteControlAdapter:
         windows = [
             window
             for window in self._list_windows()
-            if window.session_name == session.session_name and window.role == role
+            if window.project_root == session.project_root and window.role == role
         ]
         if not windows:
             return None
@@ -363,10 +364,13 @@ def _parse_window(window_entry: Mapping[str, object]) -> KittyWindow | None:
     )
     env = _coerce_string_mapping(window_entry.get("env"))
 
+    project_root_text = user_vars.get(HOP_PROJECT_ROOT_VAR) or env.get(HOP_PROJECT_ROOT_ENV_VAR)
+
     return KittyWindow(
         id=window_id,
         session_name=user_vars.get(HOP_SESSION_VAR) or env.get(HOP_SESSION_ENV_VAR),
         role=user_vars.get(HOP_ROLE_VAR) or env.get(HOP_ROLE_ENV_VAR),
+        project_root=_path_from_text(project_root_text),
     )
 
 

@@ -75,19 +75,19 @@ def test_execute_command_enters_project_session_and_bootstraps_shell(tmp_path: P
     services = build_services()
 
     assert execute_command(EnterSessionCommand(), cwd=nested_directory, services=services) == 0
-    assert services.sway.switched_workspaces == ["p:src"]
+    assert services.sway.switched_workspaces == [f"p:{nested_directory}"]
     assert services.kitty.ensured_roles == [("src", "shell")]
 
 
 def test_execute_command_switches_to_named_session() -> None:
-    services = build_services()
+    services = build_services(workspaces=(f"p:/some/path/demo",))
 
     assert execute_command(SwitchSessionCommand(session_name="demo"), cwd=Path("/tmp"), services=services) == 0
-    assert services.sway.switched_workspaces == ["p:demo"]
+    assert services.sway.switched_workspaces == ["p:/some/path/demo"]
 
 
 def test_execute_command_lists_sorted_session_names() -> None:
-    services = build_services(workspaces=("p:zeta", "workspace", "p:alpha"))
+    services = build_services(workspaces=("p:/sessions/zeta", "workspace", "p:/sessions/alpha"))
     stdout = io.StringIO()
 
     with redirect_stdout(stdout):
@@ -104,7 +104,7 @@ def test_execute_command_focuses_terminal_role_in_current_session(tmp_path: Path
     services = build_services()
 
     assert execute_command(TermCommand(role="test"), cwd=nested_directory, services=services) == 0
-    assert services.sway.switched_workspaces == ["p:src"]
+    assert services.sway.switched_workspaces == [f"p:{nested_directory}"]
     assert services.kitty.ensured_roles == [("src", "test")]
 
 
@@ -123,7 +123,7 @@ def test_execute_command_routes_run_commands_to_role_terminal(tmp_path: Path) ->
         )
         == 0
     )
-    assert services.sway.switched_workspaces == ["p:src"]
+    assert services.sway.switched_workspaces == [f"p:{nested_directory}"]
     assert services.kitty.runs == [("src", "server", "bin/dev")]
 
 
@@ -135,7 +135,7 @@ def test_execute_command_focuses_shared_editor_in_current_session(tmp_path: Path
     services = build_services()
 
     assert execute_command(EditCommand(), cwd=nested_directory, services=services) == 0
-    assert services.sway.switched_workspaces == ["p:src"]
+    assert services.sway.switched_workspaces == [f"p:{nested_directory}"]
     assert services.neovim.focused_sessions == ["src"]
 
 
@@ -154,7 +154,7 @@ def test_execute_command_routes_edit_targets_to_shared_editor(tmp_path: Path) ->
         )
         == 0
     )
-    assert services.sway.switched_workspaces == ["p:src"]
+    assert services.sway.switched_workspaces == [f"p:{nested_directory}"]
     assert services.neovim.opened_targets == [("src", "app/models/user.rb:42")]
 
 
@@ -173,5 +173,20 @@ def test_execute_command_uses_invocation_directory_for_browser_sessions(tmp_path
         )
         == 0
     )
-    assert services.sway.switched_workspaces == ["p:src"]
+    assert services.sway.switched_workspaces == [f"p:{nested_directory}"]
     assert services.browser.calls == [("src", nested_directory.resolve(), "https://example.com")]
+
+
+def test_execute_command_creates_distinct_sessions_for_same_basename_directories(tmp_path: Path) -> None:
+    dir_a = tmp_path / "project_a" / "myapp"
+    dir_b = tmp_path / "project_b" / "myapp"
+    dir_a.mkdir(parents=True)
+    dir_b.mkdir(parents=True)
+
+    services_a = build_services()
+    services_b = build_services()
+
+    assert execute_command(EnterSessionCommand(), cwd=dir_a, services=services_a) == 0
+    assert execute_command(EnterSessionCommand(), cwd=dir_b, services=services_b) == 0
+
+    assert services_a.sway.switched_workspaces != services_b.sway.switched_workspaces
