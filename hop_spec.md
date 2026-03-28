@@ -237,6 +237,23 @@ Behavior:
 
 ---
 
+### Kill session
+
+```bash
+hop kill
+```
+
+Behavior:
+
+- resolve the session from the caller's exact current working directory
+- discover all windows hop owns for that session: Kitty role terminals, the shared editor window, and the marked session browser (even if it has drifted to another workspace)
+- close all discovered managed windows
+- remove the session workspace if it still exists after teardown
+- do not close windows on the workspace that hop did not create
+- focus after teardown is left to Sway
+
+---
+
 ## Opening links from terminal output
 
 A key requirement is:
