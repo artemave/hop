@@ -54,6 +54,15 @@ class KittyWindow:
     role: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class KittyWindowContext:
+    id: int
+    session_name: str | None
+    role: str | None
+    project_root: Path | None
+    cwd: Path | None
+
+
 class KittyRemoteControlAdapter:
     def __init__(self, transport: KittyTransport | None = None) -> None:
         self._transport = transport or _build_default_transport()
@@ -93,6 +102,35 @@ class KittyRemoteControlAdapter:
                 "data": f"text:{text}",
             },
         )
+
+    def inspect_window(self, window_id: int) -> KittyWindowContext | None:
+        response = self._transport.send_command(
+            "ls",
+            {
+                "match": f"id:{window_id}",
+                "output_format": "json",
+                "all_env_vars": True,
+            },
+        )
+        payload = _coerce_response_data(response)
+        if not isinstance(payload, list):
+            msg = "Kitty returned an invalid window listing."
+            raise KittyCommandError(msg)
+
+        for os_window in payload:
+            if not isinstance(os_window, Mapping):
+                continue
+            for tab in os_window.get("tabs", ()):
+                if not isinstance(tab, Mapping):
+                    continue
+                for window_entry in tab.get("windows", ()):
+                    if not isinstance(window_entry, Mapping):
+                        continue
+                    window = _parse_window_context(window_entry)
+                    if window is not None:
+                        return window
+
+        return None
 
     def _find_window(self, session: ProjectSession, *, role: str) -> KittyWindow | None:
         windows = [
@@ -332,6 +370,30 @@ def _parse_window(window_entry: Mapping[str, object]) -> KittyWindow | None:
     )
 
 
+def _parse_window_context(window_entry: Mapping[str, object]) -> KittyWindowContext | None:
+    window = _parse_window(window_entry)
+    if window is None:
+        return None
+
+    user_vars = _coerce_string_mapping(
+        window_entry.get("user_vars")
+        or window_entry.get("user_variables")
+        or window_entry.get("vars")
+    )
+    env = _coerce_string_mapping(window_entry.get("env"))
+
+    project_root_text = user_vars.get(HOP_PROJECT_ROOT_VAR) or env.get(HOP_PROJECT_ROOT_ENV_VAR)
+    cwd_text = _window_cwd_text(window_entry)
+
+    return KittyWindowContext(
+        id=window.id,
+        session_name=window.session_name,
+        role=window.role,
+        project_root=_path_from_text(project_root_text),
+        cwd=_path_from_text(cwd_text),
+    )
+
+
 def _coerce_string_mapping(value: object) -> dict[str, str]:
     if isinstance(value, Mapping):
         return {str(key): str(item) for key, item in value.items() if isinstance(item, str)}
@@ -346,6 +408,30 @@ def _coerce_string_mapping(value: object) -> dict[str, str]:
         return result
 
     return {}
+
+
+def _window_cwd_text(window_entry: Mapping[str, object]) -> str | None:
+    for key in ("cwd", "current_working_directory", "last_reported_cwd"):
+        value = window_entry.get(key)
+        if isinstance(value, str) and value:
+            return value
+
+    foreground_processes = window_entry.get("foreground_processes")
+    if isinstance(foreground_processes, list):
+        for process in foreground_processes:
+            if not isinstance(process, Mapping):
+                continue
+            cwd = process.get("cwd")
+            if isinstance(cwd, str) and cwd:
+                return cwd
+
+    return None
+
+
+def _path_from_text(value: str | None) -> Path | None:
+    if value is None:
+        return None
+    return Path(value).expanduser().resolve(strict=False)
 
 
 def _read_until(read_chunk: Any, suffix: bytes) -> bytes:

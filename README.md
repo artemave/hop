@@ -107,6 +107,22 @@ hop browser https://example.com
 
 This reuses or creates a session-owned window in your default browser. If that window was moved to another workspace, `hop browser` moves it back to the session workspace before focusing it.
 
+### Open visible-output targets from Kitty
+
+Add a Kitty mapping that runs the `hints` kitten with hop's custom processor:
+
+```conf
+map ctrl+shift+o kitten hints --customize-processing /path/to/hop/kittens/open_selection/main.py
+```
+
+That picker works over visible terminal output and dispatches supported selections to the session editor or browser:
+
+- `app/models/user.rb`
+- `app/models/user.rb:42`
+- `b/app/models/user.rb`
+- `https://example.com`
+- `Processing UsersController#index`
+
 ## Development
 
 Run tests with:

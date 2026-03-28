@@ -196,3 +196,50 @@ def test_run_in_terminal_creates_missing_role_window_and_routes_command() -> Non
         ("ls", {"output_format": "json"}),
         ("send-text", {"match": "id:13", "data": "text:bin/test\n"}),
     ]
+
+
+def test_inspect_window_reads_project_root_and_cwd_from_kitty_metadata() -> None:
+    project_root = (Path("/tmp/demo")).resolve()
+    terminal_cwd = (project_root / "src").resolve()
+    transport = StubKittyTransport(
+        [
+            {
+                "ok": True,
+                "data": [
+                    {
+                        "tabs": [
+                            {
+                                "windows": [
+                                    {
+                                        "id": 17,
+                                        "user_vars": {
+                                            "hop_session": "demo",
+                                            "hop_role": "shell",
+                                            "hop_project_root": str(project_root),
+                                        },
+                                        "foreground_processes": [
+                                            {
+                                                "cwd": str(terminal_cwd),
+                                            }
+                                        ],
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ],
+            }
+        ]
+    )
+    adapter = KittyRemoteControlAdapter(transport=transport)
+
+    window = adapter.inspect_window(17)
+
+    assert transport.commands == [
+        ("ls", {"match": "id:17", "output_format": "json", "all_env_vars": True}),
+    ]
+    assert window is not None
+    assert window.session_name == "demo"
+    assert window.role == "shell"
+    assert window.project_root == project_root
+    assert window.cwd == terminal_cwd

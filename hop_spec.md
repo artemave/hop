@@ -290,6 +290,7 @@ Kitty is used as the terminal backend.
 ### Selection (hints)
 
 - interactive selection must work over **visible terminal output**
+- selection is implemented through Kitty's `hints` UI with custom processing in `kittens/open_selection/main.py`
 - selection should allow choosing file paths, URLs, and other matches
 - this replaces `tmux_super_fingers`
 
