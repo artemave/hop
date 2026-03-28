@@ -41,6 +41,11 @@ class BrowserCommand:
     url: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class KillCommand:
+    pass
+
+
 Command = (
     EnterSessionCommand
     | SwitchSessionCommand
@@ -49,4 +54,5 @@ Command = (
     | TermCommand
     | RunCommand
     | BrowserCommand
+    | KillCommand
 )

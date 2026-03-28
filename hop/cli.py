@@ -11,6 +11,7 @@ from hop.commands import (
     Command,
     EditCommand,
     EnterSessionCommand,
+    KillCommand,
     ListSessionsCommand,
     RunCommand,
     SwitchSessionCommand,
@@ -42,6 +43,8 @@ def build_parser() -> argparse.ArgumentParser:
     browser_parser = subparsers.add_parser("browser")
     browser_parser.add_argument("url", nargs="?")
 
+    subparsers.add_parser("kill")
+
     return parser
 
 
@@ -63,6 +66,8 @@ def parse_command(argv: Sequence[str] | None = None) -> Command:
             return RunCommand(role=namespace.role, command_text=namespace.command_text)
         case "browser":
             return BrowserCommand(url=namespace.url)
+        case "kill":
+            return KillCommand()
         case command_name:
             msg = f"Unsupported command {command_name!r}"
             raise ValueError(msg)

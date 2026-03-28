@@ -5,6 +5,7 @@ from hop.commands import (
     BrowserCommand,
     EditCommand,
     EnterSessionCommand,
+    KillCommand,
     ListSessionsCommand,
     RunCommand,
     SwitchSessionCommand,
@@ -28,6 +29,7 @@ from hop.commands import (
         ),
         (["browser"], BrowserCommand()),
         (["browser", "https://example.com"], BrowserCommand(url="https://example.com")),
+        (["kill"], KillCommand()),
     ],
 )
 def test_parse_command_maps_argv_to_typed_commands(argv: list[str], expected: object) -> None:

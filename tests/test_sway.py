@@ -149,6 +149,32 @@ def test_window_commands_use_sway_criteria_by_container_id() -> None:
     ]
 
 
+def test_close_window_uses_kill_command_with_container_id() -> None:
+    transport = StubSwayTransport(
+        responses={SwayMessageType.RUN_COMMAND: json.dumps([{"success": True}]).encode()}
+    )
+    sway = SwayIpcAdapter(transport=transport)
+
+    sway.close_window(42)
+
+    assert transport.requests == [
+        (SwayMessageType.RUN_COMMAND, b"[con_id=42] kill"),
+    ]
+
+
+def test_remove_workspace_switches_focus_to_trigger_sway_cleanup() -> None:
+    transport = StubSwayTransport(
+        responses={SwayMessageType.RUN_COMMAND: json.dumps([{"success": True}]).encode()}
+    )
+    sway = SwayIpcAdapter(transport=transport)
+
+    sway.remove_workspace("p:/tmp/demo")
+
+    assert transport.requests == [
+        (SwayMessageType.RUN_COMMAND, b"workspace back_and_forth"),
+    ]
+
+
 def test_default_transport_requires_swaysock() -> None:
     original_value = os.environ.pop("SWAYSOCK", None)
     transport = UnixSocketSwayIpcTransport()

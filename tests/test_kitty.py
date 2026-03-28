@@ -248,6 +248,65 @@ def test_inspect_window_reads_project_root_and_cwd_from_kitty_metadata() -> None
     assert window.cwd == terminal_cwd
 
 
+def test_list_session_windows_returns_all_windows_for_session_project_root() -> None:
+    other_root = Path("/tmp/other/demo").resolve()
+    transport = StubKittyTransport(
+        [
+            {
+                "ok": True,
+                "data": [
+                    {
+                        "tabs": [
+                            {
+                                "windows": [
+                                    {
+                                        "id": 1,
+                                        "user_vars": {
+                                            "hop_session": "demo",
+                                            "hop_role": "shell",
+                                            "hop_project_root": str(build_session().project_root),
+                                        },
+                                    },
+                                    {
+                                        "id": 2,
+                                        "user_vars": {
+                                            "hop_session": "demo",
+                                            "hop_role": "test",
+                                            "hop_project_root": str(build_session().project_root),
+                                        },
+                                    },
+                                    {
+                                        "id": 3,
+                                        "user_vars": {
+                                            "hop_session": "demo",
+                                            "hop_role": "shell",
+                                            "hop_project_root": str(other_root),
+                                        },
+                                    },
+                                ]
+                            }
+                        ]
+                    }
+                ],
+            }
+        ]
+    )
+    adapter = KittyRemoteControlAdapter(transport=transport)
+
+    windows = adapter.list_session_windows(build_session())
+
+    assert {w.id for w in windows} == {1, 2}
+
+
+def test_close_window_sends_close_window_command() -> None:
+    transport = StubKittyTransport([{"ok": True}])
+    adapter = KittyRemoteControlAdapter(transport=transport)
+
+    adapter.close_window(17)
+
+    assert transport.commands == [("close-window", {"match": "id:17"})]
+
+
 def test_ensure_terminal_does_not_reuse_window_from_different_directory_with_same_basename() -> None:
     other_project_root = Path("/tmp/other/demo").resolve()
     transport = StubKittyTransport(

@@ -142,6 +142,12 @@ class SwayIpcAdapter:
     def mark_window(self, window_id: int, mark: str) -> None:
         self.run_command(f"[con_id={window_id}] mark --add {json.dumps(mark)}")
 
+    def close_window(self, window_id: int) -> None:
+        self.run_command(f"[con_id={window_id}] kill")
+
+    def remove_workspace(self, workspace_name: str) -> None:
+        self.run_command("workspace back_and_forth")
+
 
 def _recv_exact(client: socket.socket, byte_count: int) -> bytes:
     chunks: list[bytes] = []

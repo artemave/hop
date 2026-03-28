@@ -7,17 +7,21 @@ from hop.commands import (
     BrowserCommand,
     EditCommand,
     EnterSessionCommand,
+    KillCommand,
     ListSessionsCommand,
     RunCommand,
     SwitchSessionCommand,
     TermCommand,
 )
+from hop.sway import SwayWindow
 
 
 class StubSwayAdapter:
     def __init__(self, workspaces: tuple[str, ...] = ()) -> None:
         self.workspaces = workspaces
         self.switched_workspaces: list[str] = []
+        self.closed_windows: list[int] = []
+        self.removed_workspaces: list[str] = []
 
     def switch_to_workspace(self, workspace_name: str) -> None:
         self.switched_workspaces.append(workspace_name)
@@ -25,17 +29,33 @@ class StubSwayAdapter:
     def list_session_workspaces(self, *, prefix: str = "p:") -> tuple[str, ...]:
         return tuple(workspace for workspace in self.workspaces if workspace.startswith(prefix))
 
+    def list_windows(self) -> tuple[SwayWindow, ...]:
+        return ()
+
+    def close_window(self, window_id: int) -> None:
+        self.closed_windows.append(window_id)
+
+    def remove_workspace(self, workspace_name: str) -> None:
+        self.removed_workspaces.append(workspace_name)
+
 
 class StubKittyAdapter:
     def __init__(self) -> None:
         self.ensured_roles: list[tuple[str, str]] = []
         self.runs: list[tuple[str, str, str]] = []
+        self.closed_windows: list[int] = []
 
     def ensure_terminal(self, session, *, role: str) -> None:
         self.ensured_roles.append((session.session_name, role))
 
     def run_in_terminal(self, session, *, role: str, command: str) -> None:
         self.runs.append((session.session_name, role, command))
+
+    def list_session_windows(self, session) -> list[object]:
+        return []
+
+    def close_window(self, window_id: int) -> None:
+        self.closed_windows.append(window_id)
 
 
 class StubNeovimAdapter:
@@ -190,3 +210,14 @@ def test_execute_command_creates_distinct_sessions_for_same_basename_directories
     assert execute_command(EnterSessionCommand(), cwd=dir_b, services=services_b) == 0
 
     assert services_a.sway.switched_workspaces != services_b.sway.switched_workspaces
+
+
+def test_execute_command_kills_managed_windows_and_removes_workspace(tmp_path: Path) -> None:
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+    workspace_name = f"p:{project_root.resolve()}"
+
+    services = build_services(workspaces=(workspace_name,))
+
+    assert execute_command(KillCommand(), cwd=project_root, services=services) == 0
+    assert services.sway.removed_workspaces == [workspace_name]

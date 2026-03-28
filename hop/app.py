@@ -9,6 +9,7 @@ from hop.commands import (
     Command,
     EditCommand,
     EnterSessionCommand,
+    KillCommand,
     ListSessionsCommand,
     RunCommand,
     SwitchSessionCommand,
@@ -16,21 +17,28 @@ from hop.commands import (
 )
 from hop.commands.browser import focus_browser
 from hop.commands.edit import edit_in_session
+from hop.commands.kill import kill_session
 from hop.commands.run import run_command
 from hop.commands.session import enter_project_session, list_sessions, switch_session
 from hop.commands.term import focus_terminal
 from hop.browser import SessionBrowserAdapter
 from hop.editor import SharedNeovimEditorAdapter
 from hop.errors import HopError, IntegrationNotImplementedError
-from hop.kitty import KittyRemoteControlAdapter
+from hop.kitty import KittyRemoteControlAdapter, KittyWindow
 from hop.session import ProjectSession
-from hop.sway import SwayIpcAdapter
+from hop.sway import SwayIpcAdapter, SwayWindow
 
 
 class SwayAdapter(Protocol):
     def switch_to_workspace(self, workspace_name: str) -> None: ...
 
     def list_session_workspaces(self, *, prefix: str = "p:") -> Sequence[str]: ...
+
+    def list_windows(self) -> Sequence[SwayWindow]: ...
+
+    def close_window(self, window_id: int) -> None: ...
+
+    def remove_workspace(self, workspace_name: str) -> None: ...
 
 
 class KittyAdapter(Protocol):
@@ -43,6 +51,10 @@ class KittyAdapter(Protocol):
         role: str,
         command: str,
     ) -> None: ...
+
+    def list_session_windows(self, session: ProjectSession) -> Sequence[KittyWindow]: ...
+
+    def close_window(self, window_id: int) -> None: ...
 
 
 class NeovimAdapter(Protocol):
@@ -112,6 +124,12 @@ def execute_command(
                 browser=services.browser,
                 url=url,
             )
+        case KillCommand():
+            kill_session(
+                current_directory,
+                sway=services.sway,
+                kitty=services.kitty,
+            )
 
     return 0
 
@@ -141,4 +159,14 @@ class _MissingKittyAdapter:
     ) -> None:
         raise IntegrationNotImplementedError(
             f"Kitty command dispatch is not implemented yet for {session.session_name!r}:{role!r}."
+        )
+
+    def list_session_windows(self, session: ProjectSession) -> Sequence[KittyWindow]:
+        raise IntegrationNotImplementedError(
+            f"Kitty window listing is not implemented yet for {session.session_name!r}."
+        )
+
+    def close_window(self, window_id: int) -> None:
+        raise IntegrationNotImplementedError(
+            f"Kitty window closing is not implemented yet for window {window_id!r}."
         )

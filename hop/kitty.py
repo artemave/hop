@@ -133,6 +133,16 @@ class KittyRemoteControlAdapter:
 
         return None
 
+    def list_session_windows(self, session: ProjectSession) -> tuple[KittyWindow, ...]:
+        return tuple(
+            window
+            for window in self._list_windows()
+            if window.project_root == session.project_root
+        )
+
+    def close_window(self, window_id: int) -> None:
+        self._transport.send_command("close-window", {"match": f"id:{window_id}"})
+
     def _find_window(self, session: ProjectSession, *, role: str) -> KittyWindow | None:
         windows = [
             window
