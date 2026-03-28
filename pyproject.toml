@@ -17,6 +17,7 @@ hop = "hop.cli:main"
 dev = [
   "pyright>=1.1.408",
   "pytest>=8.4.0",
+  "pytest-cov>=7.1.0",
   "ruff>=0.15.8",
 ]
 

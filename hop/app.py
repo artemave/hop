@@ -131,6 +131,9 @@ def execute_command(
                 sway=services.sway,
                 kitty=services.kitty,
             )
+        case _:
+            msg = f"Unsupported command {command!r}"
+            raise ValueError(msg)
 
     return 0
 
