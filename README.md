@@ -2,10 +2,16 @@
 
 `hop` is a session-oriented workspace CLI for Sway, Kitty, and Neovim.
 
+Think of it as tmux, but:
+
+- with GUI apps being part of session
+- no separate window switching shortcuts
+- no terminal multiplexing layer
+
 It treats each project as a session and uses:
 
 - Sway workspaces for session switching
-- Kitty OS windows for role-based terminals
+- Kitty for role-based terminals
 - one shared Neovim instance per session
 
 ## Requirements
