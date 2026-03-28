@@ -23,7 +23,6 @@ def test_focus_terminal_switches_to_workspace_and_routes_by_role(tmp_path: Path)
     project_root = tmp_path / "demo"
     nested_directory = project_root / "src"
     nested_directory.mkdir(parents=True)
-    (project_root / ".git").mkdir()
 
     sway = StubSwayAdapter()
     kitty = StubKittyAdapter()
@@ -35,6 +34,6 @@ def test_focus_terminal_switches_to_workspace_and_routes_by_role(tmp_path: Path)
         role="test",
     )
 
-    assert session.session_name == "demo"
-    assert sway.switched_workspaces == ["p:demo"]
-    assert kitty.ensured == [("demo", "test", project_root)]
+    assert session.session_name == "src"
+    assert sway.switched_workspaces == ["p:src"]
+    assert kitty.ensured == [("src", "test", nested_directory)]

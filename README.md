@@ -43,7 +43,9 @@ That exposes the `hop` command in your active Python environment.
 
 ### Enter or create session
 
-Run `hop` in a project directory. This creates a dedicated sway workspace with a terminal. Running `hop` from the same directory any other terminal on any other workspace will teleport you to the session workspace.
+Run `hop` in the directory you want to use as the session root. This creates a dedicated Sway workspace with a terminal. Running `hop` again from that same directory reuses the same session. Running it from a nested directory creates a different session rooted at that nested directory.
+
+The same directory-rooted rule applies to every session-scoped command: `hop`, `hop edit`, `hop term`, `hop run`, and `hop browser`.
 
 ### Switch to a named session
 

@@ -53,7 +53,6 @@ def test_main_smoke_routes_vigun_test_command(tmp_path: Path) -> None:
     project_root = tmp_path / "demo"
     nested_directory = project_root / "src"
     nested_directory.mkdir(parents=True)
-    (project_root / ".dust").mkdir()
 
     services = build_services()
     command = "python3 -m pytest tests/test_run_commands.py -q"
@@ -69,5 +68,5 @@ def test_main_smoke_routes_vigun_test_command(tmp_path: Path) -> None:
         os.chdir(original_cwd)
         hop.cli.build_default_services = original_build_default_services
 
-    assert services.sway.switched_workspaces == ["p:demo"]
-    assert services.kitty.runs == [("demo", "test", command, project_root)]
+    assert services.sway.switched_workspaces == ["p:src"]
+    assert services.kitty.runs == [("src", "test", command, nested_directory.resolve())]

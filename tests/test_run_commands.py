@@ -23,7 +23,6 @@ def test_run_command_switches_to_workspace_and_routes_to_role_terminal(tmp_path:
     project_root = tmp_path / "demo"
     nested_directory = project_root / "src"
     nested_directory.mkdir(parents=True)
-    (project_root / ".dust").mkdir()
 
     sway = StubSwayAdapter()
     kitty = StubKittyAdapter()
@@ -36,16 +35,15 @@ def test_run_command_switches_to_workspace_and_routes_to_role_terminal(tmp_path:
         command="bin/dev",
     )
 
-    assert session.session_name == "demo"
-    assert sway.switched_workspaces == ["p:demo"]
-    assert kitty.runs == [("demo", "server", "bin/dev", project_root)]
+    assert session.session_name == "src"
+    assert sway.switched_workspaces == ["p:src"]
+    assert kitty.runs == [("src", "server", "bin/dev", nested_directory)]
 
 
 def test_run_command_defaults_to_shell_role(tmp_path: Path) -> None:
     project_root = tmp_path / "demo"
     nested_directory = project_root / "src"
     nested_directory.mkdir(parents=True)
-    (project_root / ".git").mkdir()
 
     sway = StubSwayAdapter()
     kitty = StubKittyAdapter()
@@ -57,4 +55,4 @@ def test_run_command_defaults_to_shell_role(tmp_path: Path) -> None:
         command="ls",
     )
 
-    assert kitty.runs == [("demo", DEFAULT_RUN_ROLE, "ls", project_root)]
+    assert kitty.runs == [("src", DEFAULT_RUN_ROLE, "ls", nested_directory)]

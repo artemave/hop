@@ -19,7 +19,7 @@ implement
 
 ## Blocked By
 
-- [Implement directory-rooted session resolution](implement-directory-rooted-session-resolution.md)
+(none)
 
 ## Definition of Done
 

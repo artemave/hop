@@ -27,23 +27,21 @@ def test_edit_in_session_switches_to_workspace_and_focuses_editor(tmp_path: Path
     project_root = tmp_path / "demo"
     nested_directory = project_root / "src"
     nested_directory.mkdir(parents=True)
-    (project_root / ".git").mkdir()
 
     sway = StubSwayAdapter()
     neovim = StubNeovimAdapter()
 
     session = edit_in_session(nested_directory, sway=sway, neovim=neovim)
 
-    assert session.session_name == "demo"
-    assert sway.switched_workspaces == ["p:demo"]
-    assert neovim.focused_sessions == ["demo"]
+    assert session.session_name == "src"
+    assert sway.switched_workspaces == ["p:src"]
+    assert neovim.focused_sessions == ["src"]
 
 
 def test_edit_in_session_routes_targets_to_shared_editor(tmp_path: Path) -> None:
     project_root = tmp_path / "demo"
     nested_directory = project_root / "src"
     nested_directory.mkdir(parents=True)
-    (project_root / ".dust").mkdir()
 
     sway = StubSwayAdapter()
     neovim = StubNeovimAdapter()
@@ -55,5 +53,21 @@ def test_edit_in_session_routes_targets_to_shared_editor(tmp_path: Path) -> None
         target="app/models/user.rb:42",
     )
 
-    assert sway.switched_workspaces == ["p:demo"]
-    assert neovim.opened_targets == [("demo", "app/models/user.rb:42")]
+    assert sway.switched_workspaces == ["p:src"]
+    assert neovim.opened_targets == [("src", "app/models/user.rb:42")]
+
+
+def test_edit_in_session_treats_nested_directories_as_distinct_sessions(tmp_path: Path) -> None:
+    project_root = tmp_path / "demo"
+    first_session_root = project_root / "src"
+    second_session_root = first_session_root / "models"
+    second_session_root.mkdir(parents=True)
+
+    sway = StubSwayAdapter()
+    neovim = StubNeovimAdapter()
+
+    edit_in_session(first_session_root, sway=sway, neovim=neovim)
+    edit_in_session(second_session_root, sway=sway, neovim=neovim)
+
+    assert sway.switched_workspaces == ["p:src", "p:models"]
+    assert neovim.focused_sessions == ["src", "models"]

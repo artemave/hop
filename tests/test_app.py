@@ -4,6 +4,7 @@ from pathlib import Path
 
 from hop.app import HopServices, execute_command
 from hop.commands import (
+    BrowserCommand,
     EditCommand,
     EnterSessionCommand,
     ListSessionsCommand,
@@ -50,8 +51,11 @@ class StubNeovimAdapter:
 
 
 class StubBrowserAdapter:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, Path, str | None]] = []
+
     def ensure_browser(self, session, *, url: str | None) -> None:
-        raise AssertionError("Browser should not be called in these tests")
+        self.calls.append((session.session_name, session.project_root, url))
 
 
 def build_services(*, workspaces: tuple[str, ...] = ()) -> HopServices:
@@ -67,13 +71,12 @@ def test_execute_command_enters_project_session_and_bootstraps_shell(tmp_path: P
     project_root = tmp_path / "demo"
     nested_directory = project_root / "src"
     nested_directory.mkdir(parents=True)
-    (project_root / ".dust").mkdir()
 
     services = build_services()
 
     assert execute_command(EnterSessionCommand(), cwd=nested_directory, services=services) == 0
-    assert services.sway.switched_workspaces == ["p:demo"]
-    assert services.kitty.ensured_roles == [("demo", "shell")]
+    assert services.sway.switched_workspaces == ["p:src"]
+    assert services.kitty.ensured_roles == [("src", "shell")]
 
 
 def test_execute_command_switches_to_named_session() -> None:
@@ -97,20 +100,18 @@ def test_execute_command_focuses_terminal_role_in_current_session(tmp_path: Path
     project_root = tmp_path / "demo"
     nested_directory = project_root / "src"
     nested_directory.mkdir(parents=True)
-    (project_root / ".git").mkdir()
 
     services = build_services()
 
     assert execute_command(TermCommand(role="test"), cwd=nested_directory, services=services) == 0
-    assert services.sway.switched_workspaces == ["p:demo"]
-    assert services.kitty.ensured_roles == [("demo", "test")]
+    assert services.sway.switched_workspaces == ["p:src"]
+    assert services.kitty.ensured_roles == [("src", "test")]
 
 
 def test_execute_command_routes_run_commands_to_role_terminal(tmp_path: Path) -> None:
     project_root = tmp_path / "demo"
     nested_directory = project_root / "src"
     nested_directory.mkdir(parents=True)
-    (project_root / ".git").mkdir()
 
     services = build_services()
 
@@ -122,28 +123,26 @@ def test_execute_command_routes_run_commands_to_role_terminal(tmp_path: Path) ->
         )
         == 0
     )
-    assert services.sway.switched_workspaces == ["p:demo"]
-    assert services.kitty.runs == [("demo", "server", "bin/dev")]
+    assert services.sway.switched_workspaces == ["p:src"]
+    assert services.kitty.runs == [("src", "server", "bin/dev")]
 
 
 def test_execute_command_focuses_shared_editor_in_current_session(tmp_path: Path) -> None:
     project_root = tmp_path / "demo"
     nested_directory = project_root / "src"
     nested_directory.mkdir(parents=True)
-    (project_root / ".git").mkdir()
 
     services = build_services()
 
     assert execute_command(EditCommand(), cwd=nested_directory, services=services) == 0
-    assert services.sway.switched_workspaces == ["p:demo"]
-    assert services.neovim.focused_sessions == ["demo"]
+    assert services.sway.switched_workspaces == ["p:src"]
+    assert services.neovim.focused_sessions == ["src"]
 
 
 def test_execute_command_routes_edit_targets_to_shared_editor(tmp_path: Path) -> None:
     project_root = tmp_path / "demo"
     nested_directory = project_root / "src"
     nested_directory.mkdir(parents=True)
-    (project_root / ".dust").mkdir()
 
     services = build_services()
 
@@ -155,5 +154,24 @@ def test_execute_command_routes_edit_targets_to_shared_editor(tmp_path: Path) ->
         )
         == 0
     )
-    assert services.sway.switched_workspaces == ["p:demo"]
-    assert services.neovim.opened_targets == [("demo", "app/models/user.rb:42")]
+    assert services.sway.switched_workspaces == ["p:src"]
+    assert services.neovim.opened_targets == [("src", "app/models/user.rb:42")]
+
+
+def test_execute_command_uses_invocation_directory_for_browser_sessions(tmp_path: Path) -> None:
+    project_root = tmp_path / "demo"
+    nested_directory = project_root / "src"
+    nested_directory.mkdir(parents=True)
+
+    services = build_services()
+
+    assert (
+        execute_command(
+            BrowserCommand(url="https://example.com"),
+            cwd=nested_directory,
+            services=services,
+        )
+        == 0
+    )
+    assert services.sway.switched_workspaces == ["p:src"]
+    assert services.browser.calls == [("src", nested_directory.resolve(), "https://example.com")]

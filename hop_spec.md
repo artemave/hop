@@ -32,7 +32,7 @@ A session consists of:
 - multiple terminal windows (each with a role)
 - optionally, a browser window
 
-The session root is exactly the caller's current working directory when `hop` starts.
+The session root is exactly the caller's current working directory when `hop` starts. `hop` must not walk ancestors looking for `.git`, `.dust`, `pyproject.toml`, or any other marker file.
 
 - rerunning `hop` from the same directory should attach to the same session
 - running `hop` from a different directory should target a different session rooted there

@@ -27,16 +27,33 @@ def test_enter_project_session_switches_to_workspace_and_bootstraps_shell(tmp_pa
     project_root = tmp_path / "demo"
     nested_directory = project_root / "src"
     nested_directory.mkdir(parents=True)
-    (project_root / ".git").mkdir()
 
     sway = StubSwayAdapter()
     terminals = StubTerminalAdapter()
 
     session = enter_project_session(nested_directory, sway=sway, terminals=terminals)
 
-    assert session.session_name == "demo"
-    assert sway.switched_workspaces == ["p:demo"]
-    assert terminals.ensured_terminals == [("demo", "shell", project_root)]
+    assert session.session_name == "src"
+    assert sway.switched_workspaces == ["p:src"]
+    assert terminals.ensured_terminals == [("src", "shell", nested_directory)]
+
+
+def test_enter_project_session_reuses_the_same_directory_session_on_repeat_invocation(tmp_path: Path) -> None:
+    session_root = tmp_path / "demo" / "src"
+    session_root.mkdir(parents=True)
+
+    sway = StubSwayAdapter()
+    terminals = StubTerminalAdapter()
+
+    first_session = enter_project_session(session_root, sway=sway, terminals=terminals)
+    second_session = enter_project_session(session_root, sway=sway, terminals=terminals)
+
+    assert first_session == second_session
+    assert sway.switched_workspaces == ["p:src", "p:src"]
+    assert terminals.ensured_terminals == [
+        ("src", "shell", session_root),
+        ("src", "shell", session_root),
+    ]
 
 
 def test_switch_session_uses_workspace_name_derivation() -> None:
