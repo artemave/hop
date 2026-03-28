@@ -19,7 +19,7 @@ implement
 
 ## Blocked By
 
-- [Implement visible-output target selection](implement-visible-output-target-selection.md)
+- (none)
 
 ## Definition of Done
 

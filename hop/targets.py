@@ -137,7 +137,8 @@ def _resolve_file_candidate(
     terminal_cwd: Path,
     project_root: Path,
 ) -> Path | None:
-    expanded_candidate = Path(candidate).expanduser()
+    normalized_candidate = _normalize_file_candidate(candidate)
+    expanded_candidate = Path(normalized_candidate).expanduser()
     path_candidates: list[Path] = []
     if expanded_candidate.is_absolute():
         path_candidates.append(expanded_candidate)
@@ -145,17 +146,15 @@ def _resolve_file_candidate(
         path_candidates.append(terminal_cwd / expanded_candidate)
         path_candidates.append(project_root / expanded_candidate)
 
-        stripped_candidate = _strip_git_diff_prefix(candidate)
-        if stripped_candidate != candidate:
-            stripped_path = Path(stripped_candidate)
-            path_candidates.append(terminal_cwd / stripped_path)
-            path_candidates.append(project_root / stripped_path)
-
     for path_candidate in path_candidates:
         resolved_candidate = path_candidate.resolve(strict=False)
         if resolved_candidate.is_file():
             return resolved_candidate
     return None
+
+
+def _normalize_file_candidate(candidate: str) -> str:
+    return _strip_git_diff_prefix(candidate)
 
 
 def _strip_git_diff_prefix(candidate: str) -> str:

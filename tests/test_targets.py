@@ -66,6 +66,26 @@ def test_resolve_visible_output_target_strips_git_diff_prefixes(tmp_path: Path) 
     assert resolved == ResolvedFileTarget(path=resolved_file.resolve(), line_number=9)
 
 
+def test_resolve_visible_output_target_normalizes_git_diff_paths_before_relative_lookup(tmp_path: Path) -> None:
+    project_root = tmp_path / "demo"
+    terminal_cwd = project_root / "src"
+    normalized_file = project_root / "app/models/user.rb"
+    misleading_file = terminal_cwd / "b/app/models/user.rb"
+    terminal_cwd.mkdir(parents=True)
+    normalized_file.parent.mkdir(parents=True)
+    misleading_file.parent.mkdir(parents=True)
+    normalized_file.write_text("normalized\n")
+    misleading_file.write_text("misleading\n")
+
+    resolved = resolve_visible_output_target(
+        "b/app/models/user.rb:9",
+        terminal_cwd=terminal_cwd,
+        project_root=project_root,
+    )
+
+    assert resolved == ResolvedFileTarget(path=normalized_file.resolve(), line_number=9)
+
+
 def test_resolve_visible_output_target_maps_rails_processing_references(tmp_path: Path) -> None:
     project_root = tmp_path / "demo"
     terminal_cwd = project_root / "src"
