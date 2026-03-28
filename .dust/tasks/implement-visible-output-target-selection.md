@@ -19,7 +19,7 @@ implement
 
 ## Blocked By
 
-- [Implement the session browser command](implement-the-session-browser-command.md)
+(none)
 
 ## Definition of Done
 

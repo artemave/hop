@@ -19,7 +19,6 @@ implement
 
 ## Blocked By
 
-- [Implement the session browser command](implement-the-session-browser-command.md)
 - [Implement visible-output target selection](implement-visible-output-target-selection.md)
 
 ## Definition of Done

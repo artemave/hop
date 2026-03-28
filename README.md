@@ -105,7 +105,7 @@ hop browser
 hop browser https://example.com
 ```
 
-The CLI command exists, but browser integration is not implemented yet.
+This reuses or creates a session-owned window in your default browser. If that window was moved to another workspace, `hop browser` moves it back to the session workspace before focusing it.
 
 ## Development
 

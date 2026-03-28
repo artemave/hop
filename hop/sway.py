@@ -31,11 +31,22 @@ class SwayCommandError(SwayError):
 class SwayMessageType(IntEnum):
     RUN_COMMAND = 0
     GET_WORKSPACES = 1
+    GET_TREE = 4
 
 
 @dataclass(frozen=True, slots=True)
 class SwayWorkspace:
     name: str
+    focused: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class SwayWindow:
+    id: int
+    workspace_name: str | None
+    app_id: str | None
+    window_class: str | None
+    marks: tuple[str, ...] = ()
     focused: bool = False
 
 
@@ -88,12 +99,15 @@ class SwayIpcAdapter:
         self._transport = transport or UnixSocketSwayIpcTransport()
 
     def switch_to_workspace(self, workspace_name: str) -> None:
-        payload = f"workspace {json.dumps(workspace_name)}".encode()
+        self.run_command(f"workspace {json.dumps(workspace_name)}")
+
+    def run_command(self, command: str) -> None:
+        payload = command.encode()
         response = self._transport.request(SwayMessageType.RUN_COMMAND, payload)
         results = json.loads(response.decode())
 
         if not results or not all(result.get("success") for result in results):
-            msg = f"Sway could not switch to workspace {workspace_name!r}."
+            msg = f"Sway rejected command {command!r}."
             raise SwayCommandError(msg)
 
     def list_session_workspaces(self, *, prefix: str = "p:") -> tuple[str, ...]:
@@ -110,6 +124,24 @@ class SwayIpcAdapter:
         ]
         return tuple(sorted(workspace.name for workspace in workspaces))
 
+    def list_windows(self) -> tuple[SwayWindow, ...]:
+        response = self._transport.request(SwayMessageType.GET_TREE)
+        tree = json.loads(response.decode())
+        windows: list[SwayWindow] = []
+        _collect_windows(tree, windows=windows)
+        return tuple(windows)
+
+    def focus_window(self, window_id: int) -> None:
+        self.run_command(f"[con_id={window_id}] focus")
+
+    def move_window_to_workspace(self, window_id: int, workspace_name: str) -> None:
+        self.run_command(
+            f"[con_id={window_id}] move container to workspace {json.dumps(workspace_name)}"
+        )
+
+    def mark_window(self, window_id: int, mark: str) -> None:
+        self.run_command(f"[con_id={window_id}] mark --add {json.dumps(mark)}")
+
 
 def _recv_exact(client: socket.socket, byte_count: int) -> bytes:
     chunks: list[bytes] = []
@@ -124,3 +156,52 @@ def _recv_exact(client: socket.socket, byte_count: int) -> bytes:
         remaining -= len(chunk)
 
     return b"".join(chunks)
+
+
+def _collect_windows(
+    node: object,
+    *,
+    windows: list[SwayWindow],
+    workspace_name: str | None = None,
+) -> None:
+    if not isinstance(node, dict):
+        return
+
+    current_workspace_name = workspace_name
+    if node.get("type") == "workspace" and isinstance(node.get("name"), str):
+        current_workspace_name = node["name"]
+
+    window_id = node.get("id")
+    app_id = node.get("app_id") if isinstance(node.get("app_id"), str) else None
+    window_class = _extract_window_class(node.get("window_properties"))
+    marks = tuple(mark for mark in node.get("marks", ()) if isinstance(mark, str))
+    focused = bool(node.get("focused", False))
+
+    if isinstance(window_id, int) and (app_id is not None or window_class is not None):
+        windows.append(
+            SwayWindow(
+                id=window_id,
+                workspace_name=current_workspace_name,
+                app_id=app_id,
+                window_class=window_class,
+                marks=marks,
+                focused=focused,
+            )
+        )
+
+    for child in node.get("nodes", ()):
+        _collect_windows(child, windows=windows, workspace_name=current_workspace_name)
+
+    for child in node.get("floating_nodes", ()):
+        _collect_windows(child, windows=windows, workspace_name=current_workspace_name)
+
+
+def _extract_window_class(window_properties: object) -> str | None:
+    if not isinstance(window_properties, dict):
+        return None
+
+    window_class = window_properties.get("class")
+    if isinstance(window_class, str):
+        return window_class
+
+    return None

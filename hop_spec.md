@@ -81,6 +81,9 @@ Each session has exactly one Neovim instance.
 Each session may have a browser window.
 
 - browser usage is scoped to the current session
+- `hop` reuses the user's default browser windowing model instead of a dedicated profile
+- the session browser is rediscovered through a session-specific Sway mark rather than by visible title alone
+- if the session browser drifts to another workspace, `hop browser` reattaches it to the session workspace instead of adopting a different browser window
 - opening URLs should reuse or create a browser window within the session workspace
 
 ---
@@ -227,7 +230,10 @@ hop browser [url]
 Behavior:
 
 - reuse or create a browser window associated with the session
-- open URL if provided
+- launch the system default browser in a new window when the session browser is missing
+- keep the browser associated with the session through a stable Sway mark
+- reattach the session browser to the session workspace when it has drifted elsewhere
+- if a URL is provided, focus the session browser first and then delegate that URL to the default browser
 
 ---
 

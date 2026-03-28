@@ -14,15 +14,18 @@ from hop.commands import (
     SwitchSessionCommand,
     TermCommand,
 )
+from hop.commands.browser import focus_browser
 from hop.commands.edit import edit_in_session
 from hop.commands.run import run_command
 from hop.commands.session import enter_project_session, list_sessions, switch_session
 from hop.commands.term import focus_terminal
+from hop.browser import SessionBrowserAdapter
 from hop.editor import SharedNeovimEditorAdapter
 from hop.errors import HopError, IntegrationNotImplementedError
 from hop.kitty import KittyRemoteControlAdapter
-from hop.session import ProjectSession, resolve_project_session
+from hop.session import ProjectSession
 from hop.sway import SwayIpcAdapter
+
 
 class SwayAdapter(Protocol):
     def switch_to_workspace(self, workspace_name: str) -> None: ...
@@ -103,29 +106,24 @@ def execute_command(
                 command=command_text,
             )
         case BrowserCommand(url=url):
-            session = _switch_to_current_session(current_directory, services=services)
-            services.browser.ensure_browser(session, url=url)
+            focus_browser(
+                current_directory,
+                sway=services.sway,
+                browser=services.browser,
+                url=url,
+            )
 
     return 0
 
 
 def build_default_services() -> HopServices:
+    sway = SwayIpcAdapter()
     return HopServices(
-        sway=SwayIpcAdapter(),
+        sway=sway,
         kitty=KittyRemoteControlAdapter(),
         neovim=SharedNeovimEditorAdapter(),
-        browser=_MissingBrowserAdapter(),
+        browser=SessionBrowserAdapter(sway=sway),
     )
-
-
-def _switch_to_current_session(
-    cwd: Path,
-    *,
-    services: HopServices,
-) -> ProjectSession:
-    session = resolve_project_session(cwd)
-    services.sway.switch_to_workspace(session.workspace_name)
-    return session
 
 
 class _MissingKittyAdapter:
@@ -143,11 +141,4 @@ class _MissingKittyAdapter:
     ) -> None:
         raise IntegrationNotImplementedError(
             f"Kitty command dispatch is not implemented yet for {session.session_name!r}:{role!r}."
-        )
-
-
-class _MissingBrowserAdapter:
-    def ensure_browser(self, session: ProjectSession, *, url: str | None) -> None:
-        raise IntegrationNotImplementedError(
-            f"Browser integration is not implemented yet for {session.session_name!r}."
         )
