@@ -16,7 +16,6 @@ from hop.browser import (
     _build_window_identifiers,
     _find_desktop_entry,
     _identifier_variants,
-    _infer_new_window_flag,
     _parse_desktop_exec,
     _read_desktop_entry,
     _resolve_default_browser_spec,
@@ -246,12 +245,6 @@ def test_actual_browser_executable_handles_env_wrappers(
 )
 def test_identifier_variants_normalize_common_browser_names(value: str | None, expected: set[str]) -> None:
     assert _identifier_variants(value) == expected
-
-
-def test_infer_new_window_flag_supports_known_browser_families() -> None:
-    assert _infer_new_window_flag(frozenset({"brave-browser"})) == "--new-window"
-    assert _infer_new_window_flag(frozenset({"firefox"})) == "--new-window"
-    assert _infer_new_window_flag(frozenset({"epiphany"})) is None
 
 
 def test_build_browser_command_handles_new_window_without_url() -> None:

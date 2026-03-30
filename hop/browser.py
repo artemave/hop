@@ -17,25 +17,8 @@ DEFAULT_BROWSER_DISCOVERY_POLL_INTERVAL_SECONDS = 0.05
 DEFAULT_BROWSER_SETTINGS_COMMAND = ("xdg-settings", "get", "default-web-browser")
 DEFAULT_BROWSER_MARK_PREFIX = "hop_browser:"
 DEFAULT_BLANK_BROWSER_URL = "about:blank"
+DEFAULT_NEW_WINDOW_FLAG = "--new-window"
 DEFAULT_XDG_DATA_DIRS = ("/usr/local/share", "/usr/share")
-CHROMIUM_BROWSER_IDENTIFIERS = frozenset(
-    {
-        "brave",
-        "brave-browser",
-        "brave-browser-stable",
-        "chromium",
-        "chromium-browser",
-        "google-chrome",
-        "google-chrome-stable",
-        "microsoft-edge",
-        "microsoft-edge-stable",
-        "opera",
-        "opera-stable",
-        "vivaldi",
-        "vivaldi-stable",
-    }
-)
-FIREFOX_BROWSER_IDENTIFIERS = frozenset({"firefox", "firefoxdeveloperedition"})
 
 
 class BrowserError(HopError):
@@ -116,26 +99,25 @@ class SessionBrowserAdapter:
         url: str | None,
     ) -> SwayWindow:
         browser_spec = self._browser_spec_for_session()
-        known_window_ids = {window.id for window in self._browser_windows(browser_spec)}
+        known_window_ids = {window.id for window in self._sway.list_windows()}
         self._launcher.launch(
             _build_browser_command(browser_spec, url=url, new_window=True),
             cwd=session.project_root,
         )
-        window = self._wait_for_new_browser_window(browser_spec, known_window_ids=known_window_ids)
+        window = self._wait_for_new_window(known_window_ids=known_window_ids)
         if window.workspace_name != session.workspace_name:
             self._sway.move_window_to_workspace(window.id, session.workspace_name)
         self._sway.mark_window(window.id, _session_browser_mark(session))
         return window
 
-    def _wait_for_new_browser_window(
+    def _wait_for_new_window(
         self,
-        browser_spec: BrowserLaunchSpec,
         *,
         known_window_ids: set[int],
     ) -> SwayWindow:
         deadline = time.monotonic() + self._discovery_timeout_seconds
         while time.monotonic() < deadline:
-            windows = [window for window in self._browser_windows(browser_spec) if window.id not in known_window_ids]
+            windows = [window for window in self._sway.list_windows() if window.id not in known_window_ids]
             if windows:
                 return max(windows, key=lambda window: window.id)
             time.sleep(self._discovery_poll_interval_seconds)
@@ -154,13 +136,6 @@ class SessionBrowserAdapter:
             return min(workspace_windows, key=lambda window: window.id)
 
         return min(windows, key=lambda window: window.id)
-
-    def _browser_windows(self, browser_spec: BrowserLaunchSpec) -> tuple[SwayWindow, ...]:
-        return tuple(
-            window
-            for window in self._sway.list_windows()
-            if _window_matches_browser(window, browser_spec.window_identifiers)
-        )
 
     def _browser_spec_for_session(self) -> BrowserLaunchSpec:
         if self._browser_spec is None:
@@ -227,7 +202,7 @@ def _resolve_default_browser_spec(
     return BrowserLaunchSpec(
         command=command,
         window_identifiers=window_identifiers,
-        new_window_flag=_infer_new_window_flag(window_identifiers),
+        new_window_flag=DEFAULT_NEW_WINDOW_FLAG,
     )
 
 
@@ -319,14 +294,6 @@ def _identifier_variants(value: str | None) -> set[str]:
     if normalized.endswith("-stable"):
         variants.add(normalized.removesuffix("-stable"))
     return variants
-
-
-def _infer_new_window_flag(window_identifiers: frozenset[str]) -> str | None:
-    if window_identifiers & CHROMIUM_BROWSER_IDENTIFIERS:
-        return "--new-window"
-    if window_identifiers & FIREFOX_BROWSER_IDENTIFIERS:
-        return "--new-window"
-    return None
 
 
 def _build_browser_command(
