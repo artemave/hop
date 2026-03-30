@@ -71,7 +71,7 @@ def test_open_selection_in_window_routes_files_to_shared_editor(tmp_path: Path) 
     assert session is not None
     assert session.session_name == "demo"
     assert kitty.inspected_window_ids == [17]
-    assert sway.switched_workspaces == [f"p:{project_root.resolve()}"]
+    assert sway.switched_workspaces == [f"p:{project_root.name}"]
     assert neovim.opened_targets == [("demo", f"{selected_file.resolve()}:7")]
     assert browser.urls == []
 
@@ -104,7 +104,7 @@ def test_open_selection_in_window_routes_urls_to_session_browser(tmp_path: Path)
     )
 
     assert session is not None
-    assert sway.switched_workspaces == [f"p:{project_root.resolve()}"]
+    assert sway.switched_workspaces == [f"p:{project_root.name}"]
     assert browser.urls == [("demo", "https://example.com")]
     assert neovim.opened_targets == []
 

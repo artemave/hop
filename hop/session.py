@@ -27,7 +27,7 @@ def derive_session_name(project_root: Path | str) -> str:
 
 def derive_workspace_name(project_root: Path | str) -> str:
     root = Path(project_root).expanduser().resolve()
-    return f"p:{root}"
+    return f"p:{root.name}"
 
 
 def resolve_project_session(

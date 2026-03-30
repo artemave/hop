@@ -112,22 +112,22 @@ def test_execute_command_enters_project_session_and_bootstraps_shell(tmp_path: P
     services = build_services()
 
     assert execute_command(EnterSessionCommand(), cwd=nested_directory, services=services.as_services()) == 0
-    assert services.sway.switched_workspaces == [f"p:{nested_directory}"]
+    assert services.sway.switched_workspaces == [f"p:{nested_directory.name}"]
     assert services.kitty.ensured_roles == [("src", "shell")]
 
 
 def test_execute_command_switches_to_named_session() -> None:
-    services = build_services(workspaces=("p:/some/path/demo",))
+    services = build_services(workspaces=("p:demo",))
 
     result = execute_command(
         SwitchSessionCommand(session_name="demo"), cwd=Path("/tmp"), services=services.as_services()
     )
     assert result == 0
-    assert services.sway.switched_workspaces == ["p:/some/path/demo"]
+    assert services.sway.switched_workspaces == ["p:demo"]
 
 
 def test_execute_command_lists_sorted_session_names() -> None:
-    services = build_services(workspaces=("p:/sessions/zeta", "workspace", "p:/sessions/alpha"))
+    services = build_services(workspaces=("p:zeta", "workspace", "p:alpha"))
     stdout = io.StringIO()
 
     with redirect_stdout(stdout):
@@ -144,7 +144,7 @@ def test_execute_command_focuses_terminal_role_in_current_session(tmp_path: Path
     services = build_services()
 
     assert execute_command(TermCommand(role="test"), cwd=nested_directory, services=services.as_services()) == 0
-    assert services.sway.switched_workspaces == [f"p:{nested_directory}"]
+    assert services.sway.switched_workspaces == [f"p:{nested_directory.name}"]
     assert services.kitty.ensured_roles == [("src", "test")]
 
 
@@ -163,7 +163,7 @@ def test_execute_command_routes_run_commands_to_role_terminal(tmp_path: Path) ->
         )
         == 0
     )
-    assert services.sway.switched_workspaces == [f"p:{nested_directory}"]
+    assert services.sway.switched_workspaces == [f"p:{nested_directory.name}"]
     assert services.kitty.runs == [("src", "server", "bin/dev")]
 
 
@@ -175,7 +175,7 @@ def test_execute_command_focuses_shared_editor_in_current_session(tmp_path: Path
     services = build_services()
 
     assert execute_command(EditCommand(), cwd=nested_directory, services=services.as_services()) == 0
-    assert services.sway.switched_workspaces == [f"p:{nested_directory}"]
+    assert services.sway.switched_workspaces == [f"p:{nested_directory.name}"]
     assert services.neovim.focused_sessions == ["src"]
 
 
@@ -194,7 +194,7 @@ def test_execute_command_routes_edit_targets_to_shared_editor(tmp_path: Path) ->
         )
         == 0
     )
-    assert services.sway.switched_workspaces == [f"p:{nested_directory}"]
+    assert services.sway.switched_workspaces == [f"p:{nested_directory.name}"]
     assert services.neovim.opened_targets == [("src", "app/models/user.rb:42")]
 
 
@@ -213,29 +213,14 @@ def test_execute_command_uses_invocation_directory_for_browser_sessions(tmp_path
         )
         == 0
     )
-    assert services.sway.switched_workspaces == [f"p:{nested_directory}"]
+    assert services.sway.switched_workspaces == [f"p:{nested_directory.name}"]
     assert services.browser.calls == [("src", nested_directory.resolve(), "https://example.com")]
-
-
-def test_execute_command_creates_distinct_sessions_for_same_basename_directories(tmp_path: Path) -> None:
-    dir_a = tmp_path / "project_a" / "myapp"
-    dir_b = tmp_path / "project_b" / "myapp"
-    dir_a.mkdir(parents=True)
-    dir_b.mkdir(parents=True)
-
-    services_a = build_services()
-    services_b = build_services()
-
-    assert execute_command(EnterSessionCommand(), cwd=dir_a, services=services_a.as_services()) == 0
-    assert execute_command(EnterSessionCommand(), cwd=dir_b, services=services_b.as_services()) == 0
-
-    assert services_a.sway.switched_workspaces != services_b.sway.switched_workspaces
 
 
 def test_execute_command_kills_managed_windows_and_removes_workspace(tmp_path: Path) -> None:
     project_root = tmp_path / "demo"
     project_root.mkdir()
-    workspace_name = f"p:{project_root.resolve()}"
+    workspace_name = f"p:{project_root.name}"
 
     services = build_services(workspaces=(workspace_name,))
 

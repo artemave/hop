@@ -76,7 +76,7 @@ def test_kill_session_closes_browser_window_by_sway_mark(tmp_path: Path) -> None
 def test_kill_session_closes_browser_that_drifted_to_another_workspace(tmp_path: Path) -> None:
     project_root = tmp_path / "demo"
     project_root.mkdir()
-    workspace_name = f"p:{project_root.resolve()}"
+    workspace_name = f"p:{project_root.name}"
 
     browser_window = SwayWindow(
         id=99,
@@ -99,7 +99,7 @@ def test_kill_session_does_not_close_unrelated_sway_windows(tmp_path: Path) -> N
 
     unrelated_window = SwayWindow(
         id=55,
-        workspace_name=f"p:{project_root.resolve()}",
+        workspace_name=f"p:{project_root.name}",
         app_id="kitty",
         window_class=None,
         marks=(),
@@ -115,7 +115,7 @@ def test_kill_session_does_not_close_unrelated_sway_windows(tmp_path: Path) -> N
 def test_kill_session_removes_workspace_if_still_exists(tmp_path: Path) -> None:
     project_root = tmp_path / "demo"
     project_root.mkdir()
-    workspace_name = f"p:{project_root.resolve()}"
+    workspace_name = f"p:{project_root.name}"
 
     sway = StubSwayAdapter(workspaces=(workspace_name,))
     kitty = StubKittyAdapter()
@@ -148,4 +148,4 @@ def test_kill_session_returns_resolved_session(tmp_path: Path) -> None:
     session = kill_session(nested, sway=sway, kitty=kitty)
 
     assert session.session_name == "src"
-    assert session.workspace_name == f"p:{nested.resolve()}"
+    assert session.workspace_name == f"p:{nested.name}"
