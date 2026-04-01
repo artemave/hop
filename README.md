@@ -23,6 +23,14 @@ It treats each project as a session and uses:
 
 `hop` is designed for Linux desktop workflows that already use Sway.
 
+## Prerequisites
+
+Kitty must have remote control enabled. Add this to your `kitty.conf`:
+
+```conf
+allow_remote_control yes
+```
+
 ## Installation
 
 ### Install for development with `uv`
