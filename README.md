@@ -134,6 +134,27 @@ hop browser https://example.com
 
 This reuses or creates a session-owned window in your default browser. If that window was moved to another workspace, `hop browser` moves it back to the session workspace before focusing it.
 
+### Switch sessions from the Vicinae launcher
+
+`vicinae/hop-switch-session` is a [Vicinae](https://www.vicinae.com/) script command that lists live hop sessions in the launcher and switches to the one you pick.
+
+Install it by linking the script into your Vicinae scripts directory:
+
+```bash
+mkdir -p ~/.local/share/vicinae/scripts
+ln -s "$PWD/vicinae/hop-switch-session" ~/.local/share/vicinae/scripts/
+```
+
+Then trigger *Reload Script Directories* from Vicinae's root search (or restart Vicinae) and search for *Switch hop session*. The script shells out to `hop list` for the entries, pipes them through `vicinae dmenu`, and runs `hop switch <name>` on the chosen session.
+
+For one-keystroke access, bind the script directly in your Sway config:
+
+```conf
+bindsym $mod+Shift+s exec /path/to/hop/vicinae/hop-switch-session
+```
+
+That skips Vicinae's launcher UI and pops the session picker straight away — the `# @vicinae.*` headers are inert when the script runs outside Vicinae's index, so the same file serves both entrypoints.
+
 ### Open visible-output targets from Kitty
 
 Add a Kitty mapping that runs the `hints` kitten with hop's custom processor:

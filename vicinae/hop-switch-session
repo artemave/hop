@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# @vicinae.schemaVersion 1
+# @vicinae.title Switch hop session
+# @vicinae.description Pick a live hop session from the launcher and switch to its workspace
+# @vicinae.mode silent
+
+set -euo pipefail
+
+sessions=$(hop list)
+
+if [ -z "$sessions" ]; then
+    echo "No active hop sessions"
+    exit 0
+fi
+
+if ! chosen=$(printf '%s\n' "$sessions" | vicinae dmenu --placeholder "Switch hop session"); then
+    exit 0
+fi
+
+if [ -n "$chosen" ]; then
+    hop switch "$chosen"
+    printf 'Switched to %s\n' "$chosen"
+fi
