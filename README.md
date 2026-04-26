@@ -155,6 +155,21 @@ bindsym $mod+Shift+s exec /path/to/hop/vicinae/hop-switch-session
 
 That skips Vicinae's launcher UI and pops the session picker straight away — the `# @vicinae.*` headers are inert when the script runs outside Vicinae's index, so the same file serves both entrypoints.
 
+### Move the focused window into a hop session's workspace
+
+`vicinae/hop-move-window-to-session` captures the currently focused window's sway `con_id`, lists live hop sessions in the launcher, and on pick runs `swaymsg` to move that window into `p:<chosen>` and switch to the destination.
+
+It only works when invoked **directly via a sway keybinding** — invoking it from inside Vicinae's launcher means Vicinae itself is focused at script-start, so the script has nothing useful to move:
+
+```bash
+mkdir -p ~/.local/share/vicinae/scripts
+ln -s "$PWD/vicinae/hop-move-window-to-session" ~/.local/share/vicinae/scripts/
+```
+
+```conf
+bindsym $mod+Shift+m exec /path/to/hop/vicinae/hop-move-window-to-session
+```
+
 ### Open visible-output targets from Kitty
 
 Add a Kitty mapping that runs the `hints` kitten with hop's custom processor:

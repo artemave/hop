@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# @vicinae.schemaVersion 1
+# @vicinae.title Move window to hop session
+# @vicinae.description Move the focused window into a hop session's workspace. Bind to a sway shortcut so it captures your real focused window before Vicinae takes focus.
+# @vicinae.mode silent
+
+set -euo pipefail
+
+focused=$(swaymsg -t get_tree | jq -r '
+  [recurse(.nodes[]?, .floating_nodes[]?) | select(.focused == true)][0]
+  | "\(.id)\t\(.app_id // .window_properties.class // "")"')
+
+con_id=${focused%%$'\t'*}
+app_id=${focused##*$'\t'}
+
+if [ -z "$con_id" ] || [ "$app_id" = "vicinae" ]; then
+    echo "Run this via a sway keybinding while your window is focused"
+    exit 1
+fi
+
+sessions=$(hop list)
+
+if [ -z "$sessions" ]; then
+    echo "No active hop sessions"
+    exit 0
+fi
+
+if ! chosen=$(printf '%s\n' "$sessions" | vicinae dmenu --placeholder "Move window to session"); then
+    exit 0
+fi
+
+if [ -z "$chosen" ]; then
+    exit 0
+fi
+
+swaymsg "[con_id=$con_id] move container to workspace p:$chosen, workspace p:$chosen" >/dev/null
+printf 'Moved to %s\n' "$chosen"
