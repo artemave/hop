@@ -198,6 +198,8 @@ Behavior:
 - terminal lookup is keyed by stable Kitty metadata for the session and role, not by ad hoc window IDs
 - `hop term`, `hop edit`, `hop run`, and `hop browser` do **not** switch Sway workspaces — they assume the caller is already on `p:<session>` (which is true when the command is invoked from any of that session's terminals). Use bare `hop` or `hop switch` to enter a session's workspace.
 
+`hop term` invoked without `--role` is an alias for bare `hop` — same env-driven branching: spawns a new `shell-<N>` terminal when run from inside a session, otherwise enters the session.
+
 ---
 
 ### Send command to terminal

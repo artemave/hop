@@ -52,3 +52,14 @@ def test_run_defaults_to_shell_role() -> None:
 def test_bare_hop_inside_session_terminal_spawns_new_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(HOP_SESSION_ENV_VAR, "demo")
     assert parse_command([]) == SpawnSessionTerminalCommand()
+
+
+def test_hop_term_without_role_outside_session_enters_session() -> None:
+    assert parse_command(["term"]) == EnterSessionCommand()
+
+
+def test_hop_term_without_role_inside_session_spawns_new_terminal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(HOP_SESSION_ENV_VAR, "demo")
+    assert parse_command(["term"]) == SpawnSessionTerminalCommand()
