@@ -1,5 +1,4 @@
 import pytest
-
 from hop.cli import parse_command
 from hop.commands import (
     BrowserCommand,
@@ -9,6 +8,7 @@ from hop.commands import (
     ListSessionsCommand,
     RunCommand,
     SwitchSessionCommand,
+    TailCommand,
     TermCommand,
 )
 
@@ -27,6 +27,7 @@ from hop.commands import (
             ["run", "--role", "server", "bundle exec rails server"],
             RunCommand(role="server", command_text="bundle exec rails server"),
         ),
+        (["tail", "abc123"], TailCommand(run_id="abc123")),
         (["browser"], BrowserCommand()),
         (["browser", "https://example.com"], BrowserCommand(url="https://example.com")),
         (["kill"], KillCommand()),

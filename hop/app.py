@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, Sequence
@@ -14,6 +15,7 @@ from hop.commands import (
     ListSessionsCommand,
     RunCommand,
     SwitchSessionCommand,
+    TailCommand,
     TermCommand,
 )
 from hop.commands.browser import focus_browser
@@ -21,9 +23,10 @@ from hop.commands.edit import edit_in_session
 from hop.commands.kill import kill_session
 from hop.commands.run import run_command
 from hop.commands.session import enter_project_session, list_sessions, switch_session
+from hop.commands.tail import tail_command
 from hop.commands.term import focus_terminal
 from hop.editor import SharedNeovimEditorAdapter
-from hop.kitty import KittyRemoteControlAdapter, KittyWindow, KittyWindowContext
+from hop.kitty import KittyRemoteControlAdapter, KittyWindow, KittyWindowContext, KittyWindowState
 from hop.session import ProjectSession
 from hop.sway import SwayIpcAdapter, SwayWindow
 
@@ -49,13 +52,17 @@ class KittyAdapter(Protocol):
         *,
         role: str,
         command: str,
-    ) -> None: ...
+    ) -> int: ...
 
     def inspect_window(self, window_id: int) -> KittyWindowContext | None: ...
 
     def list_session_windows(self, session: ProjectSession) -> Sequence[KittyWindow]: ...
 
     def close_window(self, window_id: int) -> None: ...
+
+    def get_window_state(self, window_id: int) -> KittyWindowState: ...
+
+    def get_last_cmd_output(self, window_id: int) -> str: ...
 
 
 class NeovimAdapter(Protocol):
@@ -111,13 +118,17 @@ def execute_command(
                 role=role,
             )
         case RunCommand(role=role, command_text=command_text):
-            run_command(
+            dispatch = run_command(
                 current_directory,
                 sway=services.sway,
                 terminals=services.kitty,
                 role=role,
                 command=command_text,
             )
+            print(dispatch.run_id)
+        case TailCommand(run_id=run_id):
+            output = tail_command(run_id, kitty=services.kitty)
+            sys.stdout.write(output)
         case BrowserCommand(url=url):
             focus_browser(
                 current_directory,

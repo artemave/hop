@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-
 from hop.app import HopServices, build_default_services, execute_command
 from hop.browser import SessionBrowserAdapter
 from hop.cli import main, parse_command

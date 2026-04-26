@@ -5,7 +5,6 @@ import socket
 import struct
 
 import pytest
-
 from hop.sway import (
     IPC_HEADER_FORMAT,
     IPC_MAGIC,

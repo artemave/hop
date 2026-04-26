@@ -315,11 +315,5 @@ def _build_browser_command(
     return tuple(command)
 
 
-def _window_matches_browser(window: SwayWindow, window_identifiers: frozenset[str]) -> bool:
-    app_id = window.app_id.lower() if window.app_id is not None else None
-    window_class = window.window_class.lower() if window.window_class is not None else None
-    return app_id in window_identifiers or window_class in window_identifiers
-
-
 def _session_browser_mark(session: ProjectSession) -> str:
     return f"{DEFAULT_BROWSER_MARK_PREFIX}{session.session_name}"

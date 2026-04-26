@@ -48,12 +48,13 @@ class IdempotentKittyAdapter:
         else:
             self.focused_windows.append(key)
 
-    def run_in_terminal(self, session: ProjectSession, *, role: str, command: str) -> None:
+    def run_in_terminal(self, session: ProjectSession, *, role: str, command: str) -> int:
         key = (session.session_name, role)
         if key not in self._windows:
             self._windows.add(key)
             self.created_windows.append(key)
         self.runs.append((session.session_name, role, command))
+        return abs(hash(key)) % 10_000
 
     def close_window(self, session_name: str, role: str) -> None:
         """Simulate the user closing a terminal OS window."""
@@ -181,7 +182,14 @@ def test_hop_run_provisions_missing_role_window(tmp_path: Path) -> None:
     sway = TrackingSwayAdapter()
     kitty = IdempotentKittyAdapter()
 
-    run_command(session_root, sway=sway, terminals=kitty, role="server", command="bin/dev")
+    run_command(
+        session_root,
+        sway=sway,
+        terminals=kitty,
+        role="server",
+        command="bin/dev",
+        runs_dir=tmp_path / "runs",
+    )
 
     assert ("myproject", "server") in kitty.created_windows
     assert kitty.runs == [("myproject", "server", "bin/dev")]
@@ -194,9 +202,10 @@ def test_hop_run_reuses_existing_role_window(tmp_path: Path) -> None:
 
     sway = TrackingSwayAdapter()
     kitty = IdempotentKittyAdapter()
+    runs_dir = tmp_path / "runs"
 
-    run_command(session_root, sway=sway, terminals=kitty, role="shell", command="ls")
-    run_command(session_root, sway=sway, terminals=kitty, role="shell", command="echo hello")
+    run_command(session_root, sway=sway, terminals=kitty, role="shell", command="ls", runs_dir=runs_dir)
+    run_command(session_root, sway=sway, terminals=kitty, role="shell", command="echo hello", runs_dir=runs_dir)
 
     assert kitty.created_windows == [("myproject", "shell")]
     assert kitty.runs == [

@@ -15,6 +15,7 @@ from hop.commands import (
     ListSessionsCommand,
     RunCommand,
     SwitchSessionCommand,
+    TailCommand,
     TermCommand,
 )
 from hop.commands.run import DEFAULT_RUN_ROLE
@@ -40,6 +41,9 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--role", default=DEFAULT_RUN_ROLE)
     run_parser.add_argument("command_text")
 
+    tail_parser = subparsers.add_parser("tail")
+    tail_parser.add_argument("run_id")
+
     browser_parser = subparsers.add_parser("browser")
     browser_parser.add_argument("url", nargs="?")
 
@@ -64,6 +68,8 @@ def parse_command(argv: Sequence[str] | None = None) -> Command:
             return TermCommand(role=namespace.role)
         case "run":
             return RunCommand(role=namespace.role, command_text=namespace.command_text)
+        case "tail":
+            return TailCommand(run_id=namespace.run_id)
         case "browser":
             return BrowserCommand(url=namespace.url)
         case "kill":

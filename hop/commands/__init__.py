@@ -37,6 +37,11 @@ class RunCommand:
 
 
 @dataclass(frozen=True, slots=True)
+class TailCommand:
+    run_id: str
+
+
+@dataclass(frozen=True, slots=True)
 class BrowserCommand:
     url: str | None = None
 
@@ -53,6 +58,7 @@ Command = (
     | EditCommand
     | TermCommand
     | RunCommand
+    | TailCommand
     | BrowserCommand
     | KillCommand
 )

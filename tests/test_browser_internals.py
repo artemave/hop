@@ -6,7 +6,6 @@ from subprocess import CompletedProcess
 from typing import Sequence
 
 import pytest
-
 from hop.browser import (
     BrowserCommandError,
     BrowserLaunchSpec,
@@ -21,7 +20,6 @@ from hop.browser import (
     _resolve_default_browser_spec,
     _SubprocessBrowserLauncher,
     _SubprocessRunner,
-    _window_matches_browser,
 )
 from hop.session import ProjectSession
 from hop.sway import SwayWindow
@@ -256,23 +254,6 @@ def test_build_browser_command_handles_new_window_without_url() -> None:
         "about:blank",
     )
     assert _build_browser_command(browser_spec, url=None, new_window=False) == ("brave-browser",)
-
-
-def test_window_matches_browser_checks_app_id_and_window_class() -> None:
-    identifiers = frozenset({"brave-browser", "firefox"})
-
-    assert _window_matches_browser(
-        SwayWindow(id=1, workspace_name=None, app_id="Brave-Browser", window_class=None),
-        identifiers,
-    )
-    assert _window_matches_browser(
-        SwayWindow(id=2, workspace_name=None, app_id=None, window_class="Firefox"),
-        identifiers,
-    )
-    assert not _window_matches_browser(
-        SwayWindow(id=3, workspace_name=None, app_id="kitty", window_class="Kitty"),
-        identifiers,
-    )
 
 
 def test_subprocess_browser_launcher_invokes_popen(monkeypatch: pytest.MonkeyPatch) -> None:

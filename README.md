@@ -109,8 +109,21 @@ Notes:
 
 - the default role is `shell`
 - the command must be passed as a single CLI argument
-- `hop` routes the command to the target terminal and returns immediately
+- `hop` routes the command to the target terminal and prints an opaque run id on stdout, then returns immediately
 - `hop` does not wait for the command to finish or proxy its exit status
+
+### Stream the output of a previous `hop run`
+
+```bash
+id=$(hop run --role test "python3 -m pytest -q")
+hop tail "$id"
+```
+
+`hop tail` blocks until the dispatched command returns to its shell prompt, then writes that command's combined output to stdout and exits 0. It is the second half of the two-step protocol used by [vigun](https://github.com/artemave/vigun): `hop run` dispatches and hands back an id, `hop tail` waits and delivers the output.
+
+Detection relies on Kitty's shell integration (OSC 133 prompt boundaries), which is on by default for `bash`, `zsh`, and `fish`. If you've disabled it in your role terminal, `hop tail` cannot tell when a command has finished.
+
+Run state is persisted to `$XDG_RUNTIME_DIR/hop/runs/<id>.json` (or `/tmp/hop/runs/<id>.json` if `XDG_RUNTIME_DIR` is unset). Override the location with the `HOP_RUNS_DIR` environment variable.
 
 ### Browser command
 

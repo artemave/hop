@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 import pytest
-
 from hop.editor import (
     NeovimCommandError,
     SharedNeovimEditorAdapter,

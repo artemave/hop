@@ -211,13 +211,32 @@ Behavior:
 - if missing → create it
 - send the exact `<command>` string followed by a trailing newline to that terminal
 - default behavior keeps the current focus while routing the command into the target role terminal
-- return after routing the command; `hop` does not wait for the command to finish or proxy its exit status
+- print a fresh **run id** to stdout and return; `hop run` does not wait for the dispatched command to finish or proxy its exit status
+- the run id is opaque to callers and is the input to `hop tail`
 
 Default role: `shell`
 
 External callers that want a stable test runner target should call `hop run --role test "<command>"`.
 
 The `<command>` value is a single CLI argument, so shell callers must quote it.
+
+---
+
+### Tail command output
+
+```bash
+hop tail <run-id>
+```
+
+Behavior:
+
+- look up the dispatch state persisted by the matching `hop run` invocation
+- block until the dispatched command has returned to its shell prompt
+- write the captured combined output of that command to stdout and exit
+- `hop tail` exits 0 on successful delivery; it does not propagate the inner command's exit status
+- detection relies on Kitty's shell integration (OSC 133 prompt boundaries) for the role terminal; `hop tail` requires the shell in the role terminal to support it
+
+The intended consumer is `vigun`, which dispatches with `hop run` and then streams the output via `hop tail <id>`.
 
 ---
 

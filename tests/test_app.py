@@ -1,8 +1,10 @@
 import io
+import json
 from contextlib import redirect_stdout
 from dataclasses import dataclass
 from pathlib import Path
 
+import pytest
 from hop.app import HopServices, execute_command
 from hop.commands import (
     BrowserCommand,
@@ -12,9 +14,10 @@ from hop.commands import (
     ListSessionsCommand,
     RunCommand,
     SwitchSessionCommand,
+    TailCommand,
     TermCommand,
 )
-from hop.kitty import KittyWindow, KittyWindowContext
+from hop.kitty import KittyWindow, KittyWindowContext, KittyWindowState
 from hop.session import ProjectSession
 from hop.sway import SwayWindow
 
@@ -43,16 +46,19 @@ class StubSwayAdapter:
 
 
 class StubKittyAdapter:
-    def __init__(self) -> None:
+    def __init__(self, *, last_cmd_output: str = "") -> None:
         self.ensured_roles: list[tuple[str, str]] = []
         self.runs: list[tuple[str, str, str]] = []
         self.closed_windows: list[int] = []
+        self._last_cmd_output = last_cmd_output
+        self._state_calls = 0
 
     def ensure_terminal(self, session: ProjectSession, *, role: str) -> None:
         self.ensured_roles.append((session.session_name, role))
 
-    def run_in_terminal(self, session: ProjectSession, *, role: str, command: str) -> None:
+    def run_in_terminal(self, session: ProjectSession, *, role: str, command: str) -> int:
         self.runs.append((session.session_name, role, command))
+        return 0
 
     def inspect_window(self, window_id: int) -> KittyWindowContext | None:
         return None
@@ -62,6 +68,13 @@ class StubKittyAdapter:
 
     def close_window(self, window_id: int) -> None:
         self.closed_windows.append(window_id)
+
+    def get_window_state(self, window_id: int) -> KittyWindowState:
+        self._state_calls += 1
+        return KittyWindowState(at_prompt=self._state_calls > 1, last_cmd_exit_status=0)
+
+    def get_last_cmd_output(self, window_id: int) -> str:
+        return self._last_cmd_output
 
 
 class StubNeovimAdapter:
@@ -95,10 +108,10 @@ class StubHopServices:
         return HopServices(sway=self.sway, kitty=self.kitty, neovim=self.neovim, browser=self.browser)
 
 
-def build_services(*, workspaces: tuple[str, ...] = ()) -> StubHopServices:
+def build_services(*, workspaces: tuple[str, ...] = (), last_cmd_output: str = "") -> StubHopServices:
     return StubHopServices(
         sway=StubSwayAdapter(workspaces=workspaces),
-        kitty=StubKittyAdapter(),
+        kitty=StubKittyAdapter(last_cmd_output=last_cmd_output),
         neovim=StubNeovimAdapter(),
         browser=StubBrowserAdapter(),
     )
@@ -148,23 +161,53 @@ def test_execute_command_focuses_terminal_role_in_current_session(tmp_path: Path
     assert services.kitty.ensured_roles == [("src", "test")]
 
 
-def test_execute_command_routes_run_commands_to_role_terminal(tmp_path: Path) -> None:
+def test_execute_command_routes_run_commands_to_role_terminal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     project_root = tmp_path / "demo"
     nested_directory = project_root / "src"
     nested_directory.mkdir(parents=True)
+    monkeypatch.setenv("HOP_RUNS_DIR", str(tmp_path / "runs"))
 
     services = build_services()
+    stdout = io.StringIO()
 
-    assert (
-        execute_command(
-            RunCommand(role="server", command_text="bin/dev"),
-            cwd=nested_directory,
-            services=services.as_services(),
+    with redirect_stdout(stdout):
+        assert (
+            execute_command(
+                RunCommand(role="server", command_text="bin/dev"),
+                cwd=nested_directory,
+                services=services.as_services(),
+            )
+            == 0
         )
-        == 0
-    )
     assert services.sway.switched_workspaces == [f"p:{nested_directory.name}"]
     assert services.kitty.runs == [("src", "server", "bin/dev")]
+    run_id = stdout.getvalue().strip()
+    assert run_id
+    assert (tmp_path / "runs" / f"{run_id}.json").is_file()
+
+
+def test_execute_command_tails_run_output_to_stdout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    runs_dir = tmp_path / "runs"
+    runs_dir.mkdir()
+    (runs_dir / "abc.json").write_text(
+        json.dumps({"window_id": 1, "session": "demo", "role": "test", "dispatched_at": 0.0})
+    )
+    monkeypatch.setenv("HOP_RUNS_DIR", str(runs_dir))
+
+    services = build_services(last_cmd_output="hello\n")
+    stdout = io.StringIO()
+
+    with redirect_stdout(stdout):
+        assert (
+            execute_command(
+                TailCommand(run_id="abc"),
+                cwd=tmp_path,
+                services=services.as_services(),
+            )
+            == 0
+        )
+
+    assert stdout.getvalue() == "hello\n"
 
 
 def test_execute_command_focuses_shared_editor_in_current_session(tmp_path: Path) -> None:

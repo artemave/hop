@@ -1,7 +1,8 @@
 from pathlib import Path
 from typing import Mapping
 
-from hop.kitty import KittyRemoteControlAdapter
+import pytest
+from hop.kitty import KittyCommandError, KittyRemoteControlAdapter, KittyWindowState
 from hop.session import ProjectSession
 
 
@@ -306,6 +307,131 @@ def test_close_window_sends_close_window_command() -> None:
     adapter.close_window(17)
 
     assert transport.commands == [("close-window", {"match": "id:17"})]
+
+
+def test_run_in_terminal_returns_window_id_for_existing_role_window() -> None:
+    transport = StubKittyTransport(
+        [
+            {
+                "ok": True,
+                "data": [
+                    {
+                        "tabs": [
+                            {
+                                "windows": [
+                                    {
+                                        "id": 24,
+                                        "user_vars": {
+                                            "hop_session": "demo",
+                                            "hop_role": "shell",
+                                            "hop_project_root": str(build_session().project_root),
+                                        },
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ],
+            },
+            {"ok": True},
+        ]
+    )
+    adapter = KittyRemoteControlAdapter(transport=transport)
+
+    window_id = adapter.run_in_terminal(build_session(), role="shell", command="ls")
+
+    assert window_id == 24
+
+
+def test_get_window_state_extracts_at_prompt_and_exit_status() -> None:
+    transport = StubKittyTransport(
+        [
+            {
+                "ok": True,
+                "data": [
+                    {
+                        "tabs": [
+                            {
+                                "windows": [
+                                    {
+                                        "id": 31,
+                                        "at_prompt": False,
+                                        "last_cmd_exit_status": 2,
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ],
+            }
+        ]
+    )
+    adapter = KittyRemoteControlAdapter(transport=transport)
+
+    state = adapter.get_window_state(31)
+
+    assert transport.commands == [
+        ("ls", {"match": "id:31", "output_format": "json"}),
+    ]
+    assert state == KittyWindowState(at_prompt=False, last_cmd_exit_status=2)
+
+
+def test_get_window_state_raises_when_window_missing() -> None:
+    transport = StubKittyTransport([{"ok": True, "data": []}])
+    adapter = KittyRemoteControlAdapter(transport=transport)
+
+    with pytest.raises(KittyCommandError, match="no window with id 99"):
+        adapter.get_window_state(99)
+
+
+def test_get_window_state_skips_empty_tabs_empty_windows_and_other_ids() -> None:
+    transport = StubKittyTransport(
+        [
+            {
+                "ok": True,
+                "data": [
+                    {"tabs": []},
+                    {"tabs": [{"windows": []}]},
+                    {"tabs": [{"windows": [{"id": 999}]}]},
+                    {
+                        "tabs": [
+                            {
+                                "windows": [
+                                    {
+                                        "id": 7,
+                                        "at_prompt": False,
+                                        "last_cmd_exit_status": 1,
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                ],
+            }
+        ]
+    )
+    adapter = KittyRemoteControlAdapter(transport=transport)
+
+    assert adapter.get_window_state(7) == KittyWindowState(at_prompt=False, last_cmd_exit_status=1)
+
+
+def test_get_last_cmd_output_returns_data_text() -> None:
+    transport = StubKittyTransport([{"ok": True, "data": "hello\nworld\n"}])
+    adapter = KittyRemoteControlAdapter(transport=transport)
+
+    output = adapter.get_last_cmd_output(31)
+
+    assert transport.commands == [
+        ("get-text", {"match": "id:31", "extent": "last_cmd_output"}),
+    ]
+    assert output == "hello\nworld\n"
+
+
+def test_get_last_cmd_output_handles_non_mapping_response() -> None:
+    transport = StubKittyTransport(["plain text\n"])
+    adapter = KittyRemoteControlAdapter(transport=transport)
+
+    assert adapter.get_last_cmd_output(31) == "plain text\n"
 
 
 def test_ensure_terminal_does_not_reuse_window_from_different_directory_with_same_basename() -> None:

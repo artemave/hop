@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Mapping
 
 import pytest
-
 from hop.kitty import (
     KITTY_COMMAND_PREFIX,
     KITTY_COMMAND_SUFFIX,

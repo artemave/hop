@@ -64,6 +64,12 @@ class KittyWindowContext:
     cwd: Path | None
 
 
+@dataclass(frozen=True, slots=True)
+class KittyWindowState:
+    at_prompt: bool
+    last_cmd_exit_status: int
+
+
 class KittyRemoteControlAdapter:
     def __init__(self, transport: KittyTransport | None = None) -> None:
         self._transport = transport or _build_default_transport()
@@ -82,7 +88,7 @@ class KittyRemoteControlAdapter:
         *,
         role: str,
         command: str,
-    ) -> None:
+    ) -> int:
         window = self._find_window(session, role=role)
         if window is None:
             self._launch_window(session, role=role, keep_focus=True)
@@ -103,6 +109,36 @@ class KittyRemoteControlAdapter:
                 "data": f"text:{text}",
             },
         )
+        return window.id
+
+    def get_window_state(self, window_id: int) -> KittyWindowState:
+        response = self._transport.send_command(
+            "ls",
+            {"match": f"id:{window_id}", "output_format": "json"},
+        )
+        payload = _coerce_response_data(response)
+
+        for os_window in cast(list[Any], payload):
+            for tab in os_window.get("tabs", ()):
+                for window_entry in tab.get("windows", ()):
+                    if window_entry.get("id") != window_id:
+                        continue
+                    return KittyWindowState(
+                        at_prompt=bool(window_entry["at_prompt"]),
+                        last_cmd_exit_status=int(window_entry["last_cmd_exit_status"]),
+                    )
+
+        msg = f"Kitty has no window with id {window_id}."
+        raise KittyCommandError(msg)
+
+    def get_last_cmd_output(self, window_id: int) -> str:
+        response = self._transport.send_command(
+            "get-text",
+            {"match": f"id:{window_id}", "extent": "last_cmd_output"},
+        )
+        if isinstance(response, Mapping):
+            return str(cast(Any, response).get("data", ""))
+        return str(response)
 
     def inspect_window(self, window_id: int) -> KittyWindowContext | None:
         response = self._transport.send_command(
