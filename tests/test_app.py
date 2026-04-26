@@ -14,6 +14,7 @@ from hop.commands import (
     KillCommand,
     ListSessionsCommand,
     RunCommand,
+    SpawnSessionTerminalCommand,
     SwitchSessionCommand,
     TailCommand,
     TermCommand,
@@ -165,6 +166,24 @@ def test_execute_command_enters_project_session_and_bootstraps_shell(tmp_path: P
     assert execute_command(EnterSessionCommand(), cwd=nested_directory, services=services.as_services()) == 0
     assert services.sway.switched_workspaces == [f"p:{nested_directory.name}"]
     assert services.kitty.ensured_roles == [("src", "shell", nested_directory.resolve())]
+
+
+def test_execute_command_spawns_new_session_terminal_with_unique_role(tmp_path: Path) -> None:
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+
+    services = build_services()
+
+    assert (
+        execute_command(
+            SpawnSessionTerminalCommand(),
+            cwd=project_root,
+            services=services.as_services(),
+        )
+        == 0
+    )
+    assert services.sway.switched_workspaces == []
+    assert services.kitty.ensured_roles == [("demo", "shell-2", project_root.resolve())]
 
 
 def test_execute_command_switches_to_named_session() -> None:

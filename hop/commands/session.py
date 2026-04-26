@@ -5,10 +5,12 @@ from pathlib import Path
 from typing import Protocol, Sequence
 
 from hop.errors import HopError
+from hop.kitty import KittyWindow
 from hop.session import ProjectSession, resolve_project_session
 
 SESSION_WORKSPACE_PREFIX = "p:"
 SHELL_TERMINAL_ROLE = "shell"
+ADHOC_SHELL_ROLE_PREFIX = "shell-"
 
 
 class SessionSwayAdapter(Protocol):
@@ -21,6 +23,10 @@ class SessionTerminalAdapter(Protocol):
     def ensure_terminal(self, session: ProjectSession, *, role: str) -> None: ...
 
 
+class SpawnTerminalAdapter(SessionTerminalAdapter, Protocol):
+    def list_session_windows(self, session: ProjectSession) -> Sequence[KittyWindow]: ...
+
+
 def enter_project_session(
     cwd: Path | str,
     *,
@@ -31,6 +37,25 @@ def enter_project_session(
     sway.switch_to_workspace(session.workspace_name)
     terminals.ensure_terminal(session, role=SHELL_TERMINAL_ROLE)
     return session
+
+
+def spawn_session_terminal(
+    cwd: Path | str,
+    *,
+    terminals: SpawnTerminalAdapter,
+) -> ProjectSession:
+    session = resolve_project_session(cwd)
+    existing_roles = {window.role for window in terminals.list_session_windows(session) if window.role}
+    role = _next_adhoc_shell_role(existing_roles)
+    terminals.ensure_terminal(session, role=role)
+    return session
+
+
+def _next_adhoc_shell_role(existing_roles: set[str]) -> str:
+    n = 2
+    while f"{ADHOC_SHELL_ROLE_PREFIX}{n}" in existing_roles:
+        n += 1
+    return f"{ADHOC_SHELL_ROLE_PREFIX}{n}"
 
 
 def switch_session(

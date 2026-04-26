@@ -105,6 +105,15 @@ From inside the directory you want to treat as the session root:
 - ensure at least one terminal window exists (role `shell`)
 - reuse the existing `shell` terminal when it already exists
 
+When `hop` is invoked from inside a session terminal (detected via the `HOP_SESSION` environment variable that hop exports into every terminal it creates), it switches to the *spawn-additional-terminal* mode instead:
+
+- use the current working directory as the session root (same rule as above)
+- do not switch workspaces — the caller is already on `p:<session>` by construction
+- pick the next free role of the form `shell-<N>` (starting from `shell-2`) so the new window is distinct from the canonical `shell` and from any other ad-hoc shells already open
+- create a new Kitty role terminal with that role
+
+This makes "give me another shell in this session" a single keystroke (`hop`) from any session terminal.
+
 ---
 
 ### Switch session

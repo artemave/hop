@@ -1,5 +1,5 @@
 import pytest
-from hop.cli import parse_command
+from hop.cli import HOP_SESSION_ENV_VAR, parse_command
 from hop.commands import (
     BrowserCommand,
     EditCommand,
@@ -7,10 +7,16 @@ from hop.commands import (
     KillCommand,
     ListSessionsCommand,
     RunCommand,
+    SpawnSessionTerminalCommand,
     SwitchSessionCommand,
     TailCommand,
     TermCommand,
 )
+
+
+@pytest.fixture(autouse=True)
+def clear_hop_session_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(HOP_SESSION_ENV_VAR, raising=False)
 
 
 @pytest.mark.parametrize(
@@ -41,3 +47,8 @@ def test_run_defaults_to_shell_role() -> None:
     command = parse_command(["run", "pytest -q"])
 
     assert command == RunCommand(command_text="pytest -q", role="shell")
+
+
+def test_bare_hop_inside_session_terminal_spawns_new_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(HOP_SESSION_ENV_VAR, "demo")
+    assert parse_command([]) == SpawnSessionTerminalCommand()

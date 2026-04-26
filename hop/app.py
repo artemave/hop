@@ -14,6 +14,7 @@ from hop.commands import (
     KillCommand,
     ListSessionsCommand,
     RunCommand,
+    SpawnSessionTerminalCommand,
     SwitchSessionCommand,
     TailCommand,
     TermCommand,
@@ -22,7 +23,12 @@ from hop.commands.browser import focus_browser
 from hop.commands.edit import edit_in_session
 from hop.commands.kill import kill_session
 from hop.commands.run import run_command
-from hop.commands.session import enter_project_session, list_sessions, switch_session
+from hop.commands.session import (
+    enter_project_session,
+    list_sessions,
+    spawn_session_terminal,
+    switch_session,
+)
 from hop.commands.tail import tail_command
 from hop.commands.term import focus_terminal
 from hop.editor import SharedNeovimEditorAdapter
@@ -96,6 +102,11 @@ def execute_command(
             enter_project_session(
                 current_directory,
                 sway=services.sway,
+                terminals=services.kitty,
+            )
+        case SpawnSessionTerminalCommand():
+            spawn_session_terminal(
+                current_directory,
                 terminals=services.kitty,
             )
         case SwitchSessionCommand(session_name=session_name):
