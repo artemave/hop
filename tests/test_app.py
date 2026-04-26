@@ -3,6 +3,7 @@ import json
 from contextlib import redirect_stdout
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Mapping
 
 import pytest
 from hop.app import HopServices, execute_command
@@ -17,7 +18,7 @@ from hop.commands import (
     TailCommand,
     TermCommand,
 )
-from hop.kitty import KittyWindow, KittyWindowContext, KittyWindowState
+from hop.kitty import KittyRemoteControlAdapter, KittyWindow, KittyWindowContext, KittyWindowState
 from hop.session import ProjectSession
 from hop.sway import SwayWindow
 
@@ -47,17 +48,17 @@ class StubSwayAdapter:
 
 class StubKittyAdapter:
     def __init__(self, *, last_cmd_output: str = "") -> None:
-        self.ensured_roles: list[tuple[str, str]] = []
-        self.runs: list[tuple[str, str, str]] = []
+        self.ensured_roles: list[tuple[str, str, Path]] = []
+        self.runs: list[tuple[str, str, str, Path]] = []
         self.closed_windows: list[int] = []
         self._last_cmd_output = last_cmd_output
         self._state_calls = 0
 
     def ensure_terminal(self, session: ProjectSession, *, role: str) -> None:
-        self.ensured_roles.append((session.session_name, role))
+        self.ensured_roles.append((session.session_name, role, session.project_root))
 
     def run_in_terminal(self, session: ProjectSession, *, role: str, command: str) -> int:
-        self.runs.append((session.session_name, role, command))
+        self.runs.append((session.session_name, role, command, session.project_root))
         return 0
 
     def inspect_window(self, window_id: int) -> KittyWindowContext | None:
@@ -79,14 +80,14 @@ class StubKittyAdapter:
 
 class StubNeovimAdapter:
     def __init__(self) -> None:
-        self.focused_sessions: list[str] = []
-        self.opened_targets: list[tuple[str, str]] = []
+        self.focused_sessions: list[tuple[str, Path]] = []
+        self.opened_targets: list[tuple[str, str, Path]] = []
 
     def focus(self, session: ProjectSession) -> None:
-        self.focused_sessions.append(session.session_name)
+        self.focused_sessions.append((session.session_name, session.project_root))
 
     def open_target(self, session: ProjectSession, *, target: str) -> None:
-        self.opened_targets.append((session.session_name, target))
+        self.opened_targets.append((session.session_name, target, session.project_root))
 
 
 class StubBrowserAdapter:
@@ -117,6 +118,43 @@ def build_services(*, workspaces: tuple[str, ...] = (), last_cmd_output: str = "
     )
 
 
+class CapturingKittyTransport:
+    def __init__(self, responses: list[object]) -> None:
+        self._responses = list(responses)
+        self.commands: list[tuple[str, Mapping[str, object] | None]] = []
+
+    def send_command(self, command_name: str, payload: Mapping[str, object] | None = None) -> object:
+        self.commands.append((command_name, payload))
+        if not self._responses:
+            return {"ok": True}
+        return self._responses.pop(0)
+
+
+def test_hop_enter_session_passes_invocation_directory_as_kitty_launch_cwd(
+    tmp_path: Path,
+) -> None:
+    """End-to-end: cli `hop` from a directory must produce a kitty launch payload
+    whose cwd is that exact directory."""
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+
+    transport = CapturingKittyTransport([{"ok": True, "data": []}, {"ok": True}])
+    services = HopServices(
+        sway=StubSwayAdapter(),
+        kitty=KittyRemoteControlAdapter(transport=transport),
+        neovim=StubNeovimAdapter(),
+        browser=StubBrowserAdapter(),
+    )
+
+    assert execute_command(EnterSessionCommand(), cwd=project_root, services=services) == 0
+
+    launches = [payload for name, payload in transport.commands if name == "launch"]
+    assert len(launches) == 1
+    payload = launches[0]
+    assert payload is not None
+    assert payload["cwd"] == str(project_root.resolve())
+
+
 def test_execute_command_enters_project_session_and_bootstraps_shell(tmp_path: Path) -> None:
     project_root = tmp_path / "demo"
     nested_directory = project_root / "src"
@@ -126,7 +164,7 @@ def test_execute_command_enters_project_session_and_bootstraps_shell(tmp_path: P
 
     assert execute_command(EnterSessionCommand(), cwd=nested_directory, services=services.as_services()) == 0
     assert services.sway.switched_workspaces == [f"p:{nested_directory.name}"]
-    assert services.kitty.ensured_roles == [("src", "shell")]
+    assert services.kitty.ensured_roles == [("src", "shell", nested_directory.resolve())]
 
 
 def test_execute_command_switches_to_named_session() -> None:
@@ -157,8 +195,8 @@ def test_execute_command_focuses_terminal_role_in_current_session(tmp_path: Path
     services = build_services()
 
     assert execute_command(TermCommand(role="test"), cwd=nested_directory, services=services.as_services()) == 0
-    assert services.sway.switched_workspaces == [f"p:{nested_directory.name}"]
-    assert services.kitty.ensured_roles == [("src", "test")]
+    assert services.sway.switched_workspaces == []
+    assert services.kitty.ensured_roles == [("src", "test", nested_directory.resolve())]
 
 
 def test_execute_command_routes_run_commands_to_role_terminal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -179,8 +217,8 @@ def test_execute_command_routes_run_commands_to_role_terminal(tmp_path: Path, mo
             )
             == 0
         )
-    assert services.sway.switched_workspaces == [f"p:{nested_directory.name}"]
-    assert services.kitty.runs == [("src", "server", "bin/dev")]
+    assert services.sway.switched_workspaces == []
+    assert services.kitty.runs == [("src", "server", "bin/dev", nested_directory.resolve())]
     run_id = stdout.getvalue().strip()
     assert run_id
     assert (tmp_path / "runs" / f"{run_id}.json").is_file()
@@ -218,8 +256,8 @@ def test_execute_command_focuses_shared_editor_in_current_session(tmp_path: Path
     services = build_services()
 
     assert execute_command(EditCommand(), cwd=nested_directory, services=services.as_services()) == 0
-    assert services.sway.switched_workspaces == [f"p:{nested_directory.name}"]
-    assert services.neovim.focused_sessions == ["src"]
+    assert services.sway.switched_workspaces == []
+    assert services.neovim.focused_sessions == [("src", nested_directory.resolve())]
 
 
 def test_execute_command_routes_edit_targets_to_shared_editor(tmp_path: Path) -> None:
@@ -237,8 +275,8 @@ def test_execute_command_routes_edit_targets_to_shared_editor(tmp_path: Path) ->
         )
         == 0
     )
-    assert services.sway.switched_workspaces == [f"p:{nested_directory.name}"]
-    assert services.neovim.opened_targets == [("src", "app/models/user.rb:42")]
+    assert services.sway.switched_workspaces == []
+    assert services.neovim.opened_targets == [("src", "app/models/user.rb:42", nested_directory.resolve())]
 
 
 def test_execute_command_uses_invocation_directory_for_browser_sessions(tmp_path: Path) -> None:
@@ -256,7 +294,7 @@ def test_execute_command_uses_invocation_directory_for_browser_sessions(tmp_path
         )
         == 0
     )
-    assert services.sway.switched_workspaces == [f"p:{nested_directory.name}"]
+    assert services.sway.switched_workspaces == []
     assert services.browser.calls == [("src", nested_directory.resolve(), "https://example.com")]
 
 

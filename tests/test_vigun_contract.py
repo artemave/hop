@@ -116,7 +116,7 @@ def test_main_smoke_routes_vigun_test_command(tmp_path: Path, monkeypatch: pytes
         os.chdir(original_cwd)
         hop.cli.build_default_services = original_build_default_services
 
-    assert services.sway.switched_workspaces == [f"p:{nested_directory.name}"]
+    assert services.sway.switched_workspaces == []
     assert services.kitty.runs == [("src", "test", command, nested_directory.resolve())]
     run_id = stdout.getvalue().strip()
     assert re.fullmatch(r"[0-9a-f]{32}", run_id)

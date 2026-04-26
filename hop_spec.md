@@ -187,6 +187,7 @@ Behavior:
 - if a terminal with that role exists → focus it
 - otherwise → create it
 - terminal lookup is keyed by stable Kitty metadata for the session and role, not by ad hoc window IDs
+- `hop term`, `hop edit`, `hop run`, and `hop browser` do **not** switch Sway workspaces — they assume the caller is already on `p:<session>` (which is true when the command is invoked from any of that session's terminals). Use bare `hop` or `hop switch` to enter a session's workspace.
 
 ---
 
@@ -206,13 +207,13 @@ hop run "ls"
 Behavior:
 
 - use the caller's current working directory as the session root
-- switch to workspace `p:<session>`
 - find terminal with given role
 - if missing → create it
 - send the exact `<command>` string followed by a trailing newline to that terminal
 - default behavior keeps the current focus while routing the command into the target role terminal
 - print a fresh **run id** to stdout and return; `hop run` does not wait for the dispatched command to finish or proxy its exit status
 - the run id is opaque to callers and is the input to `hop tail`
+- `hop run` does not switch Sway workspaces — the caller is expected to already be in the session's workspace (the canonical entry points for that are bare `hop` and `hop switch`)
 
 Default role: `shell`
 

@@ -16,17 +16,6 @@ from hop.commands.term import focus_terminal
 from hop.session import ProjectSession
 
 
-class TrackingSwayAdapter:
-    def __init__(self) -> None:
-        self.switched_workspaces: list[str] = []
-
-    def switch_to_workspace(self, workspace_name: str) -> None:
-        self.switched_workspaces.append(workspace_name)
-
-    def list_session_workspaces(self, *, prefix: str = "p:") -> tuple[str, ...]:
-        return tuple(set(w for w in self.switched_workspaces if w.startswith(prefix)))
-
-
 class IdempotentKittyAdapter:
     """
     Kitty stub that simulates the reuse contract: both ensure_terminal and
@@ -125,11 +114,10 @@ def test_repeated_hop_term_reuses_existing_window(tmp_path: Path) -> None:
     session_root = tmp_path / "myproject"
     session_root.mkdir()
 
-    sway = TrackingSwayAdapter()
     kitty = IdempotentKittyAdapter()
 
-    focus_terminal(session_root, sway=sway, terminals=kitty, role="shell")
-    focus_terminal(session_root, sway=sway, terminals=kitty, role="shell")
+    focus_terminal(session_root, terminals=kitty, role="shell")
+    focus_terminal(session_root, terminals=kitty, role="shell")
 
     assert kitty.created_windows == [("myproject", "shell")]
     assert kitty.focused_windows == [("myproject", "shell")]
@@ -140,12 +128,11 @@ def test_hop_term_different_roles_create_distinct_windows(tmp_path: Path) -> Non
     session_root = tmp_path / "myproject"
     session_root.mkdir()
 
-    sway = TrackingSwayAdapter()
     kitty = IdempotentKittyAdapter()
 
-    focus_terminal(session_root, sway=sway, terminals=kitty, role="shell")
-    focus_terminal(session_root, sway=sway, terminals=kitty, role="test")
-    focus_terminal(session_root, sway=sway, terminals=kitty, role="server")
+    focus_terminal(session_root, terminals=kitty, role="shell")
+    focus_terminal(session_root, terminals=kitty, role="test")
+    focus_terminal(session_root, terminals=kitty, role="server")
 
     assert set(kitty.created_windows) == {
         ("myproject", "shell"),
@@ -160,12 +147,11 @@ def test_hop_term_recreates_window_after_manual_close(tmp_path: Path) -> None:
     session_root = tmp_path / "myproject"
     session_root.mkdir()
 
-    sway = TrackingSwayAdapter()
     kitty = IdempotentKittyAdapter()
 
-    focus_terminal(session_root, sway=sway, terminals=kitty, role="test")
+    focus_terminal(session_root, terminals=kitty, role="test")
     kitty.close_window("myproject", "test")
-    focus_terminal(session_root, sway=sway, terminals=kitty, role="test")
+    focus_terminal(session_root, terminals=kitty, role="test")
 
     assert kitty.created_windows == [("myproject", "test"), ("myproject", "test")]
     assert kitty.focused_windows == []
@@ -179,12 +165,10 @@ def test_hop_run_provisions_missing_role_window(tmp_path: Path) -> None:
     session_root = tmp_path / "myproject"
     session_root.mkdir()
 
-    sway = TrackingSwayAdapter()
     kitty = IdempotentKittyAdapter()
 
     run_command(
         session_root,
-        sway=sway,
         terminals=kitty,
         role="server",
         command="bin/dev",
@@ -200,12 +184,11 @@ def test_hop_run_reuses_existing_role_window(tmp_path: Path) -> None:
     session_root = tmp_path / "myproject"
     session_root.mkdir()
 
-    sway = TrackingSwayAdapter()
     kitty = IdempotentKittyAdapter()
     runs_dir = tmp_path / "runs"
 
-    run_command(session_root, sway=sway, terminals=kitty, role="shell", command="ls", runs_dir=runs_dir)
-    run_command(session_root, sway=sway, terminals=kitty, role="shell", command="echo hello", runs_dir=runs_dir)
+    run_command(session_root, terminals=kitty, role="shell", command="ls", runs_dir=runs_dir)
+    run_command(session_root, terminals=kitty, role="shell", command="echo hello", runs_dir=runs_dir)
 
     assert kitty.created_windows == [("myproject", "shell")]
     assert kitty.runs == [
@@ -222,11 +205,10 @@ def test_repeated_hop_edit_reuses_existing_editor(tmp_path: Path) -> None:
     session_root = tmp_path / "myproject"
     session_root.mkdir()
 
-    sway = TrackingSwayAdapter()
     neovim = IdempotentNeovimAdapter()
 
-    edit_in_session(session_root, sway=sway, neovim=neovim)
-    edit_in_session(session_root, sway=sway, neovim=neovim)
+    edit_in_session(session_root, neovim=neovim)
+    edit_in_session(session_root, neovim=neovim)
 
     assert neovim.launched == ["myproject"]
     assert neovim.focused == ["myproject"]
@@ -237,12 +219,11 @@ def test_hop_edit_recreates_editor_after_quit(tmp_path: Path) -> None:
     session_root = tmp_path / "myproject"
     session_root.mkdir()
 
-    sway = TrackingSwayAdapter()
     neovim = IdempotentNeovimAdapter()
 
-    edit_in_session(session_root, sway=sway, neovim=neovim)
+    edit_in_session(session_root, neovim=neovim)
     neovim.quit_editor("myproject")
-    edit_in_session(session_root, sway=sway, neovim=neovim)
+    edit_in_session(session_root, neovim=neovim)
 
     assert neovim.launched == ["myproject", "myproject"]
     assert neovim.focused == []
@@ -253,11 +234,10 @@ def test_hop_edit_routes_target_to_existing_editor_without_relaunch(tmp_path: Pa
     session_root = tmp_path / "myproject"
     session_root.mkdir()
 
-    sway = TrackingSwayAdapter()
     neovim = IdempotentNeovimAdapter()
 
-    edit_in_session(session_root, sway=sway, neovim=neovim)
-    edit_in_session(session_root, sway=sway, neovim=neovim, target="app/models/user.rb:42")
+    edit_in_session(session_root, neovim=neovim)
+    edit_in_session(session_root, neovim=neovim, target="app/models/user.rb:42")
 
     assert neovim.launched == ["myproject"]
     assert neovim.opened_targets == [("myproject", "app/models/user.rb:42")]
@@ -271,11 +251,10 @@ def test_hop_browser_reuses_session_browser_across_repeated_calls(tmp_path: Path
     session_root = tmp_path / "myproject"
     session_root.mkdir()
 
-    sway = TrackingSwayAdapter()
     browser = IdempotentBrowserAdapter()
 
-    focus_browser(session_root, sway=sway, browser=browser, url="https://example.com")
-    focus_browser(session_root, sway=sway, browser=browser, url="https://other.example.com")
+    focus_browser(session_root, browser=browser, url="https://example.com")
+    focus_browser(session_root, browser=browser, url="https://other.example.com")
 
     assert browser.launched == ["myproject"]
     assert browser.reused == ["myproject"]
@@ -288,11 +267,10 @@ def test_hop_browser_is_isolated_between_sessions(tmp_path: Path) -> None:
     session_a_root.mkdir()
     session_b_root.mkdir()
 
-    sway = TrackingSwayAdapter()
     browser = IdempotentBrowserAdapter()
 
-    focus_browser(session_a_root, sway=sway, browser=browser, url="https://docs.a.com")
-    focus_browser(session_b_root, sway=sway, browser=browser, url="https://docs.b.com")
+    focus_browser(session_a_root, browser=browser, url="https://docs.a.com")
+    focus_browser(session_b_root, browser=browser, url="https://docs.b.com")
 
     assert set(browser.launched) == {"project-a", "project-b"}
     assert browser.reused == []
@@ -303,12 +281,11 @@ def test_hop_browser_recreates_window_after_close(tmp_path: Path) -> None:
     session_root = tmp_path / "myproject"
     session_root.mkdir()
 
-    sway = TrackingSwayAdapter()
     browser = IdempotentBrowserAdapter()
 
-    focus_browser(session_root, sway=sway, browser=browser, url="https://example.com")
+    focus_browser(session_root, browser=browser, url="https://example.com")
     browser.close_browser("myproject")
-    focus_browser(session_root, sway=sway, browser=browser, url="https://example.com")
+    focus_browser(session_root, browser=browser, url="https://example.com")
 
     assert browser.launched == ["myproject", "myproject"]
     assert browser.reused == []
@@ -324,11 +301,10 @@ def test_same_role_in_different_sessions_creates_separate_windows(tmp_path: Path
     session_a_root.mkdir()
     session_b_root.mkdir()
 
-    sway = TrackingSwayAdapter()
     kitty = IdempotentKittyAdapter()
 
-    focus_terminal(session_a_root, sway=sway, terminals=kitty, role="shell")
-    focus_terminal(session_b_root, sway=sway, terminals=kitty, role="shell")
+    focus_terminal(session_a_root, terminals=kitty, role="shell")
+    focus_terminal(session_b_root, terminals=kitty, role="shell")
 
     assert set(kitty.created_windows) == {("project-a", "shell"), ("project-b", "shell")}
     assert kitty.focused_windows == []
@@ -344,12 +320,11 @@ def test_switching_back_to_session_reuses_its_existing_windows(tmp_path: Path) -
     session_a_root.mkdir()
     session_b_root.mkdir()
 
-    sway = TrackingSwayAdapter()
     kitty = IdempotentKittyAdapter()
 
-    focus_terminal(session_a_root, sway=sway, terminals=kitty, role="shell")
-    focus_terminal(session_b_root, sway=sway, terminals=kitty, role="shell")
-    focus_terminal(session_a_root, sway=sway, terminals=kitty, role="shell")
+    focus_terminal(session_a_root, terminals=kitty, role="shell")
+    focus_terminal(session_b_root, terminals=kitty, role="shell")
+    focus_terminal(session_a_root, terminals=kitty, role="shell")
 
     assert kitty.created_windows == [("project-a", "shell"), ("project-b", "shell")]
     assert kitty.focused_windows == [("project-a", "shell")]
@@ -362,12 +337,11 @@ def test_session_switch_does_not_mix_editor_instances(tmp_path: Path) -> None:
     session_a_root.mkdir()
     session_b_root.mkdir()
 
-    sway = TrackingSwayAdapter()
     neovim = IdempotentNeovimAdapter()
 
-    edit_in_session(session_a_root, sway=sway, neovim=neovim)
-    edit_in_session(session_b_root, sway=sway, neovim=neovim)
-    edit_in_session(session_a_root, sway=sway, neovim=neovim)
+    edit_in_session(session_a_root, neovim=neovim)
+    edit_in_session(session_b_root, neovim=neovim)
+    edit_in_session(session_a_root, neovim=neovim)
 
     assert neovim.launched == ["project-a", "project-b"]
     assert neovim.focused == ["project-a"]

@@ -4,14 +4,6 @@ from hop.commands.term import focus_terminal
 from hop.session import ProjectSession
 
 
-class StubSwayAdapter:
-    def __init__(self) -> None:
-        self.switched_workspaces: list[str] = []
-
-    def switch_to_workspace(self, workspace_name: str) -> None:
-        self.switched_workspaces.append(workspace_name)
-
-
 class StubKittyAdapter:
     def __init__(self) -> None:
         self.ensured: list[tuple[str, str, Path]] = []
@@ -20,21 +12,18 @@ class StubKittyAdapter:
         self.ensured.append((session.session_name, role, session.project_root))
 
 
-def test_focus_terminal_switches_to_workspace_and_routes_by_role(tmp_path: Path) -> None:
+def test_focus_terminal_routes_by_role(tmp_path: Path) -> None:
     project_root = tmp_path / "demo"
     nested_directory = project_root / "src"
     nested_directory.mkdir(parents=True)
 
-    sway = StubSwayAdapter()
     kitty = StubKittyAdapter()
 
     session = focus_terminal(
         nested_directory,
-        sway=sway,
         terminals=kitty,
         role="test",
     )
 
     assert session.session_name == "src"
-    assert sway.switched_workspaces == [f"p:{nested_directory.name}"]
     assert kitty.ensured == [("src", "test", nested_directory)]

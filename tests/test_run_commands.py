@@ -6,14 +6,6 @@ from hop.commands.run import DEFAULT_RUN_ROLE, default_runs_dir, run_command
 from hop.session import ProjectSession
 
 
-class StubSwayAdapter:
-    def __init__(self) -> None:
-        self.switched_workspaces: list[str] = []
-
-    def switch_to_workspace(self, workspace_name: str) -> None:
-        self.switched_workspaces.append(workspace_name)
-
-
 class StubKittyAdapter:
     def __init__(self, *, window_id: int = 7) -> None:
         self._window_id = window_id
@@ -24,17 +16,15 @@ class StubKittyAdapter:
         return self._window_id
 
 
-def test_run_command_switches_to_workspace_and_routes_to_role_terminal(tmp_path: Path) -> None:
+def test_run_command_routes_to_role_terminal(tmp_path: Path) -> None:
     project_root = tmp_path / "demo"
     nested_directory = project_root / "src"
     nested_directory.mkdir(parents=True)
 
-    sway = StubSwayAdapter()
     kitty = StubKittyAdapter(window_id=42)
 
     dispatch = run_command(
         nested_directory,
-        sway=sway,
         terminals=kitty,
         role="server",
         command="bin/dev",
@@ -44,7 +34,6 @@ def test_run_command_switches_to_workspace_and_routes_to_role_terminal(tmp_path:
     assert dispatch.session.session_name == "src"
     assert dispatch.window_id == 42
     assert dispatch.run_id
-    assert sway.switched_workspaces == [f"p:{nested_directory.name}"]
     assert kitty.runs == [("src", "server", "bin/dev", nested_directory)]
 
     state = json.loads((tmp_path / "runs" / f"{dispatch.run_id}.json").read_text())
@@ -59,12 +48,10 @@ def test_run_command_defaults_to_shell_role(tmp_path: Path) -> None:
     nested_directory = project_root / "src"
     nested_directory.mkdir(parents=True)
 
-    sway = StubSwayAdapter()
     kitty = StubKittyAdapter()
 
     dispatch = run_command(
         nested_directory,
-        sway=sway,
         terminals=kitty,
         command="ls",
         runs_dir=tmp_path / "runs",
@@ -80,12 +67,11 @@ def test_run_command_emits_unique_run_ids(tmp_path: Path) -> None:
     nested_directory = project_root / "src"
     nested_directory.mkdir(parents=True)
 
-    sway = StubSwayAdapter()
     kitty = StubKittyAdapter()
     runs_dir = tmp_path / "runs"
 
-    first = run_command(nested_directory, sway=sway, terminals=kitty, command="ls", runs_dir=runs_dir)
-    second = run_command(nested_directory, sway=sway, terminals=kitty, command="ls", runs_dir=runs_dir)
+    first = run_command(nested_directory, terminals=kitty, command="ls", runs_dir=runs_dir)
+    second = run_command(nested_directory, terminals=kitty, command="ls", runs_dir=runs_dir)
 
     assert first.run_id != second.run_id
 

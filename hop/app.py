@@ -106,21 +106,18 @@ def execute_command(
         case EditCommand(target=target):
             edit_in_session(
                 current_directory,
-                sway=services.sway,
                 neovim=services.neovim,
                 target=target,
             )
         case TermCommand(role=role):
             focus_terminal(
                 current_directory,
-                sway=services.sway,
                 terminals=services.kitty,
                 role=role,
             )
         case RunCommand(role=role, command_text=command_text):
             dispatch = run_command(
                 current_directory,
-                sway=services.sway,
                 terminals=services.kitty,
                 role=role,
                 command=command_text,
@@ -132,7 +129,6 @@ def execute_command(
         case BrowserCommand(url=url):
             focus_browser(
                 current_directory,
-                sway=services.sway,
                 browser=services.browser,
                 url=url,
             )
