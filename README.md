@@ -55,11 +55,25 @@ That exposes the `hop` command in your active Python environment.
 
 ## Usage
 
+A session is always the resolved current working directory. Every session-scoped command (`hop`, `hop edit`, `hop term`, `hop run`, `hop browser`) resolves the session this way.
+
+A few commands also distinguish between being **inside** vs **outside** a session. "Inside" means you're running the command from one of the kitty terminals hop itself created; anything else — a fresh terminal you opened yourself, a launcher prompt, a script — is "outside". Where the distinction matters, it's noted below.
+
 ### Enter or create session
 
-Run `hop` in the directory you want to use as the session root. This creates a dedicated Sway workspace with a terminal. Running `hop` again from that same directory reuses the same session. Running it from a nested directory creates a different session rooted at that nested directory.
+```bash
+hop
+```
 
-The same directory-rooted rule applies to every session-scoped command: `hop`, `hop edit`, `hop term`, `hop run`, and `hop browser`.
+Run from a terminal outside the session, with your shell `cd`-ed into the project directory. Creates the session — a dedicated Sway workspace named `p:<dirname>` with a `shell` terminal — or attaches to it if you've already created it from this directory.
+
+### Add another shell to the session
+
+```bash
+hop # run from inside one of the session's terminals
+```
+
+Spawns an additional shell terminal in the same session, named `shell-2`, `shell-3`, etc.
 
 ### Switch to a named session
 
