@@ -126,6 +126,10 @@ Consequences:
 - Hop is reachable from outside any Kitty terminal as long as the session's Kitty is up — its socket address is computable from the session name, no `KITTY_LISTEN_ON` env plumbing required.
 - Different sessions are isolated at the Kitty-process level, not just by workspace.
 
+## Window tagging
+
+Hop tags only one piece of metadata on each Kitty window it manages: the **role**, stored as the `hop_role` user var (with the editor window also carrying `hop_editor=1`). No `HOP_*` environment variables are exported into role terminals — external tools should consume `hop list --json` to recover session-name → project-root mapping rather than reading shell env. Session and project-root identity live entirely in (a) the per-session Kitty socket address, and (b) the per-session state files.
+
 ---
 
 ### Switch session

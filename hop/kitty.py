@@ -16,12 +16,7 @@ KITTY_LISTEN_ON_ENV_VAR = "KITTY_LISTEN_ON"
 KITTY_PROTOCOL_VERSION = (0, 39, 0)
 KITTY_COMMAND_PREFIX = b"\x1bP@kitty-cmd"
 KITTY_COMMAND_SUFFIX = b"\x1b\\"
-HOP_SESSION_ENV_VAR = "HOP_SESSION"
-HOP_ROLE_ENV_VAR = "HOP_ROLE"
-HOP_PROJECT_ROOT_ENV_VAR = "HOP_PROJECT_ROOT"
-HOP_SESSION_VAR = "hop_session"
 HOP_ROLE_VAR = "hop_role"
-HOP_PROJECT_ROOT_VAR = "hop_project_root"
 KITTY_BOOTSTRAP_TIMEOUT_SECONDS = 5.0
 KITTY_BOOTSTRAP_POLL_INTERVAL_SECONDS = 0.1
 
@@ -54,17 +49,13 @@ SessionBootstrapHook = Callable[["ProjectSession"], None]
 @dataclass(frozen=True, slots=True)
 class KittyWindow:
     id: int
-    session_name: str | None
     role: str | None
-    project_root: Path | None
 
 
 @dataclass(frozen=True, slots=True)
 class KittyWindowContext:
     id: int
-    session_name: str | None
     role: str | None
-    project_root: Path | None
     cwd: Path | None
 
 
@@ -195,10 +186,9 @@ class KittyRemoteControlAdapter:
     def list_session_windows(self, session: ProjectSession) -> tuple[KittyWindow, ...]:
         addr = session_socket_address(session.session_name)
         try:
-            windows = self._list_windows_via(addr)
+            return self._list_windows_via(addr)
         except KittyConnectionError:
             return ()
-        return tuple(window for window in windows if window.project_root == session.project_root)
 
     def close_window(self, session_name: str, window_id: int) -> None:
         self._send_to(session_name, "close-window", {"match": f"id:{window_id}"})
@@ -209,7 +199,7 @@ class KittyRemoteControlAdapter:
             windows = self._list_windows_via(addr)
         except KittyConnectionError:
             return None
-        matches = [window for window in windows if window.project_root == session.project_root and window.role == role]
+        matches = [window for window in windows if window.role == role]
         if not matches:
             return None
         return min(matches, key=lambda window: window.id)
@@ -237,12 +227,6 @@ class KittyRemoteControlAdapter:
         *,
         role: str,
     ) -> None:
-        env = dict(os.environ)
-        env[HOP_SESSION_ENV_VAR] = session.session_name
-        env[HOP_ROLE_ENV_VAR] = role
-        env[HOP_PROJECT_ROOT_ENV_VAR] = str(session.project_root)
-        env[KITTY_LISTEN_ON_ENV_VAR] = addr
-
         args = (
             "kitty",
             "--directory",
@@ -256,8 +240,16 @@ class KittyRemoteControlAdapter:
             "--override",
             "allow_remote_control=yes",
         )
-        self._launcher(args, env)
+        self._launcher(args, dict(os.environ))
         self._wait_for_session_kitty(addr)
+        # Kitty's CLI doesn't accept --var, so the bootstrap window has no
+        # user_vars by default. Tag it now so role-window discovery treats it
+        # the same as windows added via `kitty @ launch --var=...`.
+        self._send_to(
+            session.session_name,
+            "set-user-vars",
+            {"match": "all", "var": [f"{HOP_ROLE_VAR}={role}"]},
+        )
         self._on_session_bootstrap(session)
 
     def _wait_for_session_kitty(self, addr: str) -> None:
@@ -325,16 +317,7 @@ class KittyRemoteControlAdapter:
             "window_title": _window_title(session, role=role),
             "os_window_title": _window_title(session, role=role),
             "os_window_name": _os_window_name(session, role=role),
-            "env": [
-                f"{HOP_SESSION_ENV_VAR}={session.session_name}",
-                f"{HOP_ROLE_ENV_VAR}={role}",
-                f"{HOP_PROJECT_ROOT_ENV_VAR}={session.project_root}",
-            ],
-            "var": [
-                f"{HOP_SESSION_VAR}={session.session_name}",
-                f"{HOP_ROLE_VAR}={role}",
-                f"{HOP_PROJECT_ROOT_VAR}={session.project_root}",
-            ],
+            "var": [f"{HOP_ROLE_VAR}={role}"],
         }
 
 
@@ -449,16 +432,8 @@ def _parse_window(window_entry: Mapping[str, object]) -> KittyWindow | None:
     user_vars = _coerce_string_mapping(
         window_entry.get("user_vars") or window_entry.get("user_variables") or window_entry.get("vars")
     )
-    env = _coerce_string_mapping(window_entry.get("env"))
 
-    project_root_text = user_vars.get(HOP_PROJECT_ROOT_VAR) or env.get(HOP_PROJECT_ROOT_ENV_VAR)
-
-    return KittyWindow(
-        id=window_id,
-        session_name=user_vars.get(HOP_SESSION_VAR) or env.get(HOP_SESSION_ENV_VAR),
-        role=user_vars.get(HOP_ROLE_VAR) or env.get(HOP_ROLE_ENV_VAR),
-        project_root=_path_from_text(project_root_text),
-    )
+    return KittyWindow(id=window_id, role=user_vars.get(HOP_ROLE_VAR))
 
 
 def _parse_window_context(window_entry: Mapping[str, object]) -> KittyWindowContext | None:
@@ -466,19 +441,11 @@ def _parse_window_context(window_entry: Mapping[str, object]) -> KittyWindowCont
     if window is None:
         return None
 
-    user_vars = _coerce_string_mapping(
-        window_entry.get("user_vars") or window_entry.get("user_variables") or window_entry.get("vars")
-    )
-    env = _coerce_string_mapping(window_entry.get("env"))
-
-    project_root_text = user_vars.get(HOP_PROJECT_ROOT_VAR) or env.get(HOP_PROJECT_ROOT_ENV_VAR)
     cwd_text = _window_cwd_text(window_entry)
 
     return KittyWindowContext(
         id=window.id,
-        session_name=window.session_name,
         role=window.role,
-        project_root=_path_from_text(project_root_text),
         cwd=_path_from_text(cwd_text),
     )
 

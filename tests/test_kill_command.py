@@ -36,7 +36,7 @@ class StubKittyAdapter:
         self.closed_windows: list[int] = []
 
     def list_session_windows(self, session: ProjectSession) -> list[KittyWindow]:
-        return [KittyWindow(id=wid, session_name=None, role=None, project_root=None) for wid in self._window_ids]
+        return [KittyWindow(id=wid, role=None) for wid in self._window_ids]
 
     def close_window(self, session_name: str, window_id: int) -> None:
         self.closed_windows.append(window_id)

@@ -12,7 +12,6 @@ from hop.editor import (
     _coerce_response_data,
     _coerce_string_mapping,
     _parse_editor_window,
-    _path_from_text,
     _remove_stale_socket,
     _resolve_runtime_dir,
     _SubprocessRunner,
@@ -70,7 +69,6 @@ def test_find_editor_window_rejects_invalid_listing_payload(tmp_path: Path) -> N
 
 def test_find_editor_window_skips_malformed_entries_and_uses_lowest_matching_id(tmp_path: Path) -> None:
     runner = StubProcessRunner([subprocess.CompletedProcess(("nvim",), 0, "", "")])
-    project_root = build_session().project_root
     transport = StubKittyTransport(
         [
             {
@@ -85,24 +83,19 @@ def test_find_editor_window_skips_malformed_entries_and_uses_lowest_matching_id(
                                     "invalid",
                                     {
                                         "id": "31",
-                                        "user_vars": {
-                                            "hop_editor": "1",
-                                            "hop_project_root": str(project_root),
-                                        },
+                                        "user_vars": {"hop_editor": "1"},
+                                    },
+                                    {
+                                        "id": 29,
+                                        "user_vars": {"hop_role": "shell"},
                                     },
                                     {
                                         "id": 31,
-                                        "user_vars": {
-                                            "hop_editor": "1",
-                                            "hop_project_root": str(project_root),
-                                        },
+                                        "user_vars": {"hop_editor": "1"},
                                     },
                                     {
                                         "id": 30,
-                                        "env": {
-                                            "HOP_EDITOR": "1",
-                                            "HOP_PROJECT_ROOT": str(project_root),
-                                        },
+                                        "user_vars": {"hop_editor": "1"},
                                     },
                                 ]
                             }
@@ -172,10 +165,7 @@ def test_open_target_raises_stderr_when_remote_send_fails(tmp_path: Path) -> Non
                                 "windows": [
                                     {
                                         "id": 31,
-                                        "env": {
-                                            "HOP_EDITOR": "1",
-                                            "HOP_PROJECT_ROOT": str(build_session().project_root),
-                                        },
+                                        "user_vars": {"hop_editor": "1"},
                                     }
                                 ]
                             }
@@ -217,25 +207,11 @@ def test_coerce_response_data_handles_mapping_string_and_passthrough_values() ->
 def test_parse_editor_window_and_helper_functions_cover_list_and_none_fallbacks() -> None:
     assert _parse_editor_window({"id": "not-an-int"}) is None
 
-    parsed = _parse_editor_window(
-        {
-            "id": 17,
-            "vars": [
-                "hop_session=demo",
-                "hop_editor=1",
-                "hop_project_root=/tmp/demo",
-                "ignored",
-            ],
-            "env": ["HOP_SESSION=demo-env", "HOP_PROJECT_ROOT=/tmp/env-demo"],
-        }
-    )
+    parsed = _parse_editor_window({"id": 17, "vars": ["hop_editor=1", "ignored"]})
 
     assert parsed is not None
     assert parsed.id == 17
-    assert parsed.session_name == "demo"
     assert parsed.is_editor is True
-    assert parsed.project_root == Path("/tmp/demo")
-    assert _path_from_text(None) is None
     assert _coerce_string_mapping({"one": "1", "two": 2}) == {"one": "1"}
     assert _coerce_string_mapping(["one=1", "two=2", "ignored"]) == {"one": "1", "two": "2"}
     assert _coerce_string_mapping(object()) == {}

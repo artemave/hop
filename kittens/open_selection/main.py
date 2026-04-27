@@ -33,7 +33,6 @@ def dispatch_selected_match(selection: str, *, source_window_id: int) -> None:
     open_selection_in_window(
         selection,
         source_window_id=source_window_id,
-        sway=services.sway,
         kitty=services.kitty,
         neovim=services.neovim,
         browser=services.browser,

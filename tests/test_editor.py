@@ -76,11 +76,7 @@ def test_focus_reuses_existing_session_editor_window(tmp_path: Path) -> None:
                                 "windows": [
                                     {
                                         "id": 23,
-                                        "user_vars": {
-                                            "hop_session": "demo",
-                                            "hop_editor": "1",
-                                            "hop_project_root": str(project_root),
-                                        },
+                                        "user_vars": {"hop_editor": "1"},
                                     }
                                 ]
                             }
@@ -148,16 +144,7 @@ def test_focus_recreates_editor_after_neovim_exits(tmp_path: Path) -> None:
                 "window_title": "demo:editor",
                 "os_window_title": "demo:editor",
                 "os_window_name": "hop:demo:editor",
-                "env": [
-                    "HOP_SESSION=demo",
-                    f"HOP_PROJECT_ROOT={build_session().project_root}",
-                    "HOP_EDITOR=1",
-                ],
-                "var": [
-                    "hop_session=demo",
-                    f"hop_project_root={build_session().project_root}",
-                    "hop_editor=1",
-                ],
+                "var": ["hop_editor=1"],
             },
         ),
         ("ls", {"output_format": "json"}),
@@ -181,11 +168,7 @@ def test_open_target_focuses_editor_and_routes_path_with_line(tmp_path: Path) ->
                                 "windows": [
                                     {
                                         "id": 31,
-                                        "env": {
-                                            "HOP_SESSION": "demo",
-                                            "HOP_EDITOR": "1",
-                                            "HOP_PROJECT_ROOT": str(project_root),
-                                        },
+                                        "user_vars": {"hop_editor": "1"},
                                     }
                                 ]
                             }
@@ -225,50 +208,6 @@ def testbuild_remote_open_command_preserves_plain_paths() -> None:
         build_remote_open_command("app/models/user.rb")
         == "<Cmd>execute 'drop ' . fnameescape('app/models/user.rb')<CR>"
     )
-
-
-def test_editor_does_not_reuse_window_from_different_directory_with_same_basename(tmp_path: Path) -> None:
-    runner = StubProcessRunner()
-    project_root = build_session().project_root
-    socket_name = _session_socket_name(project_root)
-    address = str((tmp_path / "hop" / socket_name).resolve())
-    runner.activate(address)
-
-    other_project_root = Path("/tmp/other/demo").resolve()
-    transport = StubKittyTransport(
-        [
-            {
-                "ok": True,
-                "data": [
-                    {
-                        "tabs": [
-                            {
-                                "windows": [
-                                    {
-                                        "id": 77,
-                                        "user_vars": {
-                                            "hop_session": "demo",
-                                            "hop_editor": "1",
-                                            "hop_project_root": str(other_project_root),
-                                        },
-                                    }
-                                ]
-                            }
-                        ]
-                    }
-                ],
-            },
-        ]
-    )
-    adapter = SharedNeovimEditorAdapter(
-        kitty_transport=transport,
-        process_runner=runner,
-        runtime_dir=tmp_path / "hop",
-    )
-
-    adapter.focus(build_session())
-
-    assert all(cmd[0] != "focus-window" for cmd in transport.commands)
 
 
 def test_editor_uses_distinct_sockets_for_same_basename_directories(tmp_path: Path) -> None:

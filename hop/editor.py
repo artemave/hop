@@ -16,7 +16,6 @@ from hop.session import ProjectSession
 
 NVIM_COMMAND = "nvim"
 EDITOR_ROLE = "editor"
-HOP_EDITOR_ENV_VAR = "HOP_EDITOR"
 HOP_EDITOR_VAR = "hop_editor"
 EDITOR_READY_TIMEOUT_SECONDS = 5.0
 EDITOR_READY_POLL_INTERVAL_SECONDS = 0.05
@@ -38,9 +37,7 @@ class ProcessRunner(Protocol):
 @dataclass(frozen=True, slots=True)
 class EditorWindow:
     id: int
-    session_name: str | None
     is_editor: bool
-    project_root: Path | None
 
 
 class SharedNeovimEditorAdapter:
@@ -95,16 +92,7 @@ class SharedNeovimEditorAdapter:
                 "window_title": _editor_window_title(session),
                 "os_window_title": _editor_window_title(session),
                 "os_window_name": _editor_os_window_name(session),
-                "env": [
-                    f"HOP_SESSION={session.session_name}",
-                    f"HOP_PROJECT_ROOT={session.project_root}",
-                    f"{HOP_EDITOR_ENV_VAR}=1",
-                ],
-                "var": [
-                    f"hop_session={session.session_name}",
-                    f"hop_project_root={session.project_root}",
-                    f"{HOP_EDITOR_VAR}=1",
-                ],
+                "var": [f"{HOP_EDITOR_VAR}=1"],
             },
         )
 
@@ -127,7 +115,7 @@ class SharedNeovimEditorAdapter:
                     window = _parse_editor_window(cast(Any, window_entry))
                     if window is None:
                         continue
-                    if window.project_root == session.project_root and window.is_editor:
+                    if window.is_editor:
                         windows.append(window)
 
         if not windows:
@@ -247,24 +235,8 @@ def _parse_editor_window(window_entry: Mapping[str, object]) -> EditorWindow | N
     user_vars = _coerce_string_mapping(
         window_entry.get("user_vars") or window_entry.get("user_variables") or window_entry.get("vars")
     )
-    env = _coerce_string_mapping(window_entry.get("env"))
 
-    editor_flag = user_vars.get(HOP_EDITOR_VAR) or env.get(HOP_EDITOR_ENV_VAR)
-    session_name = user_vars.get("hop_session") or env.get("HOP_SESSION")
-    project_root_text = user_vars.get("hop_project_root") or env.get("HOP_PROJECT_ROOT")
-
-    return EditorWindow(
-        id=window_id,
-        session_name=session_name,
-        is_editor=editor_flag == "1",
-        project_root=_path_from_text(project_root_text),
-    )
-
-
-def _path_from_text(value: str | None) -> Path | None:
-    if value is None:
-        return None
-    return Path(value).expanduser().resolve(strict=False)
+    return EditorWindow(id=window_id, is_editor=user_vars.get(HOP_EDITOR_VAR) == "1")
 
 
 def _coerce_string_mapping(value: Any) -> dict[str, str]:

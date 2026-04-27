@@ -3,14 +3,7 @@ from pathlib import Path
 from hop.commands.open_selection import open_selection_in_window
 from hop.kitty import KittyWindowContext
 from hop.session import ProjectSession
-
-
-class StubSwayAdapter:
-    def __init__(self) -> None:
-        self.switched_workspaces: list[str] = []
-
-    def switch_to_workspace(self, workspace_name: str) -> None:
-        self.switched_workspaces.append(workspace_name)
+from hop.state import SessionState
 
 
 class StubKittyAdapter:
@@ -46,32 +39,25 @@ def test_open_selection_in_window_routes_files_to_shared_editor(tmp_path: Path) 
     selected_file.parent.mkdir(parents=True)
     selected_file.write_text("class User\nend\n")
 
-    sway = StubSwayAdapter()
-    kitty = StubKittyAdapter(
-        KittyWindowContext(
-            id=17,
-            session_name="demo",
-            role="shell",
-            project_root=project_root.resolve(),
-            cwd=terminal_cwd.resolve(),
-        )
-    )
+    kitty = StubKittyAdapter(KittyWindowContext(id=17, role="shell", cwd=terminal_cwd.resolve()))
     neovim = StubNeovimAdapter()
     browser = StubBrowserAdapter()
 
     session = open_selection_in_window(
         "app/models/user.rb:7",
         source_window_id=17,
-        sway=sway,
         kitty=kitty,
         neovim=neovim,
         browser=browser,
+        sessions_loader=lambda: {
+            "demo": SessionState(name="demo", project_root=project_root.resolve()),
+        },
+        listen_on_env="unix:@hop-demo",
     )
 
     assert session is not None
     assert session.session_name == "demo"
     assert kitty.inspected_window_ids == [17]
-    assert sway.switched_workspaces == [f"p:{project_root.name}"]
     assert neovim.opened_targets == [("demo", f"{selected_file.resolve()}:7")]
     assert browser.urls == []
 
@@ -81,30 +67,23 @@ def test_open_selection_in_window_routes_urls_to_session_browser(tmp_path: Path)
     terminal_cwd = project_root / "src"
     terminal_cwd.mkdir(parents=True)
 
-    sway = StubSwayAdapter()
-    kitty = StubKittyAdapter(
-        KittyWindowContext(
-            id=17,
-            session_name="demo",
-            role="shell",
-            project_root=project_root.resolve(),
-            cwd=terminal_cwd.resolve(),
-        )
-    )
+    kitty = StubKittyAdapter(KittyWindowContext(id=17, role="shell", cwd=terminal_cwd.resolve()))
     neovim = StubNeovimAdapter()
     browser = StubBrowserAdapter()
 
     session = open_selection_in_window(
         "https://example.com",
         source_window_id=17,
-        sway=sway,
         kitty=kitty,
         neovim=neovim,
         browser=browser,
+        sessions_loader=lambda: {
+            "demo": SessionState(name="demo", project_root=project_root.resolve()),
+        },
+        listen_on_env="unix:@hop-demo",
     )
 
     assert session is not None
-    assert sway.switched_workspaces == [f"p:{project_root.name}"]
     assert browser.urls == [("demo", "https://example.com")]
     assert neovim.opened_targets == []
 
@@ -114,29 +93,22 @@ def test_open_selection_in_window_ignores_unresolvable_matches(tmp_path: Path) -
     terminal_cwd = project_root / "src"
     terminal_cwd.mkdir(parents=True)
 
-    sway = StubSwayAdapter()
-    kitty = StubKittyAdapter(
-        KittyWindowContext(
-            id=17,
-            session_name="demo",
-            role="shell",
-            project_root=project_root.resolve(),
-            cwd=terminal_cwd.resolve(),
-        )
-    )
+    kitty = StubKittyAdapter(KittyWindowContext(id=17, role="shell", cwd=terminal_cwd.resolve()))
     neovim = StubNeovimAdapter()
     browser = StubBrowserAdapter()
 
     session = open_selection_in_window(
         "missing/file.rb:4",
         source_window_id=17,
-        sway=sway,
         kitty=kitty,
         neovim=neovim,
         browser=browser,
+        sessions_loader=lambda: {
+            "demo": SessionState(name="demo", project_root=project_root.resolve()),
+        },
+        listen_on_env="unix:@hop-demo",
     )
 
     assert session is None
-    assert sway.switched_workspaces == []
     assert neovim.opened_targets == []
     assert browser.urls == []

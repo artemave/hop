@@ -130,27 +130,19 @@ def test_ensure_terminal_launches_os_window_when_role_is_missing() -> None:
                 "window_title": "demo:server",
                 "os_window_title": "demo:server",
                 "os_window_name": "hop:demo:server",
-                "env": [
-                    "HOP_SESSION=demo",
-                    "HOP_ROLE=server",
-                    f"HOP_PROJECT_ROOT={build_session().project_root}",
-                ],
-                "var": [
-                    "hop_session=demo",
-                    "hop_role=server",
-                    f"hop_project_root={build_session().project_root}",
-                ],
+                "var": ["hop_role=server"],
             },
         ),
     ]
 
 
-def test_bootstrap_invokes_on_session_bootstrap_hook_after_kitty_listens() -> None:
+def test_bootstrap_invokes_on_session_bootstrap_hook_after_kitty_listens_and_tags_window() -> None:
     factory = StubKittyFactory(
         [
             KittyConnectionError("no such socket"),  # _find_window's ls
             KittyConnectionError("still not listening"),  # _launch_window's launch send
             {"ok": True, "data": []},  # poll succeeds
+            {"ok": True},  # set-user-vars succeeds
         ]
     )
     bootstrapped: list[ProjectSession] = []
@@ -164,18 +156,22 @@ def test_bootstrap_invokes_on_session_bootstrap_hook_after_kitty_listens() -> No
     adapter.ensure_terminal(build_session(), role="shell")
 
     assert bootstrapped == [build_session()]
+    # set-user-vars tags the bootstrap window with hop_role=shell so role-based
+    # discovery treats it like windows added via `kitty @ launch --var=...`.
+    assert (SESSION_SOCKET, "set-user-vars", {"match": "all", "var": ["hop_role=shell"]}) in factory.calls
 
 
 def test_ensure_terminal_bootstraps_session_kitty_when_socket_is_not_listening() -> None:
     # First ls fails with KittyConnectionError → no session kitty yet → enter
     # the launch path → that send raises too → fall through to bootstrap.
-    # After Popen, we poll until the socket comes up.
+    # After Popen, we poll until the socket comes up, then tag the window.
     factory = StubKittyFactory(
         [
             KittyConnectionError("no such socket"),  # _find_window's ls
             KittyConnectionError("still not listening"),  # _launch_window's launch send
             KittyConnectionError("socket not up yet"),  # first poll
             {"ok": True, "data": []},  # poll succeeds
+            {"ok": True},  # set-user-vars
         ]
     )
     launcher = StubLauncher()
@@ -188,7 +184,7 @@ def test_ensure_terminal_bootstraps_session_kitty_when_socket_is_not_listening()
     adapter.ensure_terminal(build_session(), role="shell")
 
     assert len(launcher.calls) == 1
-    args, env = launcher.calls[0]
+    args, _env = launcher.calls[0]
     session = build_session()
     assert args == (
         "kitty",
@@ -203,10 +199,6 @@ def test_ensure_terminal_bootstraps_session_kitty_when_socket_is_not_listening()
         "--override",
         "allow_remote_control=yes",
     )
-    assert env["HOP_SESSION"] == "demo"
-    assert env["HOP_ROLE"] == "shell"
-    assert env["HOP_PROJECT_ROOT"] == str(session.project_root)
-    assert env["KITTY_LISTEN_ON"] == SESSION_SOCKET
 
 
 def test_ensure_terminal_raises_when_kitty_never_listens() -> None:

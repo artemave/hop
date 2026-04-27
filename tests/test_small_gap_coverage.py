@@ -3,15 +3,8 @@ from pathlib import Path
 from hop.commands.open_selection import open_selection_in_window
 from hop.kitty import KittyWindowContext
 from hop.session import derive_session_name
+from hop.state import SessionState
 from hop.targets import ResolvedFileTarget, resolve_visible_output_target
-
-
-class StubSwayAdapter:
-    def __init__(self) -> None:
-        self.switched_workspaces: list[str] = []
-
-    def switch_to_workspace(self, workspace_name: str) -> None:
-        self.switched_workspaces.append(workspace_name)
 
 
 class StubKittyAdapter:
@@ -39,44 +32,88 @@ class StubBrowserAdapter:
 
 
 def test_open_selection_ignores_missing_source_window() -> None:
-    sway = StubSwayAdapter()
-
     assert (
         open_selection_in_window(
             "README.md",
             source_window_id=17,
-            sway=sway,
             kitty=StubKittyAdapter(None),
             neovim=StubNeovimAdapter(),
             browser=StubBrowserAdapter(),
+            sessions_loader=lambda: {},
+            listen_on_env="unix:@hop-demo",
         )
         is None
     )
-    assert sway.switched_workspaces == []
 
 
-def test_open_selection_ignores_windows_without_project_root_or_cwd() -> None:
-    sway = StubSwayAdapter()
-    context = KittyWindowContext(
-        id=17,
-        session_name="demo",
-        role="shell",
-        project_root=None,
-        cwd=None,
-    )
+def test_open_selection_ignores_windows_without_cwd() -> None:
+    context = KittyWindowContext(id=17, role="shell", cwd=None)
 
     assert (
         open_selection_in_window(
             "README.md",
             source_window_id=17,
-            sway=sway,
             kitty=StubKittyAdapter(context),
             neovim=StubNeovimAdapter(),
             browser=StubBrowserAdapter(),
+            sessions_loader=lambda: {},
+            listen_on_env="unix:@hop-demo",
         )
         is None
     )
-    assert sway.switched_workspaces == []
+
+
+def test_open_selection_ignores_invocation_outside_a_hop_session_kitty(tmp_path: Path) -> None:
+    context = KittyWindowContext(id=17, role="shell", cwd=tmp_path)
+
+    assert (
+        open_selection_in_window(
+            "README.md",
+            source_window_id=17,
+            kitty=StubKittyAdapter(context),
+            neovim=StubNeovimAdapter(),
+            browser=StubBrowserAdapter(),
+            sessions_loader=lambda: {},
+            listen_on_env="",
+        )
+        is None
+    )
+
+
+def test_open_selection_ignores_session_without_recorded_state(tmp_path: Path) -> None:
+    context = KittyWindowContext(id=17, role="shell", cwd=tmp_path)
+
+    assert (
+        open_selection_in_window(
+            "README.md",
+            source_window_id=17,
+            kitty=StubKittyAdapter(context),
+            neovim=StubNeovimAdapter(),
+            browser=StubBrowserAdapter(),
+            sessions_loader=lambda: {},
+            listen_on_env="unix:@hop-demo",
+        )
+        is None
+    )
+
+
+def test_open_selection_returns_none_when_target_does_not_resolve(tmp_path: Path) -> None:
+    context = KittyWindowContext(id=17, role="shell", cwd=tmp_path)
+
+    assert (
+        open_selection_in_window(
+            "   ",
+            source_window_id=17,
+            kitty=StubKittyAdapter(context),
+            neovim=StubNeovimAdapter(),
+            browser=StubBrowserAdapter(),
+            sessions_loader=lambda: {
+                "demo": SessionState(name="demo", project_root=tmp_path),
+            },
+            listen_on_env="unix:@hop-demo",
+        )
+        is None
+    )
 
 
 def test_derive_session_name_rejects_root_path() -> None:

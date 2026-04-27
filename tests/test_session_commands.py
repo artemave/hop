@@ -89,16 +89,14 @@ def test_switch_session_raises_when_no_matching_session_exists() -> None:
     assert raised
 
 
-def _make_window(*, role: str, project_root: Path) -> KittyWindow:
-    return KittyWindow(id=0, session_name=project_root.name, role=role, project_root=project_root)
+def _make_window(*, role: str) -> KittyWindow:
+    return KittyWindow(id=0, role=role)
 
 
 def test_spawn_session_terminal_picks_first_unused_shell_role(tmp_path: Path) -> None:
     project_root = tmp_path / "demo"
     project_root.mkdir()
-    terminals = StubTerminalAdapter(
-        existing_windows=(_make_window(role="shell", project_root=project_root),),
-    )
+    terminals = StubTerminalAdapter(existing_windows=(_make_window(role="shell"),))
 
     session = spawn_session_terminal(project_root, terminals=terminals)
 
@@ -111,9 +109,9 @@ def test_spawn_session_terminal_skips_used_numbered_shells(tmp_path: Path) -> No
     project_root.mkdir()
     terminals = StubTerminalAdapter(
         existing_windows=(
-            _make_window(role="shell", project_root=project_root),
-            _make_window(role="shell-2", project_root=project_root),
-            _make_window(role="shell-3", project_root=project_root),
+            _make_window(role="shell"),
+            _make_window(role="shell-2"),
+            _make_window(role="shell-3"),
         ),
     )
 

@@ -279,34 +279,20 @@ def test_data_and_window_helpers_cover_mapping_list_and_fallback_cases() -> None
     assert _coerce_string_mapping(object()) == {}
 
     assert _parse_window({"id": "17"}) is None
-    parsed_window = _parse_window(
-        {
-            "id": 17,
-            "vars": [
-                "hop_session=demo",
-                "hop_role=shell",
-                "hop_project_root=/tmp/demo",
-            ],
-        }
-    )
+    parsed_window = _parse_window({"id": 17, "vars": ["hop_role=shell"]})
     assert parsed_window is not None
-    assert parsed_window.session_name == "demo"
     assert parsed_window.role == "shell"
-    assert parsed_window.project_root == Path("/tmp/demo")
 
     assert _parse_window_context({"id": "17"}) is None
     parsed_context = _parse_window_context(
         {
             "id": 18,
-            "env": {
-                "HOP_SESSION": "demo",
-                "HOP_ROLE": "shell",
-                "HOP_PROJECT_ROOT": "/tmp/demo",
-            },
+            "user_vars": {"hop_role": "shell"},
             "foreground_processes": ["invalid", {"cwd": "/tmp/demo/src"}],
         }
     )
     assert parsed_context is not None
+    assert parsed_context.role == "shell"
     assert parsed_context.cwd == Path("/tmp/demo/src")
     assert _path_from_text(None) is None
 

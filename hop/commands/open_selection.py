@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-from typing import Protocol
+import os
+from typing import Callable, Protocol
 
-from hop.kitty import KittyWindowContext
+from hop.kitty import KITTY_LISTEN_ON_ENV_VAR, KittyWindowContext
 from hop.session import ProjectSession, resolve_project_session
+from hop.state import SessionState, load_sessions
 from hop.targets import ResolvedUrlTarget, resolve_visible_output_target
 
-
-class OpenSelectionSwayAdapter(Protocol):
-    def switch_to_workspace(self, workspace_name: str) -> None: ...
+SESSION_SOCKET_PREFIX = "unix:@hop-"
 
 
 class OpenSelectionKittyAdapter(Protocol):
@@ -27,30 +27,33 @@ def open_selection_in_window(
     selection: str,
     *,
     source_window_id: int,
-    sway: OpenSelectionSwayAdapter,
     kitty: OpenSelectionKittyAdapter,
     neovim: OpenSelectionNeovimAdapter,
     browser: OpenSelectionBrowserAdapter,
+    sessions_loader: Callable[[], dict[str, SessionState]] = load_sessions,
+    listen_on_env: str | None = None,
 ) -> ProjectSession | None:
     source_window = kitty.inspect_window(source_window_id)
-    if source_window is None:
+    if source_window is None or source_window.cwd is None:
         return None
 
-    project_root = source_window.project_root or source_window.cwd
-    terminal_cwd = source_window.cwd or project_root
-    if project_root is None or terminal_cwd is None:
+    listen_on = listen_on_env if listen_on_env is not None else os.environ.get(KITTY_LISTEN_ON_ENV_VAR, "")
+    if not listen_on.startswith(SESSION_SOCKET_PREFIX):
+        return None
+    session_name = listen_on.removeprefix(SESSION_SOCKET_PREFIX)
+
+    state = sessions_loader().get(session_name)
+    if state is None:
         return None
 
-    session = resolve_project_session(project_root)
+    session = resolve_project_session(state.project_root)
     resolved_target = resolve_visible_output_target(
         selection,
-        terminal_cwd=terminal_cwd,
+        terminal_cwd=source_window.cwd,
         project_root=session.project_root,
     )
     if resolved_target is None:
         return None
-
-    sway.switch_to_workspace(session.workspace_name)
 
     if isinstance(resolved_target, ResolvedUrlTarget):
         browser.ensure_browser(session, url=resolved_target.url)
