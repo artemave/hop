@@ -11,11 +11,6 @@ class EnterSessionCommand:
 
 
 @dataclass(frozen=True, slots=True)
-class SpawnSessionTerminalCommand:
-    pass
-
-
-@dataclass(frozen=True, slots=True)
 class SwitchSessionCommand:
     session_name: str
 
@@ -58,7 +53,6 @@ class KillCommand:
 
 Command = (
     EnterSessionCommand
-    | SpawnSessionTerminalCommand
     | SwitchSessionCommand
     | ListSessionsCommand
     | EditCommand

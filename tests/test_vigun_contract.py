@@ -33,6 +33,9 @@ class StubSwayAdapter:
     def remove_workspace(self, workspace_name: str) -> None:
         raise AssertionError("remove_workspace should not be called in this test")
 
+    def get_focused_workspace(self) -> str:
+        raise AssertionError("get_focused_workspace should not be called for hop run")
+
 
 class StubKittyAdapter:
     def __init__(self) -> None:

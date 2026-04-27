@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from pathlib import Path
 from typing import Sequence
@@ -15,21 +14,12 @@ from hop.commands import (
     KillCommand,
     ListSessionsCommand,
     RunCommand,
-    SpawnSessionTerminalCommand,
     SwitchSessionCommand,
     TailCommand,
     TermCommand,
 )
 from hop.commands.run import DEFAULT_RUN_ROLE
 from hop.errors import HopError
-
-HOP_SESSION_ENV_VAR = "HOP_SESSION"
-
-
-def _bare_hop_command() -> Command:
-    if os.environ.get(HOP_SESSION_ENV_VAR):
-        return SpawnSessionTerminalCommand()
-    return EnterSessionCommand()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -67,7 +57,7 @@ def parse_command(argv: Sequence[str] | None = None) -> Command:
 
     match namespace.command:
         case None:
-            return _bare_hop_command()
+            return EnterSessionCommand()
         case "switch":
             return SwitchSessionCommand(session_name=namespace.session_name)
         case "list":
@@ -76,7 +66,7 @@ def parse_command(argv: Sequence[str] | None = None) -> Command:
             return EditCommand(target=namespace.target)
         case "term":
             if namespace.role is None:
-                return _bare_hop_command()
+                return EnterSessionCommand()
             return TermCommand(role=namespace.role)
         case "run":
             return RunCommand(role=namespace.role, command_text=namespace.command_text)

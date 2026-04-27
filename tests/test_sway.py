@@ -73,6 +73,38 @@ def test_list_session_workspaces_filters_and_sorts_workspace_names() -> None:
     assert sway.list_session_workspaces() == ("p:alpha", "p:zeta")
 
 
+def test_get_focused_workspace_returns_focused_workspace_name() -> None:
+    transport = StubSwayTransport(
+        responses={
+            SwayMessageType.GET_WORKSPACES: json.dumps(
+                [
+                    {"name": "scratch", "focused": False},
+                    {"name": "p:demo", "focused": True},
+                ]
+            ).encode()
+        }
+    )
+    sway = SwayIpcAdapter(transport=transport)
+
+    assert sway.get_focused_workspace() == "p:demo"
+
+
+def test_get_focused_workspace_returns_empty_string_when_none_is_focused() -> None:
+    transport = StubSwayTransport(
+        responses={
+            SwayMessageType.GET_WORKSPACES: json.dumps(
+                [
+                    {"name": "scratch", "focused": False},
+                    {"name": "p:demo", "focused": False},
+                ]
+            ).encode()
+        }
+    )
+    sway = SwayIpcAdapter(transport=transport)
+
+    assert sway.get_focused_workspace() == ""
+
+
 def test_list_windows_flattens_the_sway_tree_with_workspace_context() -> None:
     transport = StubSwayTransport(
         responses={

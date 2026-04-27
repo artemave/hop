@@ -123,6 +123,14 @@ class SwayIpcAdapter:
         ]
         return tuple(sorted(workspace.name for workspace in workspaces))
 
+    def get_focused_workspace(self) -> str:
+        response = self._transport.request(SwayMessageType.GET_WORKSPACES)
+        workspace_entries = json.loads(response.decode())
+        for entry in workspace_entries:
+            if entry.get("focused") and isinstance(entry.get("name"), str):
+                return entry["name"]
+        return ""
+
     def list_windows(self) -> tuple[SwayWindow, ...]:
         response = self._transport.request(SwayMessageType.GET_TREE)
         tree = json.loads(response.decode())

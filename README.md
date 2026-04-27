@@ -57,7 +57,7 @@ That exposes the `hop` command in your active Python environment.
 
 A session is always the resolved current working directory. Every session-scoped command (`hop`, `hop edit`, `hop term`, `hop run`, `hop browser`) resolves the session this way.
 
-A few commands also distinguish between being **inside** vs **outside** a session. "Inside" means you're running the command from one of the kitty terminals hop itself created; anything else — a fresh terminal you opened yourself, a launcher prompt, a script — is "outside". Where the distinction matters, it's noted below.
+A few commands also distinguish between being **inside** vs **outside** a session. "Inside" means the focused Sway workspace is the cwd-derived session's workspace (`p:<dirname>`) — whether you're focused on a hop terminal, the editor, or some other window in that workspace. Anything else — a different workspace, a launcher prompt, an external script — is "outside". Where the distinction matters, it's noted below.
 
 ### Enter or create session
 

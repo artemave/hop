@@ -14,7 +14,6 @@ from hop.commands import (
     KillCommand,
     ListSessionsCommand,
     RunCommand,
-    SpawnSessionTerminalCommand,
     SwitchSessionCommand,
     TailCommand,
     TermCommand,
@@ -25,8 +24,9 @@ from hop.sway import SwayWindow
 
 
 class StubSwayAdapter:
-    def __init__(self, workspaces: tuple[str, ...] = ()) -> None:
+    def __init__(self, workspaces: tuple[str, ...] = (), *, focused_workspace: str = "") -> None:
         self.workspaces = workspaces
+        self.focused_workspace = focused_workspace
         self.switched_workspaces: list[str] = []
         self.closed_windows: list[int] = []
         self.removed_workspaces: list[str] = []
@@ -45,6 +45,9 @@ class StubSwayAdapter:
 
     def remove_workspace(self, workspace_name: str) -> None:
         self.removed_workspaces.append(workspace_name)
+
+    def get_focused_workspace(self) -> str:
+        return self.focused_workspace
 
 
 class StubKittyAdapter:
@@ -110,9 +113,14 @@ class StubHopServices:
         return HopServices(sway=self.sway, kitty=self.kitty, neovim=self.neovim, browser=self.browser)
 
 
-def build_services(*, workspaces: tuple[str, ...] = (), last_cmd_output: str = "") -> StubHopServices:
+def build_services(
+    *,
+    workspaces: tuple[str, ...] = (),
+    focused_workspace: str = "",
+    last_cmd_output: str = "",
+) -> StubHopServices:
     return StubHopServices(
-        sway=StubSwayAdapter(workspaces=workspaces),
+        sway=StubSwayAdapter(workspaces=workspaces, focused_workspace=focused_workspace),
         kitty=StubKittyAdapter(last_cmd_output=last_cmd_output),
         neovim=StubNeovimAdapter(),
         browser=StubBrowserAdapter(),
@@ -168,15 +176,17 @@ def test_execute_command_enters_project_session_and_bootstraps_shell(tmp_path: P
     assert services.kitty.ensured_roles == [("src", "shell", nested_directory.resolve())]
 
 
-def test_execute_command_spawns_new_session_terminal_with_unique_role(tmp_path: Path) -> None:
+def test_execute_command_spawns_extra_shell_when_focused_on_session_workspace(tmp_path: Path) -> None:
     project_root = tmp_path / "demo"
     project_root.mkdir()
 
-    services = build_services()
+    # Sway reports we're already focused on this session's workspace, so bare
+    # `hop` should spawn another shell rather than re-enter.
+    services = build_services(focused_workspace="p:demo")
 
     assert (
         execute_command(
-            SpawnSessionTerminalCommand(),
+            EnterSessionCommand(),
             cwd=project_root,
             services=services.as_services(),
         )
@@ -184,6 +194,24 @@ def test_execute_command_spawns_new_session_terminal_with_unique_role(tmp_path: 
     )
     assert services.sway.switched_workspaces == []
     assert services.kitty.ensured_roles == [("demo", "shell-2", project_root.resolve())]
+
+
+def test_execute_command_enters_session_when_focused_on_a_different_workspace(tmp_path: Path) -> None:
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+
+    services = build_services(focused_workspace="p:other")
+
+    assert (
+        execute_command(
+            EnterSessionCommand(),
+            cwd=project_root,
+            services=services.as_services(),
+        )
+        == 0
+    )
+    assert services.sway.switched_workspaces == ["p:demo"]
+    assert services.kitty.ensured_roles == [("demo", "shell", project_root.resolve())]
 
 
 def test_execute_command_switches_to_named_session() -> None:

@@ -14,7 +14,6 @@ from hop.commands import (
     KillCommand,
     ListSessionsCommand,
     RunCommand,
-    SpawnSessionTerminalCommand,
     SwitchSessionCommand,
     TailCommand,
     TermCommand,
@@ -33,7 +32,7 @@ from hop.commands.tail import tail_command
 from hop.commands.term import focus_terminal
 from hop.editor import SharedNeovimEditorAdapter
 from hop.kitty import KittyRemoteControlAdapter, KittyWindow, KittyWindowContext, KittyWindowState
-from hop.session import ProjectSession
+from hop.session import ProjectSession, resolve_project_session
 from hop.sway import SwayIpcAdapter, SwayWindow
 
 
@@ -47,6 +46,8 @@ class SwayAdapter(Protocol):
     def close_window(self, window_id: int) -> None: ...
 
     def remove_workspace(self, workspace_name: str) -> None: ...
+
+    def get_focused_workspace(self) -> str: ...
 
 
 class KittyAdapter(Protocol):
@@ -99,16 +100,18 @@ def execute_command(
 
     match command:
         case EnterSessionCommand():
-            enter_project_session(
-                current_directory,
-                sway=services.sway,
-                terminals=services.kitty,
-            )
-        case SpawnSessionTerminalCommand():
-            spawn_session_terminal(
-                current_directory,
-                terminals=services.kitty,
-            )
+            session = resolve_project_session(current_directory)
+            if services.sway.get_focused_workspace() == session.workspace_name:
+                spawn_session_terminal(
+                    current_directory,
+                    terminals=services.kitty,
+                )
+            else:
+                enter_project_session(
+                    current_directory,
+                    sway=services.sway,
+                    terminals=services.kitty,
+                )
         case SwitchSessionCommand(session_name=session_name):
             switch_session(session_name, sway=services.sway)
         case ListSessionsCommand():
