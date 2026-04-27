@@ -9,6 +9,7 @@ from hop.commands.session import (
 from hop.errors import HopError
 from hop.kitty import KittyWindow
 from hop.session import ProjectSession
+from hop.state import SessionState
 
 
 class StubSwayAdapter:
@@ -133,7 +134,21 @@ def test_spawn_session_terminal_does_not_switch_workspace(tmp_path: Path) -> Non
     assert terminals.ensured_terminals == [("demo", "shell-2", project_root)]
 
 
-def test_list_sessions_returns_sorted_session_names() -> None:
+def test_list_sessions_returns_sorted_listings_with_workspace_and_known_project_roots() -> None:
     sway = StubSwayAdapter(workspaces=("p:zeta", "scratch", "p:alpha", "p:beta"))
 
-    assert list_sessions(sway=sway) == ("alpha", "beta", "zeta")
+    listings = list_sessions(
+        sway=sway,
+        sessions_loader=lambda: {
+            "alpha": SessionState(name="alpha", project_root=Path("/projects/alpha")),
+            "beta": SessionState(name="beta", project_root=Path("/projects/beta")),
+        },
+    )
+
+    assert [listing.name for listing in listings] == ["alpha", "beta", "zeta"]
+    assert [listing.workspace for listing in listings] == ["p:alpha", "p:beta", "p:zeta"]
+    assert [listing.project_root for listing in listings] == [
+        Path("/projects/alpha"),
+        Path("/projects/beta"),
+        None,
+    ]

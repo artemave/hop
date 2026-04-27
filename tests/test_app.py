@@ -3,7 +3,7 @@ import json
 from contextlib import redirect_stdout
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping
+from typing import Mapping, Sequence
 
 import pytest
 from hop.app import HopServices, execute_command
@@ -71,14 +71,14 @@ class StubKittyAdapter:
     def list_session_windows(self, session: ProjectSession) -> list[KittyWindow]:
         return []
 
-    def close_window(self, window_id: int) -> None:
+    def close_window(self, session_name: str, window_id: int) -> None:
         self.closed_windows.append(window_id)
 
-    def get_window_state(self, window_id: int) -> KittyWindowState:
+    def get_window_state(self, session_name: str, window_id: int) -> KittyWindowState:
         self._state_calls += 1
         return KittyWindowState(at_prompt=self._state_calls > 1, last_cmd_exit_status=0)
 
-    def get_last_cmd_output(self, window_id: int) -> str:
+    def get_last_cmd_output(self, session_name: str, window_id: int) -> str:
         return self._last_cmd_output
 
 
@@ -127,16 +127,30 @@ def build_services(
     )
 
 
-class CapturingKittyTransport:
+class CapturingKittyFactory:
     def __init__(self, responses: list[object]) -> None:
-        self._responses = list(responses)
-        self.commands: list[tuple[str, Mapping[str, object] | None]] = []
+        self.responses = list(responses)
+        self.commands: list[tuple[str | None, str, Mapping[str, object] | None]] = []
+
+    def __call__(self, listen_on: str | None = None) -> "_CapturedTransport":
+        return _CapturedTransport(listen_on, self)
+
+
+class _CapturedTransport:
+    def __init__(self, listen_on: str | None, factory: CapturingKittyFactory) -> None:
+        self._listen_on = listen_on
+        self._factory = factory
 
     def send_command(self, command_name: str, payload: Mapping[str, object] | None = None) -> object:
-        self.commands.append((command_name, payload))
-        if not self._responses:
+        self._factory.commands.append((self._listen_on, command_name, payload))
+        if not self._factory.responses:
             return {"ok": True}
-        return self._responses.pop(0)
+        return self._factory.responses.pop(0)
+
+
+class _NoopLauncher:
+    def __call__(self, args: Sequence[str], env: Mapping[str, str]) -> None:
+        return None
 
 
 def test_hop_enter_session_passes_invocation_directory_as_kitty_launch_cwd(
@@ -147,17 +161,17 @@ def test_hop_enter_session_passes_invocation_directory_as_kitty_launch_cwd(
     project_root = tmp_path / "demo"
     project_root.mkdir()
 
-    transport = CapturingKittyTransport([{"ok": True, "data": []}, {"ok": True}])
+    factory = CapturingKittyFactory([{"ok": True, "data": []}, {"ok": True}])
     services = HopServices(
         sway=StubSwayAdapter(),
-        kitty=KittyRemoteControlAdapter(transport=transport),
+        kitty=KittyRemoteControlAdapter(transport_factory=factory, launcher=_NoopLauncher()),
         neovim=StubNeovimAdapter(),
         browser=StubBrowserAdapter(),
     )
 
     assert execute_command(EnterSessionCommand(), cwd=project_root, services=services) == 0
 
-    launches = [payload for name, payload in transport.commands if name == "launch"]
+    launches = [payload for _, name, payload in factory.commands if name == "launch"]
     assert len(launches) == 1
     payload = launches[0]
     assert payload is not None
@@ -232,6 +246,34 @@ def test_execute_command_lists_sorted_session_names() -> None:
         assert execute_command(ListSessionsCommand(), cwd=Path("/tmp"), services=services.as_services()) == 0
 
     assert stdout.getvalue() == "alpha\nzeta\n"
+
+
+def test_execute_command_lists_sessions_as_json_with_project_roots(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOP_SESSIONS_DIR", str(tmp_path / "sessions"))
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir()
+    (sessions_dir / "alpha.json").write_text(json.dumps({"name": "alpha", "project_root": "/projects/alpha"}))
+
+    services = build_services(workspaces=("p:zeta", "workspace", "p:alpha"))
+    stdout = io.StringIO()
+
+    with redirect_stdout(stdout):
+        assert (
+            execute_command(
+                ListSessionsCommand(as_json=True),
+                cwd=Path("/tmp"),
+                services=services.as_services(),
+            )
+            == 0
+        )
+
+    payload = json.loads(stdout.getvalue())
+    assert payload == [
+        {"name": "alpha", "workspace": "p:alpha", "project_root": "/projects/alpha"},
+        {"name": "zeta", "workspace": "p:zeta", "project_root": None},
+    ]
 
 
 def test_execute_command_focuses_terminal_role_in_current_session(tmp_path: Path) -> None:

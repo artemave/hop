@@ -38,7 +38,7 @@ class StubKittyAdapter:
     def list_session_windows(self, session: ProjectSession) -> list[KittyWindow]:
         return [KittyWindow(id=wid, session_name=None, role=None, project_root=None) for wid in self._window_ids]
 
-    def close_window(self, window_id: int) -> None:
+    def close_window(self, session_name: str, window_id: int) -> None:
         self.closed_windows.append(window_id)
 
 
@@ -149,3 +149,16 @@ def test_kill_session_returns_resolved_session(tmp_path: Path) -> None:
 
     assert session.session_name == "src"
     assert session.workspace_name == f"p:{nested.name}"
+
+
+def test_kill_session_forgets_persisted_session_state(tmp_path: Path) -> None:
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+
+    sway = StubSwayAdapter()
+    kitty = StubKittyAdapter()
+    forgotten: list[str] = []
+
+    kill_session(project_root, sway=sway, kitty=kitty, forget=forgotten.append)
+
+    assert forgotten == ["demo"]

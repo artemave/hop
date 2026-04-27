@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Spawn a shell in the current hop session, or fall back to a plain kitty
+# window when not on a session workspace.
+#
+# Bind in sway, e.g.:
+#
+#     bindsym $mod+Return exec /path/to/hop/sway/hop-term-or-kitty
+#
+# The fallback can be overridden by passing it as the first argument:
+#
+#     bindsym $mod+Return exec /path/to/hop/sway/hop-term-or-kitty alacritty
+
+set -e
+
+fallback=${1:-kitty}
+
+ws=$(swaymsg -t get_workspaces | jq -r '.[] | select(.focused).name')
+project_root=""
+
+if [[ $ws == p:* ]]; then
+    project_root=$(hop list --json 2>/dev/null | jq -r --arg s "${ws#p:}" '
+        .[] | select(.name == $s) | .project_root // empty
+    ' || true)
+fi
+
+if [[ -d $project_root ]]; then
+    cd "$project_root" && exec hop term
+else
+    exec "$fallback"
+fi

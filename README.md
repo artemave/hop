@@ -75,6 +75,14 @@ hop # run from inside one of the session's terminals
 
 Spawns an additional shell terminal in the same session, named `shell-2`, `shell-3`, etc.
 
+For one-keystroke access, bind a sway shortcut to `sway/hop-term-or-kitty`:
+
+```conf
+bindsym $mod+Return exec /path/to/hop/sway/hop-term-or-kitty
+```
+
+The script asks sway for the focused workspace; if it's a hop session (`p:*`), it `cd`s into the session's project root and runs `hop term` (giving you a fresh `shell-N`). Otherwise it falls back to plain `kitty`. Override the fallback by passing it as the first arg, e.g. `… exec /path/to/sway/hop-term-or-kitty alacritty`.
+
 ### Switch to a named session
 
 ```bash

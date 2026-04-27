@@ -54,13 +54,13 @@ class StubKittyAdapter:
     def list_session_windows(self, session: ProjectSession) -> Sequence[KittyWindow]:
         return ()
 
-    def close_window(self, window_id: int) -> None:
+    def close_window(self, session_name: str, window_id: int) -> None:
         raise AssertionError("close_window should not be called in this test")
 
-    def get_window_state(self, window_id: int) -> KittyWindowState:
+    def get_window_state(self, session_name: str, window_id: int) -> KittyWindowState:
         raise AssertionError("get_window_state should not be called for hop run")
 
-    def get_last_cmd_output(self, window_id: int) -> str:
+    def get_last_cmd_output(self, session_name: str, window_id: int) -> str:
         raise AssertionError("get_last_cmd_output should not be called for hop run")
 
 

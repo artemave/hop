@@ -29,7 +29,8 @@ def build_parser() -> argparse.ArgumentParser:
     switch_parser = subparsers.add_parser("switch")
     switch_parser.add_argument("session_name")
 
-    subparsers.add_parser("list")
+    list_parser = subparsers.add_parser("list")
+    list_parser.add_argument("--json", action="store_true", dest="as_json")
 
     edit_parser = subparsers.add_parser("edit")
     edit_parser.add_argument("target", nargs="?")
@@ -61,7 +62,7 @@ def parse_command(argv: Sequence[str] | None = None) -> Command:
         case "switch":
             return SwitchSessionCommand(session_name=namespace.session_name)
         case "list":
-            return ListSessionsCommand()
+            return ListSessionsCommand(as_json=bool(namespace.as_json))
         case "edit":
             return EditCommand(target=namespace.target)
         case "term":

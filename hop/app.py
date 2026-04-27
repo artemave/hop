@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -65,11 +66,11 @@ class KittyAdapter(Protocol):
 
     def list_session_windows(self, session: ProjectSession) -> Sequence[KittyWindow]: ...
 
-    def close_window(self, window_id: int) -> None: ...
+    def close_window(self, session_name: str, window_id: int) -> None: ...
 
-    def get_window_state(self, window_id: int) -> KittyWindowState: ...
+    def get_window_state(self, session_name: str, window_id: int) -> KittyWindowState: ...
 
-    def get_last_cmd_output(self, window_id: int) -> str: ...
+    def get_last_cmd_output(self, session_name: str, window_id: int) -> str: ...
 
 
 class NeovimAdapter(Protocol):
@@ -114,9 +115,21 @@ def execute_command(
                 )
         case SwitchSessionCommand(session_name=session_name):
             switch_session(session_name, sway=services.sway)
-        case ListSessionsCommand():
-            for session_name in list_sessions(sway=services.sway):
-                print(session_name)
+        case ListSessionsCommand(as_json=as_json):
+            listings = list_sessions(sway=services.sway)
+            if as_json:
+                payload = [
+                    {
+                        "name": listing.name,
+                        "workspace": listing.workspace,
+                        "project_root": str(listing.project_root) if listing.project_root else None,
+                    }
+                    for listing in listings
+                ]
+                print(json.dumps(payload, indent=2))
+            else:
+                for listing in listings:
+                    print(listing.name)
         case EditCommand(target=target):
             edit_in_session(
                 current_directory,
@@ -160,10 +173,12 @@ def execute_command(
 
 
 def build_default_services() -> HopServices:
+    from hop.state import record_session
+
     sway = SwayIpcAdapter()
     return HopServices(
         sway=sway,
-        kitty=KittyRemoteControlAdapter(),
+        kitty=KittyRemoteControlAdapter(on_session_bootstrap=record_session),
         neovim=SharedNeovimEditorAdapter(),
         browser=SessionBrowserAdapter(sway=sway),
     )

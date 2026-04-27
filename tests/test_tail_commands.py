@@ -24,12 +24,12 @@ class StubKittyAdapter:
         self.state_calls = 0
         self.output_calls = 0
 
-    def get_window_state(self, window_id: int) -> KittyWindowState:
+    def get_window_state(self, session_name: str, window_id: int) -> KittyWindowState:
         index = min(self.state_calls, len(self._states) - 1)
         self.state_calls += 1
         return self._states[index]
 
-    def get_last_cmd_output(self, window_id: int) -> str:
+    def get_last_cmd_output(self, session_name: str, window_id: int) -> str:
         self.output_calls += 1
         return self._output
 

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Protocol, Sequence
+from typing import Callable, Protocol, Sequence
 
 from hop.browser import DEFAULT_BROWSER_MARK_PREFIX
 from hop.kitty import KittyWindow
 from hop.session import ProjectSession, resolve_project_session
+from hop.state import forget_session
 from hop.sway import SwayWindow
 
 
@@ -22,7 +23,7 @@ class KillSwayAdapter(Protocol):
 class KillKittyAdapter(Protocol):
     def list_session_windows(self, session: ProjectSession) -> Sequence[KittyWindow]: ...
 
-    def close_window(self, window_id: int) -> None: ...
+    def close_window(self, session_name: str, window_id: int) -> None: ...
 
 
 def kill_session(
@@ -30,6 +31,7 @@ def kill_session(
     *,
     sway: KillSwayAdapter,
     kitty: KillKittyAdapter,
+    forget: Callable[[str], None] = forget_session,
 ) -> ProjectSession:
     session = resolve_project_session(cwd)
 
@@ -48,6 +50,8 @@ def kill_session(
     # Close Kitty-managed windows last (role terminals + shared editor).
     # This may close the terminal running hop kill, ending this process.
     for window in kitty.list_session_windows(session):
-        kitty.close_window(window.id)
+        kitty.close_window(session.session_name, window.id)
+
+    forget(session.session_name)
 
     return session

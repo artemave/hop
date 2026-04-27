@@ -1,16 +1,24 @@
 from __future__ import annotations
 
-from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, Sequence
+from typing import Callable, Protocol, Sequence
 
 from hop.errors import HopError
 from hop.kitty import KittyWindow
 from hop.session import ProjectSession, resolve_project_session
+from hop.state import SessionState, load_sessions
 
 SESSION_WORKSPACE_PREFIX = "p:"
 SHELL_TERMINAL_ROLE = "shell"
 ADHOC_SHELL_ROLE_PREFIX = "shell-"
+
+
+@dataclass(frozen=True, slots=True)
+class SessionListing:
+    name: str
+    workspace: str
+    project_root: Path | None
 
 
 class SessionSwayAdapter(Protocol):
@@ -77,8 +85,19 @@ def list_sessions(
     *,
     sway: SessionSwayAdapter,
     prefix: str = SESSION_WORKSPACE_PREFIX,
-) -> tuple[str, ...]:
+    sessions_loader: Callable[[], dict[str, SessionState]] = load_sessions,
+) -> tuple[SessionListing, ...]:
     workspace_names = sway.list_session_workspaces(prefix=prefix)
-    session_paths = [Path(w.removeprefix(prefix)) for w in workspace_names if w.startswith(prefix)]
-    basename_counts: Counter[str] = Counter(p.name for p in session_paths)
-    return tuple(sorted(p.name if basename_counts[p.name] == 1 else str(p) for p in session_paths))
+    state = sessions_loader()
+    listings: list[SessionListing] = []
+    for workspace_name in workspace_names:
+        name = workspace_name.removeprefix(prefix)
+        recorded = state.get(name)
+        listings.append(
+            SessionListing(
+                name=name,
+                workspace=workspace_name,
+                project_root=recorded.project_root if recorded is not None else None,
+            )
+        )
+    return tuple(sorted(listings, key=lambda listing: listing.name))

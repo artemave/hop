@@ -11,7 +11,7 @@ from tempfile import gettempdir
 from typing import Any, Mapping, Protocol, Sequence, cast
 
 from hop.errors import HopError
-from hop.kitty import KittyCommandError, KittyRemoteControlAdapter, KittyTransport
+from hop.kitty import KittyCommandError, KittyTransport, SocketKittyTransport
 from hop.session import ProjectSession
 
 NVIM_COMMAND = "nvim"
@@ -53,7 +53,7 @@ class SharedNeovimEditorAdapter:
         ready_timeout_seconds: float = EDITOR_READY_TIMEOUT_SECONDS,
         ready_poll_interval_seconds: float = EDITOR_READY_POLL_INTERVAL_SECONDS,
     ) -> None:
-        self._kitty = KittyRemoteControlAdapter(transport=kitty_transport)
+        self._transport: KittyTransport = kitty_transport or SocketKittyTransport()
         self._process_runner = process_runner or _SubprocessRunner()
         self._runtime_dir = _resolve_runtime_dir(runtime_dir)
         self._ready_timeout_seconds = ready_timeout_seconds
@@ -81,10 +81,10 @@ class SharedNeovimEditorAdapter:
         window = self._find_editor_window(session)
         if window is None:
             return
-        self._kitty.send_command("focus-window", {"match": f"id:{window.id}"})
+        self._transport.send_command("focus-window", {"match": f"id:{window.id}"})
 
     def _launch_editor(self, session: ProjectSession, *, address: Path) -> None:
-        self._kitty.send_command(
+        self._transport.send_command(
             "launch",
             {
                 "args": [NVIM_COMMAND, "--listen", str(address)],
@@ -109,7 +109,7 @@ class SharedNeovimEditorAdapter:
         )
 
     def _find_editor_window(self, session: ProjectSession) -> EditorWindow | None:
-        response = self._kitty.send_command("ls", {"output_format": "json"})
+        response = self._transport.send_command("ls", {"output_format": "json"})
         payload = _coerce_response_data(response)
         if not isinstance(payload, list):
             raise KittyCommandError("Kitty returned an invalid window listing.")

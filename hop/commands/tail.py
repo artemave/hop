@@ -19,9 +19,9 @@ class TailTimeoutError(HopError):
 
 
 class TailKittyAdapter(Protocol):
-    def get_window_state(self, window_id: int) -> KittyWindowState: ...
+    def get_window_state(self, session_name: str, window_id: int) -> KittyWindowState: ...
 
-    def get_last_cmd_output(self, window_id: int) -> str: ...
+    def get_last_cmd_output(self, session_name: str, window_id: int) -> str: ...
 
 
 def tail_command(
@@ -44,15 +44,16 @@ def tail_command(
         raise UnknownRunError(msg) from error
 
     window_id = int(state["window_id"])
+    session_name = str(state["session"])
 
     started_running = False
     start = clock()
     while True:
-        ws = kitty.get_window_state(window_id)
+        ws = kitty.get_window_state(session_name, window_id)
         if not ws.at_prompt:
             started_running = True
         elif started_running or (clock() - start) > fast_done_seconds:
-            return kitty.get_last_cmd_output(window_id)
+            return kitty.get_last_cmd_output(session_name, window_id)
 
         if (clock() - start) > timeout_seconds:
             msg = f"hop tail timed out after {timeout_seconds:.0f}s waiting for run {run_id!r}."

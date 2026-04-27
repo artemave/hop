@@ -2,19 +2,17 @@ from __future__ import annotations
 
 import json
 import os
-import select
 import socket
-import termios
-import tty
+import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Mapping, Protocol, cast
+from typing import Any, Callable, Mapping, Protocol, Sequence, cast
 
 from hop.errors import HopError
 from hop.session import ProjectSession
 
 KITTY_LISTEN_ON_ENV_VAR = "KITTY_LISTEN_ON"
-KITTY_WINDOW_ID_ENV_VAR = "KITTY_WINDOW_ID"
 KITTY_PROTOCOL_VERSION = (0, 39, 0)
 KITTY_COMMAND_PREFIX = b"\x1bP@kitty-cmd"
 KITTY_COMMAND_SUFFIX = b"\x1b\\"
@@ -24,7 +22,8 @@ HOP_PROJECT_ROOT_ENV_VAR = "HOP_PROJECT_ROOT"
 HOP_SESSION_VAR = "hop_session"
 HOP_ROLE_VAR = "hop_role"
 HOP_PROJECT_ROOT_VAR = "hop_project_root"
-COMMAND_TIMEOUT_SECONDS = 2.0
+KITTY_BOOTSTRAP_TIMEOUT_SECONDS = 5.0
+KITTY_BOOTSTRAP_POLL_INTERVAL_SECONDS = 0.1
 
 
 class KittyError(HopError):
@@ -45,6 +44,11 @@ class KittyTransport(Protocol):
         command_name: str,
         payload: Mapping[str, object] | None = None,
     ) -> object: ...
+
+
+TransportFactory = Callable[[str | None], KittyTransport]
+KittyLauncher = Callable[[Sequence[str], Mapping[str, str]], None]
+SessionBootstrapHook = Callable[["ProjectSession"], None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,14 +74,30 @@ class KittyWindowState:
     last_cmd_exit_status: int
 
 
+def session_socket_address(session_name: str) -> str:
+    return f"unix:@hop-{session_name}"
+
+
 class KittyRemoteControlAdapter:
-    def __init__(self, transport: KittyTransport | None = None) -> None:
-        self._transport = transport or _build_default_transport()
+    def __init__(
+        self,
+        *,
+        transport_factory: TransportFactory | None = None,
+        launcher: KittyLauncher | None = None,
+        on_session_bootstrap: SessionBootstrapHook | None = None,
+        sleep: Callable[[float], None] = time.sleep,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._transport_factory: TransportFactory = transport_factory or _default_transport_factory
+        self._launcher: KittyLauncher = launcher or _default_launcher
+        self._on_session_bootstrap: SessionBootstrapHook = on_session_bootstrap or (lambda _session: None)
+        self._sleep = sleep
+        self._clock = clock
 
     def ensure_terminal(self, session: ProjectSession, *, role: str) -> None:
         window = self._find_window(session, role=role)
         if window is not None:
-            self._focus_window(window.id)
+            self._send_to(session.session_name, "focus-window", {"match": f"id:{window.id}"})
             return
 
         self._launch_window(session, role=role, keep_focus=False)
@@ -102,17 +122,16 @@ class KittyRemoteControlAdapter:
             raise KittyCommandError(msg)
 
         text = command if command.endswith("\n") else f"{command}\n"
-        self._transport.send_command(
+        self._send_to(
+            session.session_name,
             "send-text",
-            {
-                "match": f"id:{window.id}",
-                "data": f"text:{text}",
-            },
+            {"match": f"id:{window.id}", "data": f"text:{text}"},
         )
         return window.id
 
-    def get_window_state(self, window_id: int) -> KittyWindowState:
-        response = self._transport.send_command(
+    def get_window_state(self, session_name: str, window_id: int) -> KittyWindowState:
+        response = self._send_to(
+            session_name,
             "ls",
             {"match": f"id:{window_id}", "output_format": "json"},
         )
@@ -131,8 +150,9 @@ class KittyRemoteControlAdapter:
         msg = f"Kitty has no window with id {window_id}."
         raise KittyCommandError(msg)
 
-    def get_last_cmd_output(self, window_id: int) -> str:
-        response = self._transport.send_command(
+    def get_last_cmd_output(self, session_name: str, window_id: int) -> str:
+        response = self._send_to(
+            session_name,
             "get-text",
             {"match": f"id:{window_id}", "extent": "last_cmd_output"},
         )
@@ -141,7 +161,10 @@ class KittyRemoteControlAdapter:
         return str(response)
 
     def inspect_window(self, window_id: int) -> KittyWindowContext | None:
-        response = self._transport.send_command(
+        # Used by the open_selection kitten which runs *inside* a kitty terminal,
+        # so KITTY_LISTEN_ON is set by kitty in env. Use the env-driven transport.
+        transport = self._transport_factory(None)
+        response = transport.send_command(
             "ls",
             {
                 "match": f"id:{window_id}",
@@ -170,24 +193,26 @@ class KittyRemoteControlAdapter:
         return None
 
     def list_session_windows(self, session: ProjectSession) -> tuple[KittyWindow, ...]:
-        return tuple(window for window in self._list_windows() if window.project_root == session.project_root)
+        addr = session_socket_address(session.session_name)
+        try:
+            windows = self._list_windows_via(addr)
+        except KittyConnectionError:
+            return ()
+        return tuple(window for window in windows if window.project_root == session.project_root)
 
-    def close_window(self, window_id: int) -> None:
-        self._transport.send_command("close-window", {"match": f"id:{window_id}"})
+    def close_window(self, session_name: str, window_id: int) -> None:
+        self._send_to(session_name, "close-window", {"match": f"id:{window_id}"})
 
     def _find_window(self, session: ProjectSession, *, role: str) -> KittyWindow | None:
-        windows = [
-            window
-            for window in self._list_windows()
-            if window.project_root == session.project_root and window.role == role
-        ]
-        if not windows:
+        addr = session_socket_address(session.session_name)
+        try:
+            windows = self._list_windows_via(addr)
+        except KittyConnectionError:
             return None
-
-        return min(windows, key=lambda window: window.id)
-
-    def _focus_window(self, window_id: int) -> None:
-        self._transport.send_command("focus-window", {"match": f"id:{window_id}"})
+        matches = [window for window in windows if window.project_root == session.project_root and window.role == role]
+        if not matches:
+            return None
+        return min(matches, key=lambda window: window.id)
 
     def _launch_window(
         self,
@@ -196,35 +221,72 @@ class KittyRemoteControlAdapter:
         role: str,
         keep_focus: bool,
     ) -> None:
-        self._transport.send_command(
-            "launch",
-            {
-                "args": [],
-                "cwd": str(session.project_root),
-                "type": "os-window",
-                "keep_focus": keep_focus,
-                "allow_remote_control": True,
-                "window_title": _window_title(session, role=role),
-                "os_window_title": _window_title(session, role=role),
-                "os_window_name": _os_window_name(session, role=role),
-                "env": [
-                    f"{HOP_SESSION_ENV_VAR}={session.session_name}",
-                    f"{HOP_ROLE_ENV_VAR}={role}",
-                    f"{HOP_PROJECT_ROOT_ENV_VAR}={session.project_root}",
-                ],
-                "var": [
-                    f"{HOP_SESSION_VAR}={session.session_name}",
-                    f"{HOP_ROLE_VAR}={role}",
-                    f"{HOP_PROJECT_ROOT_VAR}={session.project_root}",
-                ],
-            },
+        try:
+            self._send_to(
+                session.session_name,
+                "launch",
+                self._launch_payload(session, role=role, keep_focus=keep_focus),
+            )
+        except KittyConnectionError:
+            self._bootstrap_session_kitty(session_socket_address(session.session_name), session, role=role)
+
+    def _bootstrap_session_kitty(
+        self,
+        addr: str,
+        session: ProjectSession,
+        *,
+        role: str,
+    ) -> None:
+        env = dict(os.environ)
+        env[HOP_SESSION_ENV_VAR] = session.session_name
+        env[HOP_ROLE_ENV_VAR] = role
+        env[HOP_PROJECT_ROOT_ENV_VAR] = str(session.project_root)
+        env[KITTY_LISTEN_ON_ENV_VAR] = addr
+
+        args = (
+            "kitty",
+            "--directory",
+            str(session.project_root),
+            "--listen-on",
+            addr,
+            "--title",
+            _window_title(session, role=role),
+            "--name",
+            _os_window_name(session, role=role),
+            "--override",
+            "allow_remote_control=yes",
         )
+        self._launcher(args, env)
+        self._wait_for_session_kitty(addr)
+        self._on_session_bootstrap(session)
 
-    def send_command(self, command_name: str, payload: Mapping[str, object] | None = None) -> object:
-        return self._transport.send_command(command_name, payload)
+    def _wait_for_session_kitty(self, addr: str) -> None:
+        deadline = self._clock() + KITTY_BOOTSTRAP_TIMEOUT_SECONDS
+        while self._clock() < deadline:
+            if self._is_session_kitty_listening(addr):
+                return
+            self._sleep(KITTY_BOOTSTRAP_POLL_INTERVAL_SECONDS)
+        msg = f"Kitty did not start listening on {addr!r} within {KITTY_BOOTSTRAP_TIMEOUT_SECONDS:.0f}s."
+        raise KittyConnectionError(msg)
 
-    def _list_windows(self) -> tuple[KittyWindow, ...]:
-        response = self._transport.send_command("ls", {"output_format": "json"})
+    def _is_session_kitty_listening(self, addr: str) -> bool:
+        try:
+            self._transport_factory(addr).send_command("ls", {"output_format": "json"})
+        except (KittyConnectionError, KittyCommandError):
+            return False
+        return True
+
+    def _send_to(
+        self,
+        session_name: str,
+        command: str,
+        payload: Mapping[str, object] | None = None,
+    ) -> object:
+        addr = session_socket_address(session_name)
+        return self._transport_factory(addr).send_command(command, payload)
+
+    def _list_windows_via(self, addr: str) -> tuple[KittyWindow, ...]:
+        response = self._transport_factory(addr).send_command("ls", {"output_format": "json"})
         payload = _coerce_response_data(response)
 
         if not isinstance(payload, list):
@@ -247,61 +309,37 @@ class KittyRemoteControlAdapter:
 
         return tuple(windows)
 
-
-class ControllingTtyKittyTransport:
-    def __init__(
+    def _launch_payload(
         self,
+        session: ProjectSession,
         *,
-        tty_path: Path | str = "/dev/tty",
-        kitty_window_id: str | None = None,
-        timeout_seconds: float = COMMAND_TIMEOUT_SECONDS,
-    ) -> None:
-        self._tty_path = str(tty_path)
-        self._kitty_window_id = kitty_window_id or os.environ.get(KITTY_WINDOW_ID_ENV_VAR)
-        self._timeout_seconds = timeout_seconds
-
-    def send_command(
-        self,
-        command_name: str,
-        payload: Mapping[str, object] | None = None,
-    ) -> object:
-        request = _encode_command(
-            command_name,
-            payload=payload,
-            kitty_window_id=self._kitty_window_id,
-        )
-
-        try:
-            tty_fd = os.open(self._tty_path, os.O_RDWR | os.O_CLOEXEC)
-        except OSError as error:
-            msg = f"Could not open {self._tty_path!r} to talk to Kitty."
-            raise KittyConnectionError(msg) from error
-
-        original_settings: list[Any] | None = None
-        try:
-            original_settings = termios.tcgetattr(tty_fd)
-            tty.setraw(tty_fd)
-            os.write(tty_fd, request)
-            response = _read_until(
-                lambda remaining: _read_tty_chunk(tty_fd, remaining, timeout_seconds=self._timeout_seconds),
-                KITTY_COMMAND_SUFFIX,
-            )
-        except OSError as error:
-            msg = "Kitty did not respond over the controlling terminal."
-            raise KittyConnectionError(msg) from error
-        finally:
-            if original_settings is not None:
-                termios.tcsetattr(tty_fd, termios.TCSADRAIN, original_settings)
-            os.close(tty_fd)
-
-        return _decode_response(response)
+        role: str,
+        keep_focus: bool,
+    ) -> dict[str, object]:
+        return {
+            "args": [],
+            "cwd": str(session.project_root),
+            "type": "os-window",
+            "keep_focus": keep_focus,
+            "allow_remote_control": True,
+            "window_title": _window_title(session, role=role),
+            "os_window_title": _window_title(session, role=role),
+            "os_window_name": _os_window_name(session, role=role),
+            "env": [
+                f"{HOP_SESSION_ENV_VAR}={session.session_name}",
+                f"{HOP_ROLE_ENV_VAR}={role}",
+                f"{HOP_PROJECT_ROOT_ENV_VAR}={session.project_root}",
+            ],
+            "var": [
+                f"{HOP_SESSION_VAR}={session.session_name}",
+                f"{HOP_ROLE_VAR}={role}",
+                f"{HOP_PROJECT_ROOT_VAR}={session.project_root}",
+            ],
+        }
 
 
 class SocketKittyTransport:
-    def __init__(
-        self,
-        listen_on: str | None = None,
-    ) -> None:
+    def __init__(self, listen_on: str | None = None) -> None:
         self._listen_on = listen_on or os.environ.get(KITTY_LISTEN_ON_ENV_VAR)
 
     def send_command(
@@ -347,24 +385,30 @@ class SocketKittyTransport:
             return _read_until(client.recv, KITTY_COMMAND_SUFFIX)
 
 
-def _build_default_transport() -> KittyTransport:
-    if os.environ.get(KITTY_WINDOW_ID_ENV_VAR):
-        return ControllingTtyKittyTransport()
-    return SocketKittyTransport()
+def _default_transport_factory(listen_on: str | None) -> KittyTransport:
+    return SocketKittyTransport(listen_on=listen_on)
+
+
+def _default_launcher(args: Sequence[str], env: Mapping[str, str]) -> None:
+    subprocess.Popen(
+        list(args),
+        env=dict(env),
+        start_new_session=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL,
+    )
 
 
 def _encode_command(
     command_name: str,
     *,
     payload: Mapping[str, object] | None = None,
-    kitty_window_id: str | None = None,
 ) -> bytes:
     request: dict[str, object] = {
         "cmd": command_name,
         "version": list(KITTY_PROTOCOL_VERSION),
     }
-    if kitty_window_id is not None:
-        request["kitty_window_id"] = kitty_window_id
     if payload is not None:
         request["payload"] = dict(payload)
 
@@ -495,14 +539,6 @@ def _read_until(read_chunk: Callable[[int], bytes], suffix: bytes) -> bytes:
         msg = "Kitty did not return any data."
         raise KittyConnectionError(msg)
     return response
-
-
-def _read_tty_chunk(fd: int, remaining: int, *, timeout_seconds: float) -> bytes:
-    readable, _, _ = select.select([fd], [], [], timeout_seconds)
-    if not readable:
-        msg = "Timed out waiting for Kitty to respond."
-        raise KittyConnectionError(msg)
-    return os.read(fd, remaining)
 
 
 def _socket_address(listen_on: str) -> str:

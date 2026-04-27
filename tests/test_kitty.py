@@ -1,21 +1,59 @@
 from pathlib import Path
-from typing import Mapping
+from typing import Mapping, Sequence
 
 import pytest
-from hop.kitty import KittyCommandError, KittyRemoteControlAdapter, KittyWindowState
+from hop.kitty import (
+    KittyCommandError,
+    KittyConnectionError,
+    KittyRemoteControlAdapter,
+    KittyTransport,
+    KittyWindowState,
+)
 from hop.session import ProjectSession
 
 
-class StubKittyTransport:
-    def __init__(self, responses: list[object]) -> None:
-        self._responses = list(responses)
-        self.commands: list[tuple[str, Mapping[str, object] | None]] = []
+class StubKittyFactory:
+    """Records every (listen_on, command, payload) RPC against any stub transport
+    it hands out, and returns canned responses in FIFO order. Each entry in
+    ``responses`` may be a dict (which short-circuits the call) or a callable
+    ``(listen_on, command, payload) -> response`` for selective behavior."""
 
-    def send_command(self, command_name: str, payload: Mapping[str, object] | None = None) -> object:
-        self.commands.append((command_name, payload))
-        if not self._responses:
+    def __init__(
+        self,
+        responses: list[object | KittyConnectionError] | None = None,
+    ) -> None:
+        self.responses = list(responses or [])
+        self.calls: list[tuple[str | None, str, Mapping[str, object] | None]] = []
+
+    def __call__(self, listen_on: str | None = None) -> KittyTransport:
+        return _StubTransport(listen_on, self)
+
+
+class _StubTransport:
+    def __init__(self, listen_on: str | None, factory: StubKittyFactory) -> None:
+        self._listen_on = listen_on
+        self._factory = factory
+
+    def send_command(
+        self,
+        command_name: str,
+        payload: Mapping[str, object] | None = None,
+    ) -> object:
+        self._factory.calls.append((self._listen_on, command_name, payload))
+        if not self._factory.responses:
             return {"ok": True}
-        return self._responses.pop(0)
+        next_response = self._factory.responses.pop(0)
+        if isinstance(next_response, KittyConnectionError):
+            raise next_response
+        return next_response
+
+
+class StubLauncher:
+    def __init__(self) -> None:
+        self.calls: list[tuple[tuple[str, ...], dict[str, str]]] = []
+
+    def __call__(self, args: Sequence[str], env: Mapping[str, str]) -> None:
+        self.calls.append((tuple(args), dict(env)))
 
 
 def build_session() -> ProjectSession:
@@ -23,12 +61,15 @@ def build_session() -> ProjectSession:
     return ProjectSession(
         project_root=project_root,
         session_name="demo",
-        workspace_name=f"p:{project_root}",
+        workspace_name=f"p:{project_root.name}",
     )
 
 
+SESSION_SOCKET = "unix:@hop-demo"
+
+
 def test_ensure_terminal_focuses_existing_role_window() -> None:
-    transport = StubKittyTransport(
+    factory = StubKittyFactory(
         [
             {
                 "ok": True,
@@ -54,30 +95,31 @@ def test_ensure_terminal_focuses_existing_role_window() -> None:
             {"ok": True},
         ]
     )
-    adapter = KittyRemoteControlAdapter(transport=transport)
+    adapter = KittyRemoteControlAdapter(transport_factory=factory, launcher=StubLauncher())
 
     adapter.ensure_terminal(build_session(), role="test")
 
-    assert transport.commands == [
-        ("ls", {"output_format": "json"}),
-        ("focus-window", {"match": "id:17"}),
+    assert factory.calls == [
+        (SESSION_SOCKET, "ls", {"output_format": "json"}),
+        (SESSION_SOCKET, "focus-window", {"match": "id:17"}),
     ]
 
 
 def test_ensure_terminal_launches_os_window_when_role_is_missing() -> None:
-    transport = StubKittyTransport(
+    factory = StubKittyFactory(
         [
             {"ok": True, "data": []},
             {"ok": True},
         ]
     )
-    adapter = KittyRemoteControlAdapter(transport=transport)
+    adapter = KittyRemoteControlAdapter(transport_factory=factory, launcher=StubLauncher())
 
     adapter.ensure_terminal(build_session(), role="server")
 
-    assert transport.commands == [
-        ("ls", {"output_format": "json"}),
+    assert factory.calls == [
+        (SESSION_SOCKET, "ls", {"output_format": "json"}),
         (
+            SESSION_SOCKET,
             "launch",
             {
                 "args": [],
@@ -103,214 +145,102 @@ def test_ensure_terminal_launches_os_window_when_role_is_missing() -> None:
     ]
 
 
-def test_run_in_terminal_reuses_existing_role_window() -> None:
-    transport = StubKittyTransport(
+def test_bootstrap_invokes_on_session_bootstrap_hook_after_kitty_listens() -> None:
+    factory = StubKittyFactory(
         [
-            {
-                "ok": True,
-                "data": [
-                    {
-                        "tabs": [
-                            {
-                                "windows": [
-                                    {
-                                        "id": 9,
-                                        "env": {
-                                            "HOP_SESSION": "demo",
-                                            "HOP_ROLE": "shell",
-                                            "HOP_PROJECT_ROOT": str(build_session().project_root),
-                                        },
-                                    }
-                                ]
-                            }
-                        ]
-                    }
-                ],
-            },
-            {"ok": True},
+            KittyConnectionError("no such socket"),  # _find_window's ls
+            KittyConnectionError("still not listening"),  # _launch_window's launch send
+            {"ok": True, "data": []},  # poll succeeds
         ]
     )
-    adapter = KittyRemoteControlAdapter(transport=transport)
+    bootstrapped: list[ProjectSession] = []
+    adapter = KittyRemoteControlAdapter(
+        transport_factory=factory,
+        launcher=StubLauncher(),
+        on_session_bootstrap=bootstrapped.append,
+        sleep=lambda _: None,
+    )
 
-    adapter.run_in_terminal(build_session(), role="shell", command="pytest -q")
+    adapter.ensure_terminal(build_session(), role="shell")
 
-    assert transport.commands == [
-        ("ls", {"output_format": "json"}),
-        ("send-text", {"match": "id:9", "data": "text:pytest -q\n"}),
+    assert bootstrapped == [build_session()]
+
+
+def test_ensure_terminal_bootstraps_session_kitty_when_socket_is_not_listening() -> None:
+    # First ls fails with KittyConnectionError → no session kitty yet → enter
+    # the launch path → that send raises too → fall through to bootstrap.
+    # After Popen, we poll until the socket comes up.
+    factory = StubKittyFactory(
+        [
+            KittyConnectionError("no such socket"),  # _find_window's ls
+            KittyConnectionError("still not listening"),  # _launch_window's launch send
+            KittyConnectionError("socket not up yet"),  # first poll
+            {"ok": True, "data": []},  # poll succeeds
+        ]
+    )
+    launcher = StubLauncher()
+    adapter = KittyRemoteControlAdapter(
+        transport_factory=factory,
+        launcher=launcher,
+        sleep=lambda _: None,
+    )
+
+    adapter.ensure_terminal(build_session(), role="shell")
+
+    assert len(launcher.calls) == 1
+    args, env = launcher.calls[0]
+    session = build_session()
+    assert args == (
+        "kitty",
+        "--directory",
+        str(session.project_root),
+        "--listen-on",
+        SESSION_SOCKET,
+        "--title",
+        "demo:shell",
+        "--name",
+        "hop:demo:shell",
+        "--override",
+        "allow_remote_control=yes",
+    )
+    assert env["HOP_SESSION"] == "demo"
+    assert env["HOP_ROLE"] == "shell"
+    assert env["HOP_PROJECT_ROOT"] == str(session.project_root)
+    assert env["KITTY_LISTEN_ON"] == SESSION_SOCKET
+
+
+def test_ensure_terminal_raises_when_kitty_never_listens() -> None:
+    responses: list[object | KittyConnectionError] = [
+        KittyConnectionError("no socket"),  # _find_window
+        KittyConnectionError("no socket"),  # _launch_window
     ]
+    responses.extend(KittyConnectionError("still not listening") for _ in range(100))
+    factory = StubKittyFactory(responses)
+    launcher = StubLauncher()
 
+    clock_value = [0.0]
 
-def test_run_in_terminal_creates_missing_role_window_and_routes_command() -> None:
-    transport = StubKittyTransport(
-        [
-            {"ok": True, "data": []},
-            {"ok": True},
-            {
-                "ok": True,
-                "data": [
-                    {
-                        "tabs": [
-                            {
-                                "windows": [
-                                    {
-                                        "id": 13,
-                                        "user_vars": {
-                                            "hop_session": "demo",
-                                            "hop_role": "test",
-                                            "hop_project_root": str(build_session().project_root),
-                                        },
-                                    }
-                                ]
-                            }
-                        ]
-                    }
-                ],
-            },
-            {"ok": True},
-        ]
+    def clock() -> float:
+        return clock_value[0]
+
+    def sleep(dt: float) -> None:
+        clock_value[0] += dt
+
+    adapter = KittyRemoteControlAdapter(
+        transport_factory=factory,
+        launcher=launcher,
+        sleep=sleep,
+        clock=clock,
     )
-    adapter = KittyRemoteControlAdapter(transport=transport)
 
-    adapter.run_in_terminal(build_session(), role="test", command="bin/test")
+    with pytest.raises(KittyConnectionError, match="did not start listening"):
+        adapter.ensure_terminal(build_session(), role="shell")
 
-    assert transport.commands == [
-        ("ls", {"output_format": "json"}),
-        (
-            "launch",
-            {
-                "args": [],
-                "cwd": str(build_session().project_root),
-                "type": "os-window",
-                "keep_focus": True,
-                "allow_remote_control": True,
-                "window_title": "demo:test",
-                "os_window_title": "demo:test",
-                "os_window_name": "hop:demo:test",
-                "env": [
-                    "HOP_SESSION=demo",
-                    "HOP_ROLE=test",
-                    f"HOP_PROJECT_ROOT={build_session().project_root}",
-                ],
-                "var": [
-                    "hop_session=demo",
-                    "hop_role=test",
-                    f"hop_project_root={build_session().project_root}",
-                ],
-            },
-        ),
-        ("ls", {"output_format": "json"}),
-        ("send-text", {"match": "id:13", "data": "text:bin/test\n"}),
-    ]
-
-
-def test_inspect_window_reads_project_root_and_cwd_from_kitty_metadata() -> None:
-    project_root = (Path("/tmp/demo")).resolve()
-    terminal_cwd = (project_root / "src").resolve()
-    transport = StubKittyTransport(
-        [
-            {
-                "ok": True,
-                "data": [
-                    {
-                        "tabs": [
-                            {
-                                "windows": [
-                                    {
-                                        "id": 17,
-                                        "user_vars": {
-                                            "hop_session": "demo",
-                                            "hop_role": "shell",
-                                            "hop_project_root": str(project_root),
-                                        },
-                                        "foreground_processes": [
-                                            {
-                                                "cwd": str(terminal_cwd),
-                                            }
-                                        ],
-                                    }
-                                ]
-                            }
-                        ]
-                    }
-                ],
-            }
-        ]
-    )
-    adapter = KittyRemoteControlAdapter(transport=transport)
-
-    window = adapter.inspect_window(17)
-
-    assert transport.commands == [
-        ("ls", {"match": "id:17", "output_format": "json", "all_env_vars": True}),
-    ]
-    assert window is not None
-    assert window.session_name == "demo"
-    assert window.role == "shell"
-    assert window.project_root == project_root
-    assert window.cwd == terminal_cwd
-
-
-def test_list_session_windows_returns_all_windows_for_session_project_root() -> None:
-    other_root = Path("/tmp/other/demo").resolve()
-    transport = StubKittyTransport(
-        [
-            {
-                "ok": True,
-                "data": [
-                    {
-                        "tabs": [
-                            {
-                                "windows": [
-                                    {
-                                        "id": 1,
-                                        "user_vars": {
-                                            "hop_session": "demo",
-                                            "hop_role": "shell",
-                                            "hop_project_root": str(build_session().project_root),
-                                        },
-                                    },
-                                    {
-                                        "id": 2,
-                                        "user_vars": {
-                                            "hop_session": "demo",
-                                            "hop_role": "test",
-                                            "hop_project_root": str(build_session().project_root),
-                                        },
-                                    },
-                                    {
-                                        "id": 3,
-                                        "user_vars": {
-                                            "hop_session": "demo",
-                                            "hop_role": "shell",
-                                            "hop_project_root": str(other_root),
-                                        },
-                                    },
-                                ]
-                            }
-                        ]
-                    }
-                ],
-            }
-        ]
-    )
-    adapter = KittyRemoteControlAdapter(transport=transport)
-
-    windows = adapter.list_session_windows(build_session())
-
-    assert {w.id for w in windows} == {1, 2}
-
-
-def test_close_window_sends_close_window_command() -> None:
-    transport = StubKittyTransport([{"ok": True}])
-    adapter = KittyRemoteControlAdapter(transport=transport)
-
-    adapter.close_window(17)
-
-    assert transport.commands == [("close-window", {"match": "id:17"})]
+    assert len(launcher.calls) == 1
 
 
 def test_run_in_terminal_returns_window_id_for_existing_role_window() -> None:
-    transport = StubKittyTransport(
+    factory = StubKittyFactory(
         [
             {
                 "ok": True,
@@ -336,15 +266,29 @@ def test_run_in_terminal_returns_window_id_for_existing_role_window() -> None:
             {"ok": True},
         ]
     )
-    adapter = KittyRemoteControlAdapter(transport=transport)
+    adapter = KittyRemoteControlAdapter(transport_factory=factory, launcher=StubLauncher())
 
     window_id = adapter.run_in_terminal(build_session(), role="shell", command="ls")
 
     assert window_id == 24
+    assert factory.calls[-1] == (
+        SESSION_SOCKET,
+        "send-text",
+        {"match": "id:24", "data": "text:ls\n"},
+    )
+
+
+def test_close_window_addresses_session_socket() -> None:
+    factory = StubKittyFactory([{"ok": True}])
+    adapter = KittyRemoteControlAdapter(transport_factory=factory, launcher=StubLauncher())
+
+    adapter.close_window("demo", 17)
+
+    assert factory.calls == [(SESSION_SOCKET, "close-window", {"match": "id:17"})]
 
 
 def test_get_window_state_extracts_at_prompt_and_exit_status() -> None:
-    transport = StubKittyTransport(
+    factory = StubKittyFactory(
         [
             {
                 "ok": True,
@@ -366,26 +310,26 @@ def test_get_window_state_extracts_at_prompt_and_exit_status() -> None:
             }
         ]
     )
-    adapter = KittyRemoteControlAdapter(transport=transport)
+    adapter = KittyRemoteControlAdapter(transport_factory=factory, launcher=StubLauncher())
 
-    state = adapter.get_window_state(31)
+    state = adapter.get_window_state("demo", 31)
 
-    assert transport.commands == [
-        ("ls", {"match": "id:31", "output_format": "json"}),
+    assert factory.calls == [
+        (SESSION_SOCKET, "ls", {"match": "id:31", "output_format": "json"}),
     ]
     assert state == KittyWindowState(at_prompt=False, last_cmd_exit_status=2)
 
 
 def test_get_window_state_raises_when_window_missing() -> None:
-    transport = StubKittyTransport([{"ok": True, "data": []}])
-    adapter = KittyRemoteControlAdapter(transport=transport)
+    factory = StubKittyFactory([{"ok": True, "data": []}])
+    adapter = KittyRemoteControlAdapter(transport_factory=factory, launcher=StubLauncher())
 
     with pytest.raises(KittyCommandError, match="no window with id 99"):
-        adapter.get_window_state(99)
+        adapter.get_window_state("demo", 99)
 
 
 def test_get_window_state_skips_empty_tabs_empty_windows_and_other_ids() -> None:
-    transport = StubKittyTransport(
+    factory = StubKittyFactory(
         [
             {
                 "ok": True,
@@ -410,33 +354,39 @@ def test_get_window_state_skips_empty_tabs_empty_windows_and_other_ids() -> None
             }
         ]
     )
-    adapter = KittyRemoteControlAdapter(transport=transport)
+    adapter = KittyRemoteControlAdapter(transport_factory=factory, launcher=StubLauncher())
 
-    assert adapter.get_window_state(7) == KittyWindowState(at_prompt=False, last_cmd_exit_status=1)
+    assert adapter.get_window_state("demo", 7) == KittyWindowState(at_prompt=False, last_cmd_exit_status=1)
 
 
 def test_get_last_cmd_output_returns_data_text() -> None:
-    transport = StubKittyTransport([{"ok": True, "data": "hello\nworld\n"}])
-    adapter = KittyRemoteControlAdapter(transport=transport)
+    factory = StubKittyFactory([{"ok": True, "data": "hello\nworld\n"}])
+    adapter = KittyRemoteControlAdapter(transport_factory=factory, launcher=StubLauncher())
 
-    output = adapter.get_last_cmd_output(31)
+    output = adapter.get_last_cmd_output("demo", 31)
 
-    assert transport.commands == [
-        ("get-text", {"match": "id:31", "extent": "last_cmd_output"}),
+    assert factory.calls == [
+        (SESSION_SOCKET, "get-text", {"match": "id:31", "extent": "last_cmd_output"}),
     ]
     assert output == "hello\nworld\n"
 
 
 def test_get_last_cmd_output_handles_non_mapping_response() -> None:
-    transport = StubKittyTransport(["plain text\n"])
-    adapter = KittyRemoteControlAdapter(transport=transport)
+    factory = StubKittyFactory(["plain text\n"])
+    adapter = KittyRemoteControlAdapter(transport_factory=factory, launcher=StubLauncher())
 
-    assert adapter.get_last_cmd_output(31) == "plain text\n"
+    assert adapter.get_last_cmd_output("demo", 31) == "plain text\n"
 
 
-def test_ensure_terminal_does_not_reuse_window_from_different_directory_with_same_basename() -> None:
-    other_project_root = Path("/tmp/other/demo").resolve()
-    transport = StubKittyTransport(
+def test_list_session_windows_returns_empty_when_socket_is_not_listening() -> None:
+    factory = StubKittyFactory([KittyConnectionError("no socket")])
+    adapter = KittyRemoteControlAdapter(transport_factory=factory, launcher=StubLauncher())
+
+    assert adapter.list_session_windows(build_session()) == ()
+
+
+def test_inspect_window_uses_env_driven_transport_for_kitten_callers() -> None:
+    factory = StubKittyFactory(
         [
             {
                 "ok": True,
@@ -446,24 +396,28 @@ def test_ensure_terminal_does_not_reuse_window_from_different_directory_with_sam
                             {
                                 "windows": [
                                     {
-                                        "id": 42,
+                                        "id": 17,
                                         "user_vars": {
                                             "hop_session": "demo",
                                             "hop_role": "shell",
-                                            "hop_project_root": str(other_project_root),
+                                            "hop_project_root": str(build_session().project_root),
                                         },
+                                        "cwd": str(build_session().project_root),
                                     }
                                 ]
                             }
                         ]
                     }
                 ],
-            },
-            {"ok": True},
+            }
         ]
     )
-    adapter = KittyRemoteControlAdapter(transport=transport)
+    adapter = KittyRemoteControlAdapter(transport_factory=factory, launcher=StubLauncher())
 
-    adapter.ensure_terminal(build_session(), role="shell")
+    window = adapter.inspect_window(17)
 
-    assert transport.commands[1][0] == "launch"
+    assert window is not None
+    assert window.id == 17
+    # inspect_window calls the factory with no listen_on — it relies on
+    # KITTY_LISTEN_ON in the kitten's env (set by kitty itself).
+    assert factory.calls[0][0] is None

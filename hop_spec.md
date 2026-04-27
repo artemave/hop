@@ -116,6 +116,18 @@ This makes "give me another shell in this session" a single keystroke (`hop`) fr
 
 ---
 
+## Kitty process model
+
+Each hop session corresponds to **one dedicated Kitty process**, listening on a deterministic Unix socket address derived from the session name: `unix:@hop-<session>`. The first hop command that needs a window for a session (typically bare `hop` — entering the session) bootstraps that Kitty process via `kitty --listen-on=… --directory=…` with hop's environment variables set. Every subsequent role-window for the session (`hop term --role server`, `hop run`, the `shell-N` ad-hoc spawns) goes via `kitty @ launch --type=os-window` to that same socket.
+
+Consequences:
+
+- Killing the session's Kitty process tears down all of its windows in one go.
+- Hop is reachable from outside any Kitty terminal as long as the session's Kitty is up — its socket address is computable from the session name, no `KITTY_LISTEN_ON` env plumbing required.
+- Different sessions are isolated at the Kitty-process level, not just by workspace.
+
+---
+
 ### Switch session
 
 ```bash
@@ -133,13 +145,14 @@ Behavior:
 
 ```bash
 hop list
+hop list --json
 ```
 
 Behavior:
 
 - discover live Sway workspaces whose names start with `p:`
-- print session names without the `p:` prefix
-- print one session per line in alphabetical order
+- without `--json`: print session names without the `p:` prefix, one per line, alphabetical
+- with `--json`: print a JSON array of records `{name, workspace, project_root}`. `project_root` comes from per-session state files written at bootstrap (`${XDG_RUNTIME_DIR}/hop/sessions/<name>.json`) and is `null` when no record exists (e.g. for workspaces created outside hop). This is the stable machine-readable API external tools should consume — not the kitty user_vars or shell env vars.
 
 ---
 

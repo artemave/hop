@@ -17,7 +17,7 @@ class SwitchSessionCommand:
 
 @dataclass(frozen=True, slots=True)
 class ListSessionsCommand:
-    pass
+    as_json: bool = False
 
 
 @dataclass(frozen=True, slots=True)

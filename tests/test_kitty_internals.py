@@ -3,22 +3,18 @@
 import json
 import os
 import socket
-import termios
-import tty
 from pathlib import Path
-from typing import Mapping
+from typing import Mapping, Sequence
 
 import pytest
 from hop.kitty import (
     KITTY_COMMAND_PREFIX,
     KITTY_COMMAND_SUFFIX,
-    KITTY_WINDOW_ID_ENV_VAR,
-    ControllingTtyKittyTransport,
     KittyCommandError,
     KittyConnectionError,
     KittyRemoteControlAdapter,
+    KittyTransport,
     SocketKittyTransport,
-    _build_default_transport,
     _coerce_response_data,
     _coerce_string_mapping,
     _decode_response,
@@ -26,7 +22,6 @@ from hop.kitty import (
     _parse_window,
     _parse_window_context,
     _path_from_text,
-    _read_tty_chunk,
     _read_until,
     _socket_address,
     _window_cwd_text,
@@ -34,16 +29,40 @@ from hop.kitty import (
 from hop.session import ProjectSession
 
 
-class StubTransport:
-    def __init__(self, responses: list[object]) -> None:
-        self._responses = list(responses)
-        self.commands: list[tuple[str, Mapping[str, object] | None]] = []
+class StubKittyFactory:
+    def __init__(self, responses: list[object | KittyConnectionError]) -> None:
+        self.responses = list(responses)
+        self.calls: list[tuple[str | None, str, Mapping[str, object] | None]] = []
 
-    def send_command(self, command_name: str, payload: Mapping[str, object] | None = None) -> object:
-        self.commands.append((command_name, payload))
-        if not self._responses:
+    def __call__(self, listen_on: str | None = None) -> KittyTransport:
+        return _StubTransport(listen_on, self)
+
+
+class _StubTransport:
+    def __init__(self, listen_on: str | None, factory: StubKittyFactory) -> None:
+        self._listen_on = listen_on
+        self._factory = factory
+
+    def send_command(
+        self,
+        command_name: str,
+        payload: Mapping[str, object] | None = None,
+    ) -> object:
+        self._factory.calls.append((self._listen_on, command_name, payload))
+        if not self._factory.responses:
             return {"ok": True}
-        return self._responses.pop(0)
+        next_response = self._factory.responses.pop(0)
+        if isinstance(next_response, KittyConnectionError):
+            raise next_response
+        return next_response
+
+
+class StubLauncher:
+    def __init__(self) -> None:
+        self.calls: list[tuple[tuple[str, ...], dict[str, str]]] = []
+
+    def __call__(self, args: Sequence[str], env: Mapping[str, str]) -> None:
+        self.calls.append((tuple(args), dict(env)))
 
 
 class FakeSocket:
@@ -74,7 +93,7 @@ def build_session() -> ProjectSession:
     return ProjectSession(
         project_root=project_root,
         session_name="demo",
-        workspace_name=f"p:{project_root}",
+        workspace_name=f"p:{project_root.name}",
     )
 
 
@@ -83,94 +102,92 @@ def encoded_response(payload: object) -> bytes:
 
 
 def test_inspect_window_rejects_invalid_payload_shape() -> None:
-    adapter = KittyRemoteControlAdapter(transport=StubTransport([{"ok": True, "data": {}}]))
+    factory = StubKittyFactory([{"ok": True, "data": {}}])
+    adapter = KittyRemoteControlAdapter(transport_factory=factory, launcher=StubLauncher())
 
     with pytest.raises(KittyCommandError, match="invalid window listing"):
         adapter.inspect_window(17)
 
 
 def test_inspect_window_skips_malformed_entries_and_returns_none_without_valid_match() -> None:
-    adapter = KittyRemoteControlAdapter(
-        transport=StubTransport(
-            [
-                {
-                    "ok": True,
-                    "data": [
-                        "invalid",
-                        {"tabs": ["invalid"]},
-                        {
-                            "tabs": [
-                                {
-                                    "windows": [
-                                        "invalid",
-                                        {"id": "17"},
-                                    ]
-                                }
-                            ]
-                        },
-                    ],
-                }
-            ]
-        )
+    factory = StubKittyFactory(
+        [
+            {
+                "ok": True,
+                "data": [
+                    "invalid",
+                    {"tabs": ["invalid"]},
+                    {
+                        "tabs": [
+                            {
+                                "windows": [
+                                    "invalid",
+                                    {"id": "17"},
+                                ]
+                            }
+                        ]
+                    },
+                ],
+            }
+        ]
     )
+    adapter = KittyRemoteControlAdapter(transport_factory=factory, launcher=StubLauncher())
 
     assert adapter.inspect_window(17) is None
 
 
 def test_run_in_terminal_raises_when_new_window_cannot_be_rediscovered() -> None:
-    adapter = KittyRemoteControlAdapter(
-        transport=StubTransport(
-            [
-                {"ok": True, "data": []},
-                {"ok": True},
-                {"ok": True, "data": []},
-            ]
-        )
+    factory = StubKittyFactory(
+        [
+            {"ok": True, "data": []},  # _find_window: no existing
+            {"ok": True},  # _launch_window's launch RPC succeeds
+            {"ok": True, "data": []},  # _find_window after launch: still none
+        ]
     )
+    adapter = KittyRemoteControlAdapter(transport_factory=factory, launcher=StubLauncher())
 
     with pytest.raises(KittyCommandError, match="could not find it again"):
         adapter.run_in_terminal(build_session(), role="shell", command="pytest -q")
 
 
 def test_list_session_windows_skips_malformed_entries_and_uses_env_fallbacks() -> None:
-    adapter = KittyRemoteControlAdapter(
-        transport=StubTransport(
-            [
-                {
-                    "ok": True,
-                    "data": [
-                        "invalid",
-                        {"tabs": ["invalid"]},
-                        {
-                            "tabs": [
-                                {
-                                    "windows": [
-                                        "invalid",
-                                        {
-                                            "id": "17",
-                                            "env": {
-                                                "HOP_SESSION": "demo",
-                                                "HOP_ROLE": "shell",
-                                                "HOP_PROJECT_ROOT": str(build_session().project_root),
-                                            },
+    factory = StubKittyFactory(
+        [
+            {
+                "ok": True,
+                "data": [
+                    "invalid",
+                    {"tabs": ["invalid"]},
+                    {
+                        "tabs": [
+                            {
+                                "windows": [
+                                    "invalid",
+                                    {
+                                        "id": "17",
+                                        "env": {
+                                            "HOP_SESSION": "demo",
+                                            "HOP_ROLE": "shell",
+                                            "HOP_PROJECT_ROOT": str(build_session().project_root),
                                         },
-                                        {
-                                            "id": 17,
-                                            "env": {
-                                                "HOP_SESSION": "demo",
-                                                "HOP_ROLE": "shell",
-                                                "HOP_PROJECT_ROOT": str(build_session().project_root),
-                                            },
+                                    },
+                                    {
+                                        "id": 17,
+                                        "env": {
+                                            "HOP_SESSION": "demo",
+                                            "HOP_ROLE": "shell",
+                                            "HOP_PROJECT_ROOT": str(build_session().project_root),
                                         },
-                                    ]
-                                }
-                            ]
-                        },
-                    ],
-                }
-            ]
-        )
+                                    },
+                                ]
+                            }
+                        ]
+                    },
+                ],
+            }
+        ]
     )
+    adapter = KittyRemoteControlAdapter(transport_factory=factory, launcher=StubLauncher())
 
     windows = adapter.list_session_windows(build_session())
 
@@ -178,73 +195,11 @@ def test_list_session_windows_skips_malformed_entries_and_uses_env_fallbacks() -
 
 
 def test_list_session_windows_rejects_invalid_payload_shape() -> None:
-    adapter = KittyRemoteControlAdapter(transport=StubTransport([{"ok": True, "data": {}}]))
+    factory = StubKittyFactory([{"ok": True, "data": {}}])
+    adapter = KittyRemoteControlAdapter(transport_factory=factory, launcher=StubLauncher())
 
     with pytest.raises(KittyCommandError, match="invalid window listing"):
         adapter.list_session_windows(build_session())
-
-
-def test_controlling_tty_transport_sends_commands_and_restores_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
-    events: list[tuple[str, object]] = []
-
-    monkeypatch.setattr(os, "open", lambda path, flags: 9)
-    monkeypatch.setattr(termios, "tcgetattr", lambda fd: ["saved"])
-    monkeypatch.setattr(tty, "setraw", lambda fd: events.append(("setraw", fd)))
-    monkeypatch.setattr(os, "write", lambda fd, payload: events.append(("write", payload)))
-    monkeypatch.setattr(
-        "hop.kitty._read_until",
-        lambda read_chunk, suffix: encoded_response({"ok": True, "data": {"status": "ok"}}),
-    )
-    monkeypatch.setattr(termios, "tcsetattr", lambda fd, when, settings: events.append(("restore", settings)))
-    monkeypatch.setattr(os, "close", lambda fd: events.append(("close", fd)))
-
-    transport = ControllingTtyKittyTransport(tty_path="/dev/tty-hop", kitty_window_id="17")
-
-    assert transport.send_command("focus-window", {"match": "id:17"}) == {"ok": True, "data": {"status": "ok"}}
-    assert events == [
-        ("setraw", 9),
-        ("write", _encode_command("focus-window", payload={"match": "id:17"}, kitty_window_id="17")),
-        ("restore", ["saved"]),
-        ("close", 9),
-    ]
-
-
-def test_controlling_tty_transport_wraps_open_failures(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(os, "open", lambda path, flags: (_ for _ in ()).throw(OSError("boom")))
-
-    with pytest.raises(KittyConnectionError, match="Could not open"):
-        ControllingTtyKittyTransport(tty_path="/dev/missing").send_command("ls")
-
-
-def test_controlling_tty_transport_closes_fd_when_tcgetattr_fails(monkeypatch: pytest.MonkeyPatch) -> None:
-    events: list[tuple[str, object]] = []
-
-    monkeypatch.setattr(os, "open", lambda path, flags: 5)
-    monkeypatch.setattr(termios, "tcgetattr", lambda fd: (_ for _ in ()).throw(OSError("boom")))
-    monkeypatch.setattr(os, "close", lambda fd: events.append(("close", fd)))
-
-    with pytest.raises(KittyConnectionError, match="did not respond over the controlling terminal"):
-        ControllingTtyKittyTransport().send_command("ls")
-
-    assert events == [("close", 5)]
-
-
-def test_controlling_tty_transport_wraps_exchange_failures_and_restores_terminal(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    events: list[tuple[str, object]] = []
-
-    monkeypatch.setattr(os, "open", lambda path, flags: 7)
-    monkeypatch.setattr(termios, "tcgetattr", lambda fd: ["saved"])
-    monkeypatch.setattr(tty, "setraw", lambda fd: events.append(("setraw", fd)))
-    monkeypatch.setattr(os, "write", lambda fd, payload: (_ for _ in ()).throw(OSError("boom")))
-    monkeypatch.setattr(termios, "tcsetattr", lambda fd, when, settings: events.append(("restore", settings)))
-    monkeypatch.setattr(os, "close", lambda fd: events.append(("close", fd)))
-
-    with pytest.raises(KittyConnectionError, match="did not respond over the controlling terminal"):
-        ControllingTtyKittyTransport().send_command("ls")
-
-    assert events == [("setraw", 7), ("restore", ["saved"]), ("close", 7)]
 
 
 def test_socket_transport_requires_listen_on() -> None:
@@ -293,22 +248,13 @@ def test_socket_transport_fd_and_unix_helpers_use_socket_clients(monkeypatch: py
     assert unix_socket.sent == b"other"
 
 
-def test_build_default_transport_prefers_controlling_tty_inside_kitty(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv(KITTY_WINDOW_ID_ENV_VAR, "17")
-    assert isinstance(_build_default_transport(), ControllingTtyKittyTransport)
-
-    monkeypatch.delenv(KITTY_WINDOW_ID_ENV_VAR)
-    assert isinstance(_build_default_transport(), SocketKittyTransport)
-
-
 def test_encode_and_decode_command_cover_optional_fields_and_errors() -> None:
-    encoded = _encode_command("ls", payload={"output_format": "json"}, kitty_window_id="17")
+    encoded = _encode_command("ls", payload={"output_format": "json"})
     decoded_payload = json.loads(encoded[len(KITTY_COMMAND_PREFIX) : -len(KITTY_COMMAND_SUFFIX)])
 
     assert decoded_payload == {
         "cmd": "ls",
         "version": [0, 39, 0],
-        "kitty_window_id": "17",
         "payload": {"output_format": "json"},
     }
 
@@ -382,20 +328,6 @@ def test_read_until_collects_chunks_and_rejects_empty_responses() -> None:
         _read_until(lambda _remaining: b"", KITTY_COMMAND_SUFFIX)
 
 
-def test_read_tty_chunk_raises_on_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("select.select", lambda reads, writes, errors, timeout: ([], [], []))
-
-    with pytest.raises(KittyConnectionError, match="Timed out"):
-        _read_tty_chunk(7, 4096, timeout_seconds=0.01)
-
-
-def test_read_tty_chunk_reads_when_fd_becomes_ready(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("select.select", lambda reads, writes, errors, timeout: ([7], [], []))
-    monkeypatch.setattr(os, "read", lambda fd, remaining: b"ok")
-
-    assert _read_tty_chunk(7, 4096, timeout_seconds=0.01) == b"ok"
-
-
 def test_socket_address_normalizes_unix_and_abstract_addresses() -> None:
     assert _socket_address("unix:/tmp/kitty.sock") == "/tmp/kitty.sock"
     assert _socket_address("unix:@kitty") == "\0kitty"
@@ -404,3 +336,31 @@ def test_socket_address_normalizes_unix_and_abstract_addresses() -> None:
 
 def test_window_cwd_text_returns_none_without_known_cwd_fields() -> None:
     assert _window_cwd_text({"foreground_processes": None}) is None
+
+
+def test_default_transport_factory_constructs_socket_transport() -> None:
+    from hop.kitty import _default_transport_factory
+
+    transport = _default_transport_factory("unix:@hop-demo")
+    assert isinstance(transport, SocketKittyTransport)
+    assert transport._listen_on == "unix:@hop-demo"
+
+
+def test_default_launcher_invokes_subprocess_popen(monkeypatch: pytest.MonkeyPatch) -> None:
+    from hop.kitty import _default_launcher
+
+    captured_args: list[Sequence[str]] = []
+    captured_kwargs: list[Mapping[str, object]] = []
+
+    class FakePopen:
+        def __init__(self, args: Sequence[str], **kwargs: object) -> None:
+            captured_args.append(args)
+            captured_kwargs.append(kwargs)
+
+    monkeypatch.setattr("subprocess.Popen", FakePopen)
+
+    _default_launcher(("kitty", "--listen-on", "unix:@hop-demo"), {"HOP_SESSION": "demo"})
+
+    assert captured_args == [["kitty", "--listen-on", "unix:@hop-demo"]]
+    assert captured_kwargs[0]["env"] == {"HOP_SESSION": "demo"}
+    assert captured_kwargs[0]["start_new_session"] is True

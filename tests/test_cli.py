@@ -19,6 +19,7 @@ from hop.commands import (
         ([], EnterSessionCommand()),
         (["switch", "demo"], SwitchSessionCommand(session_name="demo")),
         (["list"], ListSessionsCommand()),
+        (["list", "--json"], ListSessionsCommand(as_json=True)),
         (["edit"], EditCommand()),
         (["edit", "app/models/user.rb:42"], EditCommand(target="app/models/user.rb:42")),
         (["term"], EnterSessionCommand()),
