@@ -89,8 +89,8 @@ class SharedNeovimEditorAdapter:
                 "type": "os-window",
                 "keep_focus": False,
                 "allow_remote_control": True,
-                "window_title": _editor_window_title(session),
-                "os_window_title": _editor_window_title(session),
+                "window_title": EDITOR_ROLE,
+                "os_window_title": EDITOR_ROLE,
                 "os_window_name": _editor_os_window_name(session),
                 "var": [f"{HOP_EDITOR_VAR}=1"],
             },
@@ -254,10 +254,6 @@ def _coerce_string_mapping(value: Any) -> dict[str, str]:
         return result
 
     return {}
-
-
-def _editor_window_title(session: ProjectSession) -> str:
-    return f"{session.session_name}:{EDITOR_ROLE}"
 
 
 def _editor_os_window_name(session: ProjectSession) -> str:

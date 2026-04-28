@@ -237,7 +237,7 @@ class KittyRemoteControlAdapter:
             "--listen-on",
             addr,
             "--title",
-            _window_title(session, role=role),
+            role,
             "--name",
             _os_window_name(session, role=role),
             "--override",
@@ -317,8 +317,8 @@ class KittyRemoteControlAdapter:
             "type": "os-window",
             "keep_focus": keep_focus,
             "allow_remote_control": True,
-            "window_title": _window_title(session, role=role),
-            "os_window_title": _window_title(session, role=role),
+            "window_title": role,
+            "os_window_title": role,
             "os_window_name": _os_window_name(session, role=role),
             "var": [f"{HOP_ROLE_VAR}={role}"],
         }
@@ -520,10 +520,6 @@ def _socket_address(listen_on: str) -> str:
     if socket_path.startswith("@"):
         return "\0" + socket_path.removeprefix("@")
     return socket_path
-
-
-def _window_title(session: ProjectSession, *, role: str) -> str:
-    return f"{session.session_name}:{role}"
 
 
 def _os_window_name(session: ProjectSession, *, role: str) -> str:
