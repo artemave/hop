@@ -50,12 +50,29 @@ class StubSwayAdapter:
     def __init__(self, windows: Sequence[SwayWindow] = ()) -> None:
         self._windows: list[SwayWindow] = list(windows)
         self.focused: list[int] = []
+        self.marked: list[tuple[int, str]] = []
 
     def list_windows(self) -> Sequence[SwayWindow]:
         return tuple(self._windows)
 
     def focus_window(self, window_id: int) -> None:
         self.focused.append(window_id)
+
+    def mark_window(self, window_id: int, mark: str) -> None:
+        self.marked.append((window_id, mark))
+        self._windows = [
+            SwayWindow(
+                id=window.id,
+                workspace_name=window.workspace_name,
+                app_id=window.app_id,
+                window_class=window.window_class,
+                marks=window.marks + (mark,),
+                focused=window.focused,
+            )
+            if window.id == window_id
+            else window
+            for window in self._windows
+        ]
 
     def add_window(self, window: SwayWindow) -> None:
         self._windows.append(window)
@@ -70,12 +87,13 @@ def build_session() -> ProjectSession:
     )
 
 
-def build_editor_window(window_id: int) -> SwayWindow:
+def build_marked_editor_window(window_id: int, *, mark: str = "_hop_editor:demo") -> SwayWindow:
     return SwayWindow(
         id=window_id,
         workspace_name="p:/tmp/demo",
-        app_id="hop:demo:editor",
+        app_id="hop:editor",
         window_class=None,
+        marks=(mark,),
     )
 
 
@@ -84,14 +102,14 @@ def _session_socket_name(project_root: Path) -> str:
     return f"hop-{root_hash}.sock"
 
 
-def test_focus_reuses_existing_session_editor_window(tmp_path: Path) -> None:
+def test_focus_reuses_marked_session_editor_window(tmp_path: Path) -> None:
     runner = StubProcessRunner()
     project_root = build_session().project_root
     socket_name = _session_socket_name(project_root)
     address = str((tmp_path / "hop" / socket_name).resolve())
     runner.activate(address)
     transport = StubKittyTransport([])
-    sway = StubSwayAdapter([build_editor_window(23)])
+    sway = StubSwayAdapter([build_marked_editor_window(23)])
     adapter = SharedNeovimEditorAdapter(
         sway=sway,
         kitty_transport=transport,
@@ -106,6 +124,7 @@ def test_focus_reuses_existing_session_editor_window(tmp_path: Path) -> None:
     ]
     assert transport.commands == []
     assert sway.focused == [23]
+    assert sway.marked == []
 
 
 def test_focus_recreates_editor_after_neovim_exits(tmp_path: Path) -> None:
@@ -116,7 +135,14 @@ def test_focus_recreates_editor_after_neovim_exits(tmp_path: Path) -> None:
         args = payload["args"]
         assert isinstance(args, list)
         runner.activate(str(cast(list[Any], args)[2]))
-        sway.add_window(build_editor_window(101))
+        sway.add_window(
+            SwayWindow(
+                id=101,
+                workspace_name=build_session().workspace_name,
+                app_id="hop:editor",
+                window_class=None,
+            )
+        )
 
     transport = StubKittyTransport([{"ok": True}], on_launch=activate_server)
     runtime_dir = tmp_path / "hop"
@@ -150,11 +176,11 @@ def test_focus_recreates_editor_after_neovim_exits(tmp_path: Path) -> None:
                 "allow_remote_control": True,
                 "window_title": "editor",
                 "os_window_title": "editor",
-                "os_window_name": "hop:demo:editor",
-                "var": ["hop_editor=1"],
+                "os_window_name": "hop:editor",
             },
         ),
     ]
+    assert sway.marked == [(101, "_hop_editor:demo")]
     assert sway.focused == [101]
 
 
@@ -165,7 +191,7 @@ def test_open_target_focuses_editor_and_routes_path_with_line(tmp_path: Path) ->
     address = str((tmp_path / "hop" / socket_name).resolve())
     runner.activate(address)
     transport = StubKittyTransport([])
-    sway = StubSwayAdapter([build_editor_window(31)])
+    sway = StubSwayAdapter([build_marked_editor_window(31)])
     adapter = SharedNeovimEditorAdapter(
         sway=sway,
         kitty_transport=transport,

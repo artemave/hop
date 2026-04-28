@@ -116,7 +116,7 @@ def test_collect_windows_ignores_non_dict_nodes_and_tracks_workspace_context() -
                 {
                     "id": 23,
                     "app_id": "firefox",
-                    "marks": ["hop_browser:demo", 1],
+                    "marks": ["_hop_browser:demo", 1],
                     "focused": False,
                 },
             ],
@@ -137,7 +137,7 @@ def test_collect_windows_ignores_non_dict_nodes_and_tracks_workspace_context() -
             workspace_name="p:demo",
             app_id="firefox",
             window_class=None,
-            marks=("hop_browser:demo",),
+            marks=("_hop_browser:demo",),
             focused=False,
         ),
         SwayWindow(

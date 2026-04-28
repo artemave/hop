@@ -129,7 +129,7 @@ def test_ensure_terminal_launches_os_window_when_role_is_missing() -> None:
                 "allow_remote_control": True,
                 "window_title": "server",
                 "os_window_title": "server",
-                "os_window_name": "hop:demo:server",
+                "os_window_name": "hop:server",
                 "var": ["hop_role=server"],
             },
         ),
@@ -195,7 +195,7 @@ def test_ensure_terminal_bootstraps_session_kitty_when_socket_is_not_listening()
         "--title",
         "shell",
         "--name",
-        "hop:demo:shell",
+        "hop:shell",
         "--override",
         "allow_remote_control=yes",
     )

@@ -104,7 +104,7 @@ def test_launch_session_browser_keeps_already_attached_workspace_without_move() 
     adapter.ensure_browser(build_session(), url=None)
 
     assert sway.moves == []
-    assert sway.marks == [(99, "hop_browser:demo")]
+    assert sway.marks == [(99, "_hop_browser:demo")]
     assert sway.focused_window_ids == [99]
 
 

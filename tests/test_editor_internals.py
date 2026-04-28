@@ -45,12 +45,16 @@ class StubSwayAdapter:
     def __init__(self, windows: Sequence[SwayWindow] = ()) -> None:
         self._windows: list[SwayWindow] = list(windows)
         self.focused: list[int] = []
+        self.marked: list[tuple[int, str]] = []
 
     def list_windows(self) -> Sequence[SwayWindow]:
         return tuple(self._windows)
 
     def focus_window(self, window_id: int) -> None:
         self.focused.append(window_id)
+
+    def mark_window(self, window_id: int, mark: str) -> None:
+        self.marked.append((window_id, mark))
 
 
 def build_session() -> ProjectSession:
@@ -62,10 +66,20 @@ def build_session() -> ProjectSession:
     )
 
 
-def _editor_window(window_id: int, *, app_id: str = "hop:demo:editor") -> SwayWindow:
+def _marked_editor(window_id: int) -> SwayWindow:
     return SwayWindow(
         id=window_id,
-        workspace_name="p:/tmp/demo",
+        workspace_name=build_session().workspace_name,
+        app_id="hop:editor",
+        window_class=None,
+        marks=("_hop_editor:demo",),
+    )
+
+
+def _unmarked_editor(window_id: int, *, app_id: str = "hop:editor") -> SwayWindow:
+    return SwayWindow(
+        id=window_id,
+        workspace_name=build_session().workspace_name,
         app_id=app_id,
         window_class=None,
     )
@@ -85,17 +99,10 @@ def test_focus_raises_when_sway_has_no_editor_window(tmp_path: Path) -> None:
         adapter.focus(build_session())
 
 
-def test_focus_picks_lowest_id_when_multiple_editor_windows_exist(tmp_path: Path) -> None:
+def test_focus_picks_lowest_id_when_multiple_marked_editor_windows_exist(tmp_path: Path) -> None:
     runner = StubProcessRunner([subprocess.CompletedProcess(("nvim",), 0, "", "")])
     transport = StubKittyTransport([])
-    sway = StubSwayAdapter(
-        [
-            _editor_window(31),
-            _editor_window(29),
-            _editor_window(30),
-            SwayWindow(id=28, workspace_name="p:/tmp/demo", app_id="kitty", window_class=None),
-        ]
-    )
+    sway = StubSwayAdapter([_marked_editor(31), _marked_editor(29), _marked_editor(30)])
     adapter = SharedNeovimEditorAdapter(
         sway=sway,
         kitty_transport=transport,
@@ -106,6 +113,46 @@ def test_focus_picks_lowest_id_when_multiple_editor_windows_exist(tmp_path: Path
     adapter.focus(build_session())
 
     assert sway.focused == [29]
+    assert sway.marked == []
+
+
+def test_focus_marks_unmarked_editor_on_first_sighting(tmp_path: Path) -> None:
+    runner = StubProcessRunner([subprocess.CompletedProcess(("nvim",), 0, "", "")])
+    transport = StubKittyTransport([])
+    sway = StubSwayAdapter([_unmarked_editor(42)])
+    adapter = SharedNeovimEditorAdapter(
+        sway=sway,
+        kitty_transport=transport,
+        process_runner=runner,
+        runtime_dir=tmp_path / "runtime",
+    )
+
+    adapter.focus(build_session())
+
+    assert sway.marked == [(42, "_hop_editor:demo")]
+    assert sway.focused == [42]
+
+
+def test_focus_skips_unmarked_editor_belonging_to_a_different_session(tmp_path: Path) -> None:
+    runner = StubProcessRunner([subprocess.CompletedProcess(("nvim",), 0, "", "")])
+    transport = StubKittyTransport([])
+    foreign_editor = SwayWindow(
+        id=42,
+        workspace_name=build_session().workspace_name,
+        app_id="hop:editor",
+        window_class=None,
+        marks=("_hop_editor:other",),
+    )
+    sway = StubSwayAdapter([foreign_editor])
+    adapter = SharedNeovimEditorAdapter(
+        sway=sway,
+        kitty_transport=transport,
+        process_runner=runner,
+        runtime_dir=tmp_path / "runtime",
+    )
+
+    with pytest.raises(NeovimCommandError, match="no editor window"):
+        adapter.focus(build_session())
 
 
 def test_focus_matches_xwayland_editor_via_window_class(tmp_path: Path) -> None:
@@ -115,9 +162,9 @@ def test_focus_matches_xwayland_editor_via_window_class(tmp_path: Path) -> None:
         [
             SwayWindow(
                 id=42,
-                workspace_name="p:/tmp/demo",
+                workspace_name=build_session().workspace_name,
                 app_id=None,
-                window_class="hop:demo:editor",
+                window_class="hop:editor",
             )
         ]
     )
@@ -130,6 +177,7 @@ def test_focus_matches_xwayland_editor_via_window_class(tmp_path: Path) -> None:
 
     adapter.focus(build_session())
 
+    assert sway.marked == [(42, "_hop_editor:demo")]
     assert sway.focused == [42]
 
 
@@ -170,7 +218,7 @@ def test_open_target_raises_stderr_when_remote_send_fails(tmp_path: Path) -> Non
     )
     transport = StubKittyTransport([])
     adapter = SharedNeovimEditorAdapter(
-        sway=StubSwayAdapter([_editor_window(31)]),
+        sway=StubSwayAdapter([_marked_editor(31)]),
         kitty_transport=transport,
         process_runner=runner,
         runtime_dir=address.parent,

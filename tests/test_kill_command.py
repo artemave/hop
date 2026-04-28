@@ -63,7 +63,7 @@ def test_kill_session_closes_browser_window_by_sway_mark(tmp_path: Path) -> None
         workspace_name="p:/other/workspace",
         app_id="brave-browser",
         window_class=None,
-        marks=("hop_browser:demo",),
+        marks=("_hop_browser:demo",),
     )
     sway = StubSwayAdapter(windows=(browser_window,))
     kitty = StubKittyAdapter()
@@ -83,7 +83,7 @@ def test_kill_session_closes_browser_that_drifted_to_another_workspace(tmp_path:
         workspace_name="p:/some/other/project",
         app_id="firefox",
         window_class=None,
-        marks=("hop_browser:demo",),
+        marks=("_hop_browser:demo",),
     )
     sway = StubSwayAdapter(workspaces=(workspace_name,), windows=(browser_window,))
     kitty = StubKittyAdapter()

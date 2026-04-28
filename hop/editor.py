@@ -15,7 +15,8 @@ from hop.sway import SwayIpcAdapter, SwayWindow
 
 NVIM_COMMAND = "nvim"
 EDITOR_ROLE = "editor"
-HOP_EDITOR_VAR = "hop_editor"
+EDITOR_OS_WINDOW_NAME = f"hop:{EDITOR_ROLE}"
+EDITOR_MARK_PREFIX = "_hop_editor:"
 EDITOR_READY_TIMEOUT_SECONDS = 5.0
 EDITOR_READY_POLL_INTERVAL_SECONDS = 0.05
 DEFAULT_REMOTE_CHECK_EXPRESSION = "1"
@@ -37,6 +38,8 @@ class EditorSwayAdapter(Protocol):
     def list_windows(self) -> Sequence[SwayWindow]: ...
 
     def focus_window(self, window_id: int) -> None: ...
+
+    def mark_window(self, window_id: int, mark: str) -> None: ...
 
 
 class SharedNeovimEditorAdapter:
@@ -80,17 +83,38 @@ class SharedNeovimEditorAdapter:
         # change escalates to a workspace switch when the editor lives on a
         # different Sway workspace than the caller — e.g. when the kitten
         # dispatches a file or URL from a terminal session.
-        app_id = _editor_os_window_name(session)
-        matches = [
-            window
-            for window in self._sway.list_windows()
-            if window.app_id == app_id or window.window_class == app_id
-        ]
-        if not matches:
+        window = self._find_editor_window(session)
+        if window is None:
             msg = f"Sway has no editor window for session {session.session_name!r}."
             raise NeovimCommandError(msg)
-        window = min(matches, key=lambda candidate: candidate.id)
         self._sway.focus_window(window.id)
+
+    def _find_editor_window(self, session: ProjectSession) -> SwayWindow | None:
+        # The session's editor is identified across hop runs by a Sway mark.
+        # On first sighting (or after a hop crash that lost the mark) fall back
+        # to discovering the unmarked editor on this session's workspace, then
+        # re-mark it for fast lookup later — and to survive drift onto other
+        # workspaces.
+        mark = _editor_mark(session)
+        windows = list(self._sway.list_windows())
+
+        marked = [window for window in windows if mark in window.marks]
+        if marked:
+            return min(marked, key=lambda candidate: candidate.id)
+
+        candidates = [
+            window
+            for window in windows
+            if (window.app_id == EDITOR_OS_WINDOW_NAME or window.window_class == EDITOR_OS_WINDOW_NAME)
+            and window.workspace_name == session.workspace_name
+            and not any(other_mark.startswith(EDITOR_MARK_PREFIX) for other_mark in window.marks)
+        ]
+        if not candidates:
+            return None
+
+        window = min(candidates, key=lambda candidate: candidate.id)
+        self._sway.mark_window(window.id, mark)
+        return window
 
     def _launch_editor(self, session: ProjectSession, *, address: Path) -> None:
         self._transport.send_command(
@@ -103,8 +127,7 @@ class SharedNeovimEditorAdapter:
                 "allow_remote_control": True,
                 "window_title": EDITOR_ROLE,
                 "os_window_title": EDITOR_ROLE,
-                "os_window_name": _editor_os_window_name(session),
-                "var": [f"{HOP_EDITOR_VAR}=1"],
+                "os_window_name": EDITOR_OS_WINDOW_NAME,
             },
         )
 
@@ -197,5 +220,5 @@ def _remove_stale_socket(address: Path) -> None:
         address.unlink(missing_ok=True)
 
 
-def _editor_os_window_name(session: ProjectSession) -> str:
-    return f"hop:{session.session_name}:{EDITOR_ROLE}"
+def _editor_mark(session: ProjectSession) -> str:
+    return f"{EDITOR_MARK_PREFIX}{session.session_name}"

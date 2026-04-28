@@ -102,7 +102,7 @@ def test_ensure_browser_focuses_existing_session_window() -> None:
                 workspace_name="p:demo",
                 app_id="brave-browser",
                 window_class=None,
-                marks=("hop_browser:demo",),
+                marks=("_hop_browser:demo",),
             )
         ]
     )
@@ -128,7 +128,7 @@ def test_ensure_browser_reattaches_drifted_session_window_before_focusing() -> N
                 workspace_name="scratch",
                 app_id="brave-browser",
                 window_class=None,
-                marks=("hop_browser:demo",),
+                marks=("_hop_browser:demo",),
             )
         ]
     )
@@ -152,7 +152,7 @@ def test_ensure_browser_opens_url_in_existing_session_window() -> None:
                 workspace_name="p:demo",
                 app_id="brave-browser",
                 window_class=None,
-                marks=("hop_browser:demo",),
+                marks=("_hop_browser:demo",),
             )
         ]
     )
@@ -199,7 +199,7 @@ def test_ensure_browser_launches_new_window_marks_it_and_focuses_it() -> None:
         )
     ]
     assert sway.moves == [(41, "p:demo")]
-    assert sway.marks == [(41, "hop_browser:demo")]
+    assert sway.marks == [(41, "_hop_browser:demo")]
     assert sway.focused_window_ids == [41]
 
 
@@ -242,7 +242,7 @@ def test_adapter_resolves_default_browser_desktop_entry(tmp_path: Path) -> None:
                 workspace_name="p:demo",
                 app_id="brave-browser",
                 window_class=None,
-                marks=("hop_browser:demo",),
+                marks=("_hop_browser:demo",),
             )
         ]
     )

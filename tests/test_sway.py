@@ -118,7 +118,7 @@ def test_list_windows_flattens_the_sway_tree_with_workspace_context() -> None:
                                 {
                                     "id": 17,
                                     "app_id": "brave-browser",
-                                    "marks": ["hop_browser:demo"],
+                                    "marks": ["_hop_browser:demo"],
                                     "focused": True,
                                 }
                             ],
@@ -144,7 +144,7 @@ def test_list_windows_flattens_the_sway_tree_with_workspace_context() -> None:
             workspace_name="p:demo",
             app_id="brave-browser",
             window_class=None,
-            marks=("hop_browser:demo",),
+            marks=("_hop_browser:demo",),
             focused=True,
         ),
         SwayWindow(
@@ -164,12 +164,12 @@ def test_window_commands_use_sway_criteria_by_container_id() -> None:
 
     sway.focus_window(17)
     sway.move_window_to_workspace(17, "p:demo")
-    sway.mark_window(17, "hop_browser:demo")
+    sway.mark_window(17, "_hop_browser:demo")
 
     assert transport.requests == [
         (SwayMessageType.RUN_COMMAND, b"[con_id=17] focus"),
         (SwayMessageType.RUN_COMMAND, b'[con_id=17] move container to workspace "p:demo"'),
-        (SwayMessageType.RUN_COMMAND, b'[con_id=17] mark --add "hop_browser:demo"'),
+        (SwayMessageType.RUN_COMMAND, b'[con_id=17] mark --add "_hop_browser:demo"'),
     ]
 
 

@@ -15,7 +15,7 @@ from hop.sway import SwayWindow
 DEFAULT_BROWSER_DISCOVERY_TIMEOUT_SECONDS = 5.0
 DEFAULT_BROWSER_DISCOVERY_POLL_INTERVAL_SECONDS = 0.05
 DEFAULT_BROWSER_SETTINGS_COMMAND = ("xdg-settings", "get", "default-web-browser")
-DEFAULT_BROWSER_MARK_PREFIX = "hop_browser:"
+DEFAULT_BROWSER_MARK_PREFIX = "_hop_browser:"
 DEFAULT_BLANK_BROWSER_URL = "about:blank"
 DEFAULT_NEW_WINDOW_FLAG = "--new-window"
 DEFAULT_XDG_DATA_DIRS = ("/usr/local/share", "/usr/share")

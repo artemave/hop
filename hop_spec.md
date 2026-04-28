@@ -128,7 +128,7 @@ Consequences:
 
 ## Window tagging
 
-Hop tags only one piece of metadata on each Kitty window it manages: the **role**, stored as the `hop_role` user var (with the editor window also carrying `hop_editor=1`). No `HOP_*` environment variables are exported into role terminals — external tools should consume `hop list --json` to recover session-name → project-root mapping rather than reading shell env. Session and project-root identity live entirely in (a) the per-session Kitty socket address, and (b) the per-session state files.
+Hop tags one piece of metadata on each Kitty role window: the **role**, stored as the `hop_role` user var. Kitty OS window names are session-agnostic (`hop:<role>`, e.g. `hop:shell`, `hop:editor`) — they do not include the session name, so external tools that read Sway's `app_id` only see the role. Per-session identification of hop-managed Sway windows (browser, editor) happens through Sway marks of the form `_hop_<role>:<session>` (leading underscore so Sway hides them from window titles). No `HOP_*` environment variables are exported into role terminals — external tools should consume `hop list --json` to recover session-name → project-root mapping rather than reading shell env. Kitty session and project-root identity live entirely in (a) the per-session Kitty socket address, and (b) the per-session state files.
 
 ---
 
@@ -410,7 +410,7 @@ Changing vigun is outside of the scope of hop, but we need to have a contract do
 
 - Neovim is started when needed (e.g. via `hop edit`)
 - the shared editor is addressed through a deterministic per-session remote server address
-- the editor window is rediscovered through its stable Sway `app_id` (the Kitty OS window name `hop:<session>:editor`) so repeated `hop edit` calls — and kitten dispatches into the editor — focus the same OS window via Sway and switch to its workspace when needed
+- the editor window is rediscovered through its `_hop_editor:<session>` Sway mark (set on first sighting via `app_id == hop:editor` on `p:<session>`) so repeated `hop edit` calls — and kitten dispatches into the editor — focus the same OS window via Sway and switch to its workspace when needed, even if the user dragged the editor onto a different workspace
 - if Neovim is closed (`:qa`), it can be recreated by:
 
 ```bash
