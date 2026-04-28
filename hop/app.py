@@ -181,6 +181,6 @@ def build_default_services() -> HopServices:
     return HopServices(
         sway=sway,
         kitty=KittyRemoteControlAdapter(on_session_bootstrap=record_session),
-        neovim=SharedNeovimEditorAdapter(),
+        neovim=SharedNeovimEditorAdapter(sway=sway),
         browser=SessionBrowserAdapter(sway=sway),
     )

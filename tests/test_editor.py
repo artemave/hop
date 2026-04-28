@@ -5,6 +5,7 @@ from typing import Any, Mapping, Sequence, cast
 
 from hop.editor import SharedNeovimEditorAdapter, build_remote_open_command
 from hop.session import ProjectSession
+from hop.sway import SwayWindow
 
 
 class StubKittyTransport:
@@ -45,12 +46,36 @@ class StubProcessRunner:
         raise AssertionError(f"Unexpected process command: {args}")
 
 
+class StubSwayAdapter:
+    def __init__(self, windows: Sequence[SwayWindow] = ()) -> None:
+        self._windows: list[SwayWindow] = list(windows)
+        self.focused: list[int] = []
+
+    def list_windows(self) -> Sequence[SwayWindow]:
+        return tuple(self._windows)
+
+    def focus_window(self, window_id: int) -> None:
+        self.focused.append(window_id)
+
+    def add_window(self, window: SwayWindow) -> None:
+        self._windows.append(window)
+
+
 def build_session() -> ProjectSession:
     project_root = Path("/tmp/demo").resolve()
     return ProjectSession(
         project_root=project_root,
         session_name="demo",
         workspace_name=f"p:{project_root}",
+    )
+
+
+def build_editor_window(window_id: int) -> SwayWindow:
+    return SwayWindow(
+        id=window_id,
+        workspace_name="p:/tmp/demo",
+        app_id="hop:demo:editor",
+        window_class=None,
     )
 
 
@@ -65,29 +90,10 @@ def test_focus_reuses_existing_session_editor_window(tmp_path: Path) -> None:
     socket_name = _session_socket_name(project_root)
     address = str((tmp_path / "hop" / socket_name).resolve())
     runner.activate(address)
-    transport = StubKittyTransport(
-        [
-            {
-                "ok": True,
-                "data": [
-                    {
-                        "tabs": [
-                            {
-                                "windows": [
-                                    {
-                                        "id": 23,
-                                        "user_vars": {"hop_editor": "1"},
-                                    }
-                                ]
-                            }
-                        ]
-                    }
-                ],
-            },
-            {"ok": True},
-        ]
-    )
+    transport = StubKittyTransport([])
+    sway = StubSwayAdapter([build_editor_window(23)])
     adapter = SharedNeovimEditorAdapter(
+        sway=sway,
         kitty_transport=transport,
         process_runner=runner,
         runtime_dir=tmp_path / "hop",
@@ -98,19 +104,19 @@ def test_focus_reuses_existing_session_editor_window(tmp_path: Path) -> None:
     assert runner.commands == [
         ["nvim", "--server", address, "--remote-expr", "1"],
     ]
-    assert transport.commands == [
-        ("ls", {"output_format": "json"}),
-        ("focus-window", {"match": "id:23"}),
-    ]
+    assert transport.commands == []
+    assert sway.focused == [23]
 
 
 def test_focus_recreates_editor_after_neovim_exits(tmp_path: Path) -> None:
     runner = StubProcessRunner()
+    sway = StubSwayAdapter()
 
     def activate_server(payload: dict[str, object]) -> None:
         args = payload["args"]
         assert isinstance(args, list)
         runner.activate(str(cast(list[Any], args)[2]))
+        sway.add_window(build_editor_window(101))
 
     transport = StubKittyTransport([{"ok": True}], on_launch=activate_server)
     runtime_dir = tmp_path / "hop"
@@ -120,6 +126,7 @@ def test_focus_recreates_editor_after_neovim_exits(tmp_path: Path) -> None:
     stale_socket = runtime_dir / socket_name
     stale_socket.write_text("stale")
     adapter = SharedNeovimEditorAdapter(
+        sway=sway,
         kitty_transport=transport,
         process_runner=runner,
         runtime_dir=runtime_dir,
@@ -147,8 +154,8 @@ def test_focus_recreates_editor_after_neovim_exits(tmp_path: Path) -> None:
                 "var": ["hop_editor=1"],
             },
         ),
-        ("ls", {"output_format": "json"}),
     ]
+    assert sway.focused == [101]
 
 
 def test_open_target_focuses_editor_and_routes_path_with_line(tmp_path: Path) -> None:
@@ -157,29 +164,10 @@ def test_open_target_focuses_editor_and_routes_path_with_line(tmp_path: Path) ->
     socket_name = _session_socket_name(project_root)
     address = str((tmp_path / "hop" / socket_name).resolve())
     runner.activate(address)
-    transport = StubKittyTransport(
-        [
-            {
-                "ok": True,
-                "data": [
-                    {
-                        "tabs": [
-                            {
-                                "windows": [
-                                    {
-                                        "id": 31,
-                                        "user_vars": {"hop_editor": "1"},
-                                    }
-                                ]
-                            }
-                        ]
-                    }
-                ],
-            },
-            {"ok": True},
-        ]
-    )
+    transport = StubKittyTransport([])
+    sway = StubSwayAdapter([build_editor_window(31)])
     adapter = SharedNeovimEditorAdapter(
+        sway=sway,
         kitty_transport=transport,
         process_runner=runner,
         runtime_dir=tmp_path / "hop",
@@ -197,10 +185,8 @@ def test_open_target_focuses_editor_and_routes_path_with_line(tmp_path: Path) ->
             "<Cmd>execute 'drop ' . fnameescape('app/models/user''s file.rb')<CR><Cmd>42<CR>",
         ],
     ]
-    assert transport.commands == [
-        ("ls", {"output_format": "json"}),
-        ("focus-window", {"match": "id:31"}),
-    ]
+    assert transport.commands == []
+    assert sway.focused == [31]
 
 
 def testbuild_remote_open_command_preserves_plain_paths() -> None:

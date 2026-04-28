@@ -1,18 +1,17 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import subprocess
 import time
-from dataclasses import dataclass
 from pathlib import Path
 from tempfile import gettempdir
-from typing import Any, Mapping, Protocol, Sequence, cast
+from typing import Protocol, Sequence
 
 from hop.errors import HopError
-from hop.kitty import KittyCommandError, KittyTransport, SocketKittyTransport
+from hop.kitty import KittyTransport, SocketKittyTransport
 from hop.session import ProjectSession
+from hop.sway import SwayIpcAdapter, SwayWindow
 
 NVIM_COMMAND = "nvim"
 EDITOR_ROLE = "editor"
@@ -34,22 +33,24 @@ class ProcessRunner(Protocol):
     def run(self, args: Sequence[str]) -> subprocess.CompletedProcess[str]: ...
 
 
-@dataclass(frozen=True, slots=True)
-class EditorWindow:
-    id: int
-    is_editor: bool
+class EditorSwayAdapter(Protocol):
+    def list_windows(self) -> Sequence[SwayWindow]: ...
+
+    def focus_window(self, window_id: int) -> None: ...
 
 
 class SharedNeovimEditorAdapter:
     def __init__(
         self,
         *,
+        sway: EditorSwayAdapter | None = None,
         kitty_transport: KittyTransport | None = None,
         process_runner: ProcessRunner | None = None,
         runtime_dir: Path | str | None = None,
         ready_timeout_seconds: float = EDITOR_READY_TIMEOUT_SECONDS,
         ready_poll_interval_seconds: float = EDITOR_READY_POLL_INTERVAL_SECONDS,
     ) -> None:
+        self._sway: EditorSwayAdapter = sway or SwayIpcAdapter()
         self._transport: KittyTransport = kitty_transport or SocketKittyTransport()
         self._process_runner = process_runner or _SubprocessRunner()
         self._runtime_dir = _resolve_runtime_dir(runtime_dir)
@@ -75,10 +76,21 @@ class SharedNeovimEditorAdapter:
         self._wait_for_server(address)
 
     def _focus_editor_window(self, session: ProjectSession) -> None:
-        window = self._find_editor_window(session)
-        if window is None:
-            return
-        self._transport.send_command("focus-window", {"match": f"id:{window.id}"})
+        # Sway-driven focus (rather than Kitty's `focus-window`) so the focus
+        # change escalates to a workspace switch when the editor lives on a
+        # different Sway workspace than the caller — e.g. when the kitten
+        # dispatches a file or URL from a terminal session.
+        app_id = _editor_os_window_name(session)
+        matches = [
+            window
+            for window in self._sway.list_windows()
+            if window.app_id == app_id or window.window_class == app_id
+        ]
+        if not matches:
+            msg = f"Sway has no editor window for session {session.session_name!r}."
+            raise NeovimCommandError(msg)
+        window = min(matches, key=lambda candidate: candidate.id)
+        self._sway.focus_window(window.id)
 
     def _launch_editor(self, session: ProjectSession, *, address: Path) -> None:
         self._transport.send_command(
@@ -95,33 +107,6 @@ class SharedNeovimEditorAdapter:
                 "var": [f"{HOP_EDITOR_VAR}=1"],
             },
         )
-
-    def _find_editor_window(self, session: ProjectSession) -> EditorWindow | None:
-        response = self._transport.send_command("ls", {"output_format": "json"})
-        payload = _coerce_response_data(response)
-        if not isinstance(payload, list):
-            raise KittyCommandError("Kitty returned an invalid window listing.")
-
-        windows: list[EditorWindow] = []
-        for os_window in cast(list[Any], payload):
-            if not isinstance(os_window, Mapping):
-                continue
-            for tab in cast(Any, os_window).get("tabs", ()):
-                if not isinstance(tab, Mapping):
-                    continue
-                for window_entry in cast(Any, tab).get("windows", ()):
-                    if not isinstance(window_entry, Mapping):
-                        continue
-                    window = _parse_editor_window(cast(Any, window_entry))
-                    if window is None:
-                        continue
-                    if window.is_editor:
-                        windows.append(window)
-
-        if not windows:
-            return None
-
-        return min(windows, key=lambda window: window.id)
 
     def _server_is_running(self, address: Path) -> bool:
         result = self._process_runner.run(
@@ -210,50 +195,6 @@ def _quote_vimscript_string(value: str) -> str:
 def _remove_stale_socket(address: Path) -> None:
     if address.exists() or address.is_socket():
         address.unlink(missing_ok=True)
-
-
-def _coerce_response_data(response: object) -> Any:
-    if isinstance(response, Mapping):
-        data = cast(Any, response).get("data")
-    else:
-        data = response
-
-    if data is None:
-        return []
-
-    if isinstance(data, str):
-        return json.loads(data)
-
-    return data
-
-
-def _parse_editor_window(window_entry: Mapping[str, object]) -> EditorWindow | None:
-    window_id = window_entry.get("id")
-    if not isinstance(window_id, int):
-        return None
-
-    user_vars = _coerce_string_mapping(
-        window_entry.get("user_vars") or window_entry.get("user_variables") or window_entry.get("vars")
-    )
-
-    return EditorWindow(id=window_id, is_editor=user_vars.get(HOP_EDITOR_VAR) == "1")
-
-
-def _coerce_string_mapping(value: Any) -> dict[str, str]:
-    if isinstance(value, Mapping):
-        m = cast(Any, value)
-        return {str(key): str(item) for key, item in m.items() if isinstance(item, str)}
-
-    if isinstance(value, list):
-        result: dict[str, str] = {}
-        for item in cast(list[Any], value):
-            if not isinstance(item, str) or "=" not in item:
-                continue
-            key, item_value = item.split("=", 1)
-            result[key] = item_value
-        return result
-
-    return {}
 
 
 def _editor_os_window_name(session: ProjectSession) -> str:

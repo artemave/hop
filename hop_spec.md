@@ -410,7 +410,7 @@ Changing vigun is outside of the scope of hop, but we need to have a contract do
 
 - Neovim is started when needed (e.g. via `hop edit`)
 - the shared editor is addressed through a deterministic per-session remote server address
-- the editor window is rediscovered through stable Kitty metadata so repeated `hop edit` calls focus the same OS window
+- the editor window is rediscovered through its stable Sway `app_id` (the Kitty OS window name `hop:<session>:editor`) so repeated `hop edit` calls — and kitten dispatches into the editor — focus the same OS window via Sway and switch to its workspace when needed
 - if Neovim is closed (`:qa`), it can be recreated by:
 
 ```bash

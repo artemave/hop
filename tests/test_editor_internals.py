@@ -1,6 +1,5 @@
 # pyright: reportPrivateUsage=false
 
-import json
 import subprocess
 from pathlib import Path
 from typing import Mapping, Sequence
@@ -9,15 +8,12 @@ import pytest
 from hop.editor import (
     NeovimCommandError,
     SharedNeovimEditorAdapter,
-    _coerce_response_data,
-    _coerce_string_mapping,
-    _parse_editor_window,
     _remove_stale_socket,
     _resolve_runtime_dir,
     _SubprocessRunner,
 )
-from hop.kitty import KittyCommandError
 from hop.session import ProjectSession
+from hop.sway import SwayWindow
 
 
 class StubKittyTransport:
@@ -45,6 +41,18 @@ class StubProcessRunner:
         return self._responses.pop(0)
 
 
+class StubSwayAdapter:
+    def __init__(self, windows: Sequence[SwayWindow] = ()) -> None:
+        self._windows: list[SwayWindow] = list(windows)
+        self.focused: list[int] = []
+
+    def list_windows(self) -> Sequence[SwayWindow]:
+        return tuple(self._windows)
+
+    def focus_window(self, window_id: int) -> None:
+        self.focused.append(window_id)
+
+
 def build_session() -> ProjectSession:
     project_root = Path("/tmp/demo").resolve()
     return ProjectSession(
@@ -54,59 +62,42 @@ def build_session() -> ProjectSession:
     )
 
 
-def test_find_editor_window_rejects_invalid_listing_payload(tmp_path: Path) -> None:
+def _editor_window(window_id: int, *, app_id: str = "hop:demo:editor") -> SwayWindow:
+    return SwayWindow(
+        id=window_id,
+        workspace_name="p:/tmp/demo",
+        app_id=app_id,
+        window_class=None,
+    )
+
+
+def test_focus_raises_when_sway_has_no_editor_window(tmp_path: Path) -> None:
     runner = StubProcessRunner([subprocess.CompletedProcess(("nvim",), 0, "", "")])
-    transport = StubKittyTransport([{"ok": True, "data": {}}])
+    transport = StubKittyTransport([])
     adapter = SharedNeovimEditorAdapter(
+        sway=StubSwayAdapter([]),
         kitty_transport=transport,
         process_runner=runner,
         runtime_dir=tmp_path / "runtime",
     )
 
-    with pytest.raises(KittyCommandError, match="invalid window listing"):
+    with pytest.raises(NeovimCommandError, match="no editor window"):
         adapter.focus(build_session())
 
 
-def test_find_editor_window_skips_malformed_entries_and_uses_lowest_matching_id(tmp_path: Path) -> None:
+def test_focus_picks_lowest_id_when_multiple_editor_windows_exist(tmp_path: Path) -> None:
     runner = StubProcessRunner([subprocess.CompletedProcess(("nvim",), 0, "", "")])
-    transport = StubKittyTransport(
+    transport = StubKittyTransport([])
+    sway = StubSwayAdapter(
         [
-            {
-                "ok": True,
-                "data": [
-                    "invalid",
-                    {"tabs": ["invalid"]},
-                    {
-                        "tabs": [
-                            {
-                                "windows": [
-                                    "invalid",
-                                    {
-                                        "id": "31",
-                                        "user_vars": {"hop_editor": "1"},
-                                    },
-                                    {
-                                        "id": 29,
-                                        "user_vars": {"hop_role": "shell"},
-                                    },
-                                    {
-                                        "id": 31,
-                                        "user_vars": {"hop_editor": "1"},
-                                    },
-                                    {
-                                        "id": 30,
-                                        "user_vars": {"hop_editor": "1"},
-                                    },
-                                ]
-                            }
-                        ]
-                    },
-                ],
-            },
-            {"ok": True},
+            _editor_window(31),
+            _editor_window(29),
+            _editor_window(30),
+            SwayWindow(id=28, workspace_name="p:/tmp/demo", app_id="kitty", window_class=None),
         ]
     )
     adapter = SharedNeovimEditorAdapter(
+        sway=sway,
         kitty_transport=transport,
         process_runner=runner,
         runtime_dir=tmp_path / "runtime",
@@ -114,10 +105,32 @@ def test_find_editor_window_skips_malformed_entries_and_uses_lowest_matching_id(
 
     adapter.focus(build_session())
 
-    assert transport.commands == [
-        ("ls", {"output_format": "json"}),
-        ("focus-window", {"match": "id:30"}),
-    ]
+    assert sway.focused == [29]
+
+
+def test_focus_matches_xwayland_editor_via_window_class(tmp_path: Path) -> None:
+    runner = StubProcessRunner([subprocess.CompletedProcess(("nvim",), 0, "", "")])
+    transport = StubKittyTransport([])
+    sway = StubSwayAdapter(
+        [
+            SwayWindow(
+                id=42,
+                workspace_name="p:/tmp/demo",
+                app_id=None,
+                window_class="hop:demo:editor",
+            )
+        ]
+    )
+    adapter = SharedNeovimEditorAdapter(
+        sway=sway,
+        kitty_transport=transport,
+        process_runner=runner,
+        runtime_dir=tmp_path / "runtime",
+    )
+
+    adapter.focus(build_session())
+
+    assert sway.focused == [42]
 
 
 def test_wait_for_server_times_out_when_neovim_never_becomes_ready(tmp_path: Path) -> None:
@@ -129,6 +142,7 @@ def test_wait_for_server_times_out_when_neovim_never_becomes_ready(tmp_path: Pat
     )
     transport = StubKittyTransport([{"ok": True}])
     adapter = SharedNeovimEditorAdapter(
+        sway=StubSwayAdapter(),
         kitty_transport=transport,
         process_runner=runner,
         runtime_dir=tmp_path / "runtime",
@@ -154,28 +168,9 @@ def test_open_target_raises_stderr_when_remote_send_fails(tmp_path: Path) -> Non
             subprocess.CompletedProcess(("nvim",), 1, "", "permission denied\n"),
         ]
     )
-    transport = StubKittyTransport(
-        [
-            {
-                "ok": True,
-                "data": [
-                    {
-                        "tabs": [
-                            {
-                                "windows": [
-                                    {
-                                        "id": 31,
-                                        "user_vars": {"hop_editor": "1"},
-                                    }
-                                ]
-                            }
-                        ]
-                    }
-                ],
-            }
-        ]
-    )
+    transport = StubKittyTransport([])
     adapter = SharedNeovimEditorAdapter(
+        sway=StubSwayAdapter([_editor_window(31)]),
         kitty_transport=transport,
         process_runner=runner,
         runtime_dir=address.parent,
@@ -196,25 +191,6 @@ def test_resolve_runtime_dir_falls_back_to_tempdir(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr("hop.editor.gettempdir", lambda: str(tmp_path))
 
     assert _resolve_runtime_dir(None) == (tmp_path / "hop").resolve()
-
-
-def test_coerce_response_data_handles_mapping_string_and_passthrough_values() -> None:
-    assert _coerce_response_data({"data": None}) == []
-    assert _coerce_response_data({"data": json.dumps([1, 2])}) == [1, 2]
-    assert _coerce_response_data([1, 2]) == [1, 2]
-
-
-def test_parse_editor_window_and_helper_functions_cover_list_and_none_fallbacks() -> None:
-    assert _parse_editor_window({"id": "not-an-int"}) is None
-
-    parsed = _parse_editor_window({"id": 17, "vars": ["hop_editor=1", "ignored"]})
-
-    assert parsed is not None
-    assert parsed.id == 17
-    assert parsed.is_editor is True
-    assert _coerce_string_mapping({"one": "1", "two": 2}) == {"one": "1"}
-    assert _coerce_string_mapping(["one=1", "two=2", "ignored"]) == {"one": "1", "two": "2"}
-    assert _coerce_string_mapping(object()) == {}
 
 
 def test_remove_stale_socket_ignores_missing_paths(tmp_path: Path) -> None:
