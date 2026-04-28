@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 from hop.commands.open_selection import open_selection_in_window
+from hop.kitty import session_socket_address
 from hop.session import ProjectSession
 from hop.state import SessionState
 
@@ -36,7 +37,7 @@ def test_open_selection_in_window_routes_files_to_shared_editor(tmp_path: Path) 
     session = open_selection_in_window(
         "app/models/user.rb:7",
         source_cwd=terminal_cwd.resolve(),
-        listen_on="unix:@hop-demo",
+        listen_on=session_socket_address("demo"),
         neovim=neovim,
         browser=browser,
         sessions_loader=lambda: {
@@ -61,7 +62,7 @@ def test_open_selection_in_window_routes_urls_to_session_browser(tmp_path: Path)
     session = open_selection_in_window(
         "https://example.com",
         source_cwd=terminal_cwd.resolve(),
-        listen_on="unix:@hop-demo",
+        listen_on=session_socket_address("demo"),
         neovim=neovim,
         browser=browser,
         sessions_loader=lambda: {
@@ -85,7 +86,7 @@ def test_open_selection_in_window_ignores_unresolvable_matches(tmp_path: Path) -
     session = open_selection_in_window(
         "missing/file.rb:4",
         source_cwd=terminal_cwd.resolve(),
-        listen_on="unix:@hop-demo",
+        listen_on=session_socket_address("demo"),
         neovim=neovim,
         browser=browser,
         sessions_loader=lambda: {
@@ -105,7 +106,7 @@ def test_open_selection_in_window_logs_when_listen_on_is_not_a_hop_socket(
         result = open_selection_in_window(
             "app/models/user.rb",
             source_cwd=tmp_path.resolve(),
-            listen_on="unix:@something-else",
+            listen_on="unix:@something-else",  # not a hop filesystem socket
             neovim=StubNeovimAdapter(),
             browser=StubBrowserAdapter(),
             sessions_loader=lambda: {},
@@ -142,7 +143,7 @@ def test_open_selection_in_window_logs_when_source_cwd_missing(
         result = open_selection_in_window(
             "app/models/user.rb",
             source_cwd=None,
-            listen_on="unix:@hop-demo",
+            listen_on=session_socket_address("demo"),
             neovim=StubNeovimAdapter(),
             browser=StubBrowserAdapter(),
             sessions_loader=lambda: {
@@ -165,7 +166,7 @@ def test_open_selection_in_window_logs_when_target_does_not_resolve(
         result = open_selection_in_window(
             "missing/file.rb:4",
             source_cwd=terminal_cwd.resolve(),
-            listen_on="unix:@hop-demo",
+            listen_on=session_socket_address("demo"),
             neovim=StubNeovimAdapter(),
             browser=StubBrowserAdapter(),
             sessions_loader=lambda: {
@@ -175,6 +176,38 @@ def test_open_selection_in_window_logs_when_target_does_not_resolve(
 
     assert result is None
     assert any("could not resolve" in record.message for record in caplog.records)
+
+
+def test_open_selection_in_window_translates_terminal_cwd_via_base(tmp_path: Path) -> None:
+    project_root = tmp_path / "demo"
+    selected_file = project_root / "src" / "lib" / "foo.py"
+    selected_file.parent.mkdir(parents=True)
+    selected_file.write_text("print('hello')\n")
+
+    neovim = StubNeovimAdapter()
+    browser = StubBrowserAdapter()
+
+    class FakeBackend:
+        def translate_terminal_cwd(
+            self, _session: ProjectSession, cwd: Path
+        ) -> Path:
+            # Container path /workspace/src maps to <project_root>/src.
+            return project_root.resolve() / "src"
+
+    session = open_selection_in_window(
+        "lib/foo.py",
+        source_cwd=Path("/workspace/src"),
+        listen_on=session_socket_address("demo"),
+        neovim=neovim,
+        browser=browser,
+        sessions_loader=lambda: {
+            "demo": SessionState(name="demo", project_root=project_root.resolve()),
+        },
+        session_backend_for=lambda _session: FakeBackend(),  # type: ignore[arg-type]
+    )
+
+    assert session is not None
+    assert neovim.opened_targets == [("demo", str(selected_file.resolve()))]
 
 
 def test_open_selection_in_window_logs_dispatch_on_success(
@@ -190,7 +223,7 @@ def test_open_selection_in_window_logs_dispatch_on_success(
         result = open_selection_in_window(
             "app/models/user.rb:7",
             source_cwd=terminal_cwd.resolve(),
-            listen_on="unix:@hop-demo",
+            listen_on=session_socket_address("demo"),
             neovim=StubNeovimAdapter(),
             browser=StubBrowserAdapter(),
             sessions_loader=lambda: {

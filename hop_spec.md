@@ -76,6 +76,36 @@ Each session has exactly one Neovim instance.
 
 ---
 
+### Session backend
+
+Each session has a **backend** that decides *where* its shells and editor run. The default is **host** (shells spawned by kitty as the user's default shell, neovim running on the host). Non-host backends are user-defined in `~/.config/hop/config.toml` and/or a project's `.hop.toml` — both files use the same `[backends.<name>]` schema and are merged at session entry. Each backend is a set of command-list templates hop runs at the appropriate lifecycle points:
+
+- `prepare` (optional) — argv hop runs once before bootstrapping kitty. Idempotent.
+- `shell` (required) — argv kitty uses to spawn each role terminal.
+- `editor` (required) — argv kitty uses to launch the shared neovim. Hop substitutes `{listen_addr}` with a host-visible socket path the host's `nvim --server <socket> --remote-…` calls can reach.
+- `teardown` (optional) — argv hop runs at `hop kill` after closing windows. Closing kitty windows first sends SIGHUP to in-backend shells so they exit cleanly before any teardown command runs.
+- `workspace` (optional) — argv whose stripped stdout is the in-backend path that maps to the host project root. Captured once at session creation and used for cwd translation in the kitten dispatch.
+
+Substitution placeholders supported inside any command list: `{listen_addr}` (only meaningful in `editor`), `{project_root}`.
+
+Backend selection at session creation:
+
+1. `hop --backend <name>` on the bare `hop` entry pins the named backend (or `"host"` to opt out). Pinning a name that isn't configured (and isn't `"host"`) raises `UnknownBackendError`.
+2. Otherwise auto-detect walks `[backends.<name>]` tables in global-config declaration order, running each backend's `default` command in the project root; the first that exits 0 wins. Backends without a `default` command are skipped during auto-detect.
+3. Fall back to **host** when nothing matches.
+
+Project config at `<project_root>/.hop.toml` uses the **same `[backends.<name>]` schema** as the global file. Hop merges both files when resolving the session backend: project entries come first in auto-detect order; same-named entries are field-merged with project fields winning; the merged entry takes the project's slot in the order. A backend whose merged fields lack `shell` or `editor` is unusable and dropped silently. The reserved name `"host"` cannot be defined in either file.
+
+Overriding `default` in a project file changes which backend wins auto-detect: a `["true"]` override forces this backend to match; a `["false"]` override skips it. There is no separate "pin a backend" knob in the project file — `default` overrides cover both selection and exclusion.
+
+The name `"host"` is reserved for the implicit fallback. An explicit `[backends.host]` table in either config file is ignored.
+
+The chosen backend (resolved commands + discovered workspace path) is persisted in `${XDG_RUNTIME_DIR}/hop/sessions/<name>.json` at session bootstrap. Every subsequent command against that session reads the persisted backend — auto-detect is not re-run mid-session, so global-config edits don't change a live session.
+
+For backends with a shared filesystem and a discovered workspace path, hop translates terminal cwds (e.g. `/workspace/...` for a devcontainer) back to host paths whenever the kitten dispatch resolves a file target from visible terminal output. The translation is a backend method, so the rest of the codebase (kitten, target resolver, commands) is backend-agnostic.
+
+The kitty per-session socket is a filesystem socket at `${XDG_RUNTIME_DIR}/hop/kitty-<session>.sock`. Linux abstract-namespace sockets (`unix:@…`) would not be reachable from inside a container's network namespace, so a filesystem socket is used even for host-backend sessions for forward-compatibility with future in-container hop callers.
+
 ### Browser (session-scoped)
 
 Each session may have a browser window.

@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from hop.backends import HostBackend
 from hop.commands.kill import kill_session
 from hop.kitty import KittyWindow
 from hop.session import ProjectSession
@@ -162,3 +163,51 @@ def test_kill_session_forgets_persisted_session_state(tmp_path: Path) -> None:
     kill_session(project_root, sway=sway, kitty=kitty, forget=forgotten.append)
 
     assert forgotten == ["demo"]
+
+
+def test_kill_session_calls_base_teardown_after_window_cleanup(tmp_path: Path) -> None:
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+
+    events: list[str] = []
+
+    class TrackingKitty(StubKittyAdapter):
+        def close_window(self, session_name: str, window_id: int) -> None:
+            events.append(f"close-{window_id}")
+            super().close_window(session_name, window_id)
+
+    class TrackingBackend:
+        def teardown(self, _session: ProjectSession) -> None:
+            events.append("teardown")
+
+    forgotten: list[str] = []
+
+    def track_forget(name: str) -> None:
+        events.append("forget")
+        forgotten.append(name)
+
+    sway = StubSwayAdapter()
+    kitty = TrackingKitty(window_ids=(7, 8))
+
+    kill_session(
+        project_root,
+        sway=sway,
+        kitty=kitty,
+        session_backend_for=lambda _session: TrackingBackend(),  # type: ignore[arg-type]
+        forget=track_forget,
+    )
+
+    assert events == ["close-7", "close-8", "teardown", "forget"]
+
+
+def test_kill_session_uses_host_base_by_default(tmp_path: Path) -> None:
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+
+    # Default backend must be a no-op; this just confirms kill_session doesn't blow up.
+    kill_session(
+        project_root,
+        sway=StubSwayAdapter(),
+        kitty=StubKittyAdapter(),
+        session_backend_for=lambda _session: HostBackend(),
+    )

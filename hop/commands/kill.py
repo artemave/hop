@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable, Protocol, Sequence
 
+from hop.backends import HostBackend, SessionBackend
 from hop.browser import DEFAULT_BROWSER_MARK_PREFIX
 from hop.kitty import KittyWindow
 from hop.session import ProjectSession, resolve_project_session
@@ -31,6 +32,7 @@ def kill_session(
     *,
     sway: KillSwayAdapter,
     kitty: KillKittyAdapter,
+    session_backend_for: Callable[[ProjectSession], SessionBackend] = lambda _session: HostBackend(),
     forget: Callable[[str], None] = forget_session,
 ) -> ProjectSession:
     session = resolve_project_session(cwd)
@@ -51,6 +53,11 @@ def kill_session(
     # This may close the terminal running hop kill, ending this process.
     for window in kitty.list_session_windows(session):
         kitty.close_window(session.session_name, window.id)
+
+    # Tear the backend down (e.g. compose down) after windows are closed so
+    # in-container shells get SIGHUP from the kitty close instead of being
+    # killed abruptly by `compose down`.
+    session_backend_for(session).teardown(session)
 
     forget(session.session_name)
 

@@ -4,8 +4,16 @@ import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, Sequence
+from typing import Callable, Protocol, Sequence
 
+from hop.backends import (
+    CommandBackend,
+    CommandRunner,
+    HostBackend,
+    SessionBackend,
+    backend_from_config,
+    select_backend,
+)
 from hop.browser import SessionBrowserAdapter
 from hop.commands import (
     BrowserCommand,
@@ -31,9 +39,23 @@ from hop.commands.session import (
 )
 from hop.commands.tail import tail_command
 from hop.commands.term import focus_terminal
+from hop.config import (
+    HopConfig,
+    load_global_config,
+    load_project_config,
+    merge_backends,
+)
 from hop.editor import SharedNeovimEditorAdapter
 from hop.kitty import KittyRemoteControlAdapter, KittyWindow, KittyWindowContext, KittyWindowState
 from hop.session import ProjectSession, resolve_project_session
+from hop.state import (
+    BackendRecord,
+    CommandBackendRecord,
+    HostBackendRecord,
+    SessionState,
+    load_sessions,
+    record_session,
+)
 from hop.sway import SwayIpcAdapter, SwayWindow
 
 
@@ -85,12 +107,137 @@ class BrowserAdapter(Protocol):
     def ensure_browser(self, session: ProjectSession, *, url: str | None) -> None: ...
 
 
+SessionBackendFactory = Callable[[ProjectSession], SessionBackend]
+
+
+class SessionBackendRegistry:
+    """Resolves the SessionBackend for a given session.
+
+    Lookup order:
+      1. In-process override set by execute_command for the duration of an
+         EnterSessionCommand (so first-entry resolution flows through to the
+         kitty adapter without changing every adapter signature).
+      2. Persisted session state at <sessions_dir>/<name>.json (set by
+         record_session at bootstrap time).
+      3. Otherwise fall back to host (no auto-detect outside session entry).
+
+    All adapters that need a backend accept a
+    ``Callable[[ProjectSession], SessionBackend]`` and call ``registry.for_session``.
+    """
+
+    def __init__(
+        self,
+        *,
+        global_config_loader: Callable[[], HopConfig] = load_global_config,
+        sessions_loader: Callable[[], dict[str, SessionState]] = load_sessions,
+        runner: CommandRunner | None = None,
+    ) -> None:
+        self._global_config_loader = global_config_loader
+        self._sessions_loader = sessions_loader
+        self._runner = runner
+        self._overrides: dict[str, SessionBackend] = {}
+
+    def for_session(self, session: ProjectSession) -> SessionBackend:
+        override = self._overrides.get(session.session_name)
+        if override is not None:
+            return override
+
+        persisted = self._sessions_loader().get(session.session_name)
+        if persisted is not None:
+            return _backend_from_record(persisted.backend)
+
+        # No persisted state and no in-process override: a command running
+        # against a session that hop never bootstrapped (e.g. someone calling
+        # hop run from a workspace created by hand). Fall back to host.
+        return HostBackend()
+
+    def resolve_for_entry(
+        self, session: ProjectSession, *, backend_name: str | None
+    ) -> SessionBackend:
+        # Persisted state still wins so we don't change a live session's
+        # backend mid-flight; backend_name only matters for first entry.
+        persisted = self._sessions_loader().get(session.session_name)
+        if persisted is not None:
+            return _backend_from_record(persisted.backend)
+
+        global_config = self._global_config_loader()
+        project_config = load_project_config(session.project_root)
+
+        # Project entries come first in auto-detect order; same-named entries
+        # field-merge with project fields winning. select_backend filters out
+        # entries that don't end up runnable (no shell or no editor).
+        configured = merge_backends(project_config, global_config)
+
+        if self._runner is not None:
+            chosen = select_backend(
+                session,
+                configured,
+                pinned_name=backend_name,
+                runner=self._runner,
+            )
+        else:
+            chosen = select_backend(
+                session,
+                configured,
+                pinned_name=backend_name,
+            )
+        if chosen is None:
+            return HostBackend()
+        backend = (
+            backend_from_config(chosen, runner=self._runner)
+            if self._runner is not None
+            else backend_from_config(chosen)
+        )
+        # Prepare the backend (e.g. compose up -d) and discover the workspace
+        # path before any role terminals are launched. Both happen here so the
+        # backend persisted in session state already carries workspace_path;
+        # the bootstrap path doesn't have to repeat the discovery.
+        backend.prepare(session)
+        workspace_path = backend.discover_workspace(session)
+        return backend.with_workspace_path(workspace_path)
+
+    def set_override(self, session_name: str, backend: SessionBackend) -> None:
+        self._overrides[session_name] = backend
+
+    def clear_override(self, session_name: str) -> None:
+        self._overrides.pop(session_name, None)
+
+
+def _backend_from_record(record: BackendRecord) -> SessionBackend:
+    if isinstance(record, CommandBackendRecord):
+        return CommandBackend(
+            name=record.name,
+            shell=record.shell,
+            editor=record.editor,
+            prepare_command=record.prepare,
+            teardown_command=record.teardown,
+            workspace_command=record.workspace_command,
+            workspace_path=record.workspace_path,
+        )
+    return HostBackend()
+
+
+def _record_for_backend(backend: SessionBackend) -> BackendRecord:
+    if isinstance(backend, CommandBackend):
+        return CommandBackendRecord(
+            name=backend.name,
+            shell=backend.shell,
+            editor=backend.editor,
+            prepare=backend.prepare_command,
+            teardown=backend.teardown_command,
+            workspace_command=backend.workspace_command,
+            workspace_path=backend.workspace_path,
+        )
+    return HostBackendRecord()
+
+
 @dataclass(frozen=True, slots=True)
 class HopServices:
     sway: SwayAdapter
     kitty: KittyAdapter
     neovim: NeovimAdapter
     browser: BrowserAdapter
+    session_backends: SessionBackendRegistry
 
 
 def execute_command(
@@ -102,19 +249,28 @@ def execute_command(
     current_directory = Path(cwd).expanduser().resolve()
 
     match command:
-        case EnterSessionCommand():
+        case EnterSessionCommand(backend=backend_name):
             session = resolve_project_session(current_directory)
             if services.sway.get_focused_workspace() == session.workspace_name:
+                # Spawning an additional terminal in an already-live session:
+                # the backend is fixed at session creation; --backend is ignored.
                 spawn_session_terminal(
                     current_directory,
                     terminals=services.kitty,
                 )
             else:
-                enter_project_session(
-                    current_directory,
-                    sway=services.sway,
-                    terminals=services.kitty,
+                backend = services.session_backends.resolve_for_entry(
+                    session, backend_name=backend_name
                 )
+                services.session_backends.set_override(session.session_name, backend)
+                try:
+                    enter_project_session(
+                        current_directory,
+                        sway=services.sway,
+                        terminals=services.kitty,
+                    )
+                finally:
+                    services.session_backends.clear_override(session.session_name)
         case SwitchSessionCommand(session_name=session_name):
             switch_session(session_name, sway=services.sway)
         case ListSessionsCommand(as_json=as_json):
@@ -166,6 +322,7 @@ def execute_command(
                 current_directory,
                 sway=services.sway,
                 kitty=services.kitty,
+                session_backend_for=services.session_backends.for_session,
             )
         case _:
             msg = f"Unsupported command {command!r}"
@@ -175,12 +332,24 @@ def execute_command(
 
 
 def build_default_services() -> HopServices:
-    from hop.state import record_session
-
     sway = SwayIpcAdapter()
+    registry = SessionBackendRegistry()
+
+    def on_bootstrap(session: ProjectSession, backend: SessionBackend) -> None:
+        record_session(session, backend=_record_for_backend(backend))
+
+    kitty = KittyRemoteControlAdapter(
+        session_backend_for=registry.for_session,
+        on_session_bootstrap=on_bootstrap,
+    )
+    neovim = SharedNeovimEditorAdapter(
+        sway=sway,
+        session_backend_for=registry.for_session,
+    )
     return HopServices(
         sway=sway,
-        kitty=KittyRemoteControlAdapter(on_session_bootstrap=record_session),
-        neovim=SharedNeovimEditorAdapter(sway=sway),
+        kitty=kitty,
+        neovim=neovim,
         browser=SessionBrowserAdapter(sway=sway),
+        session_backends=registry,
     )

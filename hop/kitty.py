@@ -7,8 +7,10 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from tempfile import gettempdir
 from typing import Any, Callable, Mapping, Protocol, Sequence, cast
 
+from hop.backends import HostBackend, SessionBackend
 from hop.errors import HopError
 from hop.session import ProjectSession
 
@@ -19,6 +21,8 @@ KITTY_COMMAND_SUFFIX = b"\x1b\\"
 HOP_ROLE_VAR = "hop_role"
 KITTY_BOOTSTRAP_TIMEOUT_SECONDS = 5.0
 KITTY_BOOTSTRAP_POLL_INTERVAL_SECONDS = 0.1
+SESSION_SOCKET_FILENAME_PREFIX = "kitty-"
+SESSION_SOCKET_FILENAME_SUFFIX = ".sock"
 
 
 class KittyError(HopError):
@@ -43,7 +47,8 @@ class KittyTransport(Protocol):
 
 TransportFactory = Callable[[str | None], KittyTransport]
 KittyLauncher = Callable[[Sequence[str], Mapping[str, str]], None]
-SessionBootstrapHook = Callable[["ProjectSession"], None]
+SessionBootstrapHook = Callable[["ProjectSession", SessionBackend], None]
+SessionBackendFactory = Callable[["ProjectSession"], SessionBackend]
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,22 +71,42 @@ class KittyWindowState:
 
 
 def session_socket_address(session_name: str) -> str:
-    return f"unix:@hop-{session_name}"
+    return f"unix:{session_socket_path(session_name)}"
+
+
+def session_socket_path(session_name: str) -> Path:
+    runtime_root = os.environ.get("XDG_RUNTIME_DIR") or gettempdir()
+    runtime_dir = Path(runtime_root).expanduser() / "hop"
+    return runtime_dir / f"{SESSION_SOCKET_FILENAME_PREFIX}{session_name}{SESSION_SOCKET_FILENAME_SUFFIX}"
+
+
+def session_name_from_listen_on(listen_on: str) -> str | None:
+    if not listen_on.startswith("unix:"):
+        return None
+    socket_path = listen_on.removeprefix("unix:")
+    if socket_path.startswith("@"):
+        return None
+    name = Path(socket_path).name
+    if not name.startswith(SESSION_SOCKET_FILENAME_PREFIX) or not name.endswith(SESSION_SOCKET_FILENAME_SUFFIX):
+        return None
+    return name[len(SESSION_SOCKET_FILENAME_PREFIX) : -len(SESSION_SOCKET_FILENAME_SUFFIX)]
 
 
 class KittyRemoteControlAdapter:
     def __init__(
         self,
         *,
+        session_backend_for: SessionBackendFactory | None = None,
         transport_factory: TransportFactory | None = None,
         launcher: KittyLauncher | None = None,
         on_session_bootstrap: SessionBootstrapHook | None = None,
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
+        self._session_backend_for: SessionBackendFactory = session_backend_for or (lambda _session: HostBackend())
         self._transport_factory: TransportFactory = transport_factory or _default_transport_factory
         self._launcher: KittyLauncher = launcher or _default_launcher
-        self._on_session_bootstrap: SessionBootstrapHook = on_session_bootstrap or (lambda _session: None)
+        self._on_session_bootstrap: SessionBootstrapHook = on_session_bootstrap or (lambda _session, _backend: None)
         self._sleep = sleep
         self._clock = clock
 
@@ -214,23 +239,37 @@ class KittyRemoteControlAdapter:
         role: str,
         keep_focus: bool,
     ) -> None:
+        backend = self._session_backend_for(session)
         try:
             self._send_to(
                 session.session_name,
                 "launch",
-                self._launch_payload(session, role=role, keep_focus=keep_focus),
+                self._launch_payload(session, backend=backend, role=role, keep_focus=keep_focus),
             )
         except KittyConnectionError:
-            self._bootstrap_session_kitty(session_socket_address(session.session_name), session, role=role)
+            self._bootstrap_session_kitty(
+                session_socket_address(session.session_name),
+                session,
+                backend=backend,
+                role=role,
+            )
 
     def _bootstrap_session_kitty(
         self,
         addr: str,
         session: ProjectSession,
         *,
+        backend: SessionBackend,
         role: str,
     ) -> None:
-        args = (
+        backend.prepare(session)
+
+        # Ensure the parent dir for the filesystem socket exists; kitty
+        # creates the socket itself, but its parent must be writable.
+        socket_path = session_socket_path(session.session_name)
+        socket_path.parent.mkdir(parents=True, exist_ok=True)
+
+        kitty_args = [
             "kitty",
             "--directory",
             str(session.project_root),
@@ -242,8 +281,12 @@ class KittyRemoteControlAdapter:
             _os_window_name(role),
             "--override",
             "allow_remote_control=yes",
-        )
-        self._launcher(args, dict(os.environ))
+        ]
+        shell_args = list(backend.shell_args(session))
+        if shell_args:
+            kitty_args.append("--")
+            kitty_args.extend(shell_args)
+        self._launcher(tuple(kitty_args), dict(os.environ))
         self._wait_for_session_kitty(addr)
         # Kitty's CLI doesn't accept --var, so the bootstrap window has no
         # user_vars by default. Tag it now so role-window discovery treats it
@@ -253,7 +296,7 @@ class KittyRemoteControlAdapter:
             "set-user-vars",
             {"match": "all", "var": [f"{HOP_ROLE_VAR}={role}"]},
         )
-        self._on_session_bootstrap(session)
+        self._on_session_bootstrap(session, backend)
 
     def _wait_for_session_kitty(self, addr: str) -> None:
         deadline = self._clock() + KITTY_BOOTSTRAP_TIMEOUT_SECONDS
@@ -308,11 +351,12 @@ class KittyRemoteControlAdapter:
         self,
         session: ProjectSession,
         *,
+        backend: SessionBackend,
         role: str,
         keep_focus: bool,
     ) -> dict[str, object]:
         return {
-            "args": [],
+            "args": list(backend.shell_args(session)),
             "cwd": str(session.project_root),
             "type": "os-window",
             "keep_focus": keep_focus,

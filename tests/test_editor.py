@@ -3,6 +3,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, Mapping, Sequence, cast
 
+import pytest
 from hop.editor import SharedNeovimEditorAdapter, build_remote_open_command
 from hop.session import ProjectSession
 from hop.sway import SwayWindow
@@ -102,7 +103,8 @@ def _session_socket_name(project_root: Path) -> str:
     return f"hop-{root_hash}.sock"
 
 
-def test_focus_reuses_marked_session_editor_window(tmp_path: Path) -> None:
+def test_focus_reuses_marked_session_editor_window(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
     runner = StubProcessRunner()
     project_root = build_session().project_root
     socket_name = _session_socket_name(project_root)
@@ -114,7 +116,6 @@ def test_focus_reuses_marked_session_editor_window(tmp_path: Path) -> None:
         sway=sway,
         kitty_transport=transport,
         process_runner=runner,
-        runtime_dir=tmp_path / "hop",
     )
 
     adapter.focus(build_session())
@@ -127,7 +128,8 @@ def test_focus_reuses_marked_session_editor_window(tmp_path: Path) -> None:
     assert sway.marked == []
 
 
-def test_focus_recreates_editor_after_neovim_exits(tmp_path: Path) -> None:
+def test_focus_recreates_editor_after_neovim_exits(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
     runner = StubProcessRunner()
     sway = StubSwayAdapter()
 
@@ -155,7 +157,6 @@ def test_focus_recreates_editor_after_neovim_exits(tmp_path: Path) -> None:
         sway=sway,
         kitty_transport=transport,
         process_runner=runner,
-        runtime_dir=runtime_dir,
     )
 
     adapter.focus(build_session())
@@ -184,7 +185,10 @@ def test_focus_recreates_editor_after_neovim_exits(tmp_path: Path) -> None:
     assert sway.focused == [101]
 
 
-def test_open_target_focuses_editor_and_routes_path_with_line(tmp_path: Path) -> None:
+def test_open_target_focuses_editor_and_routes_path_with_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
     runner = StubProcessRunner()
     project_root = build_session().project_root
     socket_name = _session_socket_name(project_root)
@@ -196,7 +200,6 @@ def test_open_target_focuses_editor_and_routes_path_with_line(tmp_path: Path) ->
         sway=sway,
         kitty_transport=transport,
         process_runner=runner,
-        runtime_dir=tmp_path / "hop",
     )
 
     adapter.open_target(build_session(), target="app/models/user's file.rb:42")
@@ -220,6 +223,57 @@ def testbuild_remote_open_command_preserves_plain_paths() -> None:
         build_remote_open_command("app/models/user.rb")
         == "<Cmd>execute 'drop ' . fnameescape('app/models/user.rb')<CR>"
     )
+
+
+def test_launch_editor_uses_base_editor_args(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    runner = StubProcessRunner()
+    sway = StubSwayAdapter()
+
+    captured: list[list[Any]] = []
+
+    def on_launch(payload: dict[str, object]) -> None:
+        args = payload["args"]
+        assert isinstance(args, list)
+        captured.append(cast(list[Any], args))
+        runner.activate(str(cast(list[Any], args)[-1]))
+        sway.add_window(
+            SwayWindow(
+                id=200,
+                workspace_name=build_session().workspace_name,
+                app_id="hop:editor",
+                window_class=None,
+            )
+        )
+
+    transport = StubKittyTransport([{"ok": True}], on_launch=on_launch)
+
+    class FakeBackend:
+        def editor_args(self, _session: ProjectSession, listen_addr: Path) -> Sequence[str]:
+            return (
+                "podman-compose",
+                "exec",
+                "devcontainer",
+                "nvim",
+                "--listen",
+                str(listen_addr),
+            )
+
+        def editor_remote_address(self, _session: ProjectSession) -> Path:
+            return tmp_path / "hop" / "editor.sock"
+
+    adapter = SharedNeovimEditorAdapter(
+        sway=sway,
+        kitty_transport=transport,
+        process_runner=runner,
+        session_backend_for=lambda _session: FakeBackend(),  # type: ignore[arg-type]
+    )
+
+    adapter.focus(build_session())
+
+    assert captured == [
+        ["podman-compose", "exec", "devcontainer", "nvim", "--listen", str(tmp_path / "hop" / "editor.sock")],
+    ]
 
 
 def test_editor_uses_distinct_sockets_for_same_basename_directories(tmp_path: Path) -> None:

@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import hashlib
-import os
 import subprocess
 import time
 from pathlib import Path
-from tempfile import gettempdir
-from typing import Protocol, Sequence
+from typing import Callable, Protocol, Sequence
 
+from hop.backends import HostBackend, SessionBackend
 from hop.errors import HopError
 from hop.kitty import KittyTransport, SocketKittyTransport
 from hop.session import ProjectSession
@@ -20,6 +18,8 @@ EDITOR_MARK_PREFIX = "_hop_editor:"
 EDITOR_READY_TIMEOUT_SECONDS = 5.0
 EDITOR_READY_POLL_INTERVAL_SECONDS = 0.05
 DEFAULT_REMOTE_CHECK_EXPRESSION = "1"
+
+SessionBackendFactory = Callable[[ProjectSession], SessionBackend]
 
 
 class NeovimError(HopError):
@@ -49,14 +49,14 @@ class SharedNeovimEditorAdapter:
         sway: EditorSwayAdapter | None = None,
         kitty_transport: KittyTransport | None = None,
         process_runner: ProcessRunner | None = None,
-        runtime_dir: Path | str | None = None,
+        session_backend_for: SessionBackendFactory | None = None,
         ready_timeout_seconds: float = EDITOR_READY_TIMEOUT_SECONDS,
         ready_poll_interval_seconds: float = EDITOR_READY_POLL_INTERVAL_SECONDS,
     ) -> None:
         self._sway: EditorSwayAdapter = sway or SwayIpcAdapter()
         self._transport: KittyTransport = kitty_transport or SocketKittyTransport()
         self._process_runner = process_runner or _SubprocessRunner()
-        self._runtime_dir = _resolve_runtime_dir(runtime_dir)
+        self._session_backend_for: SessionBackendFactory = session_backend_for or (lambda _session: HostBackend())
         self._ready_timeout_seconds = ready_timeout_seconds
         self._ready_poll_interval_seconds = ready_poll_interval_seconds
 
@@ -117,10 +117,11 @@ class SharedNeovimEditorAdapter:
         return window
 
     def _launch_editor(self, session: ProjectSession, *, address: Path) -> None:
+        backend = self._session_backend_for(session)
         self._transport.send_command(
             "launch",
             {
-                "args": [NVIM_COMMAND, "--listen", str(address)],
+                "args": list(backend.editor_args(session, address)),
                 "cwd": str(session.project_root),
                 "type": "os-window",
                 "keep_focus": False,
@@ -170,8 +171,7 @@ class SharedNeovimEditorAdapter:
             raise NeovimCommandError(msg)
 
     def _remote_address(self, session: ProjectSession) -> Path:
-        root_hash = hashlib.sha256(str(session.project_root).encode()).hexdigest()[:16]
-        return self._runtime_dir / f"hop-{root_hash}.sock"
+        return self._session_backend_for(session).editor_remote_address(session)
 
 
 class _SubprocessRunner:
@@ -182,17 +182,6 @@ class _SubprocessRunner:
             text=True,
             check=False,
         )
-
-
-def _resolve_runtime_dir(runtime_dir: Path | str | None) -> Path:
-    if runtime_dir is not None:
-        path = Path(runtime_dir).expanduser().resolve()
-    else:
-        runtime_root = os.environ.get("XDG_RUNTIME_DIR") or gettempdir()
-        path = Path(runtime_root).expanduser().resolve() / "hop"
-
-    path.mkdir(parents=True, exist_ok=True)
-    return path
 
 
 def build_remote_open_command(target: str) -> str:

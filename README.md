@@ -210,6 +210,99 @@ That picker works over visible terminal output and dispatches supported selectio
 
 File-shaped tokens that don't resolve to a real file under the source window's cwd are not highlighted. Dispatch attempts (and skip reasons) are written to `$XDG_RUNTIME_DIR/hop/open-selection.log` for debugging.
 
+## Session backends
+
+A session has a **backend** that decides where its shells and editor run. The default is **host** (shells and nvim run on the host). Other backends — devcontainer, ssh, anything else you can describe as a chain of commands — are configured as named entries in either `~/.config/hop/config.toml` or a project's `.hop.toml`. Both files use the same `[backends.<name>]` schema and are merged at session entry.
+
+### Auto-detection
+
+When you enter a session (bare `hop`), hop walks the configured backends in declaration order and runs each backend's `default` probe command in the project root. The first one that exits 0 wins. If none succeed (or no backend has a `default`), the session falls back to **host**.
+
+Once a session is created, the chosen backend is persisted in `${XDG_RUNTIME_DIR}/hop/sessions/<name>.json` (with the resolved commands and the discovered workspace path) and reused for every subsequent `hop term`, `hop run`, `hop edit`, and `hop kill` against that session — auto-detect is not re-run mid-session.
+
+### Global config
+
+Create `${XDG_CONFIG_HOME:-~/.config}/hop/config.toml`:
+
+```toml
+[backends.devcontainer]
+default   = ["test", "-f", "docker-compose.dev.yml"]
+prepare   = ["podman-compose", "-f", "docker-compose.dev.yml", "up", "-d", "devcontainer"]
+shell     = ["podman-compose", "-f", "docker-compose.dev.yml", "exec", "devcontainer", "/usr/bin/zsh"]
+editor    = ["podman-compose", "-f", "docker-compose.dev.yml", "exec",
+             "devcontainer", "nvim", "--listen", "{listen_addr}"]
+teardown  = ["podman-compose", "-f", "docker-compose.dev.yml", "down"]
+workspace = ["podman-compose", "-f", "docker-compose.dev.yml", "exec", "devcontainer", "pwd"]
+```
+
+Fields per backend:
+
+- `shell` (required) — argv hop runs to spawn one shell per role terminal.
+- `editor` (required) — argv hop runs to launch the shared nvim. `{listen_addr}` is substituted with the host-visible nvim socket path.
+- `default` (optional) — auto-detect probe. Hop runs it in the project root; exit 0 selects this backend. Backends without `default` are not eligible for auto-detect — they can only be picked by name (`hop --backend <name>` or `[backend].name` in `.hop.toml`).
+- `prepare` (optional) — argv hop runs once at session creation, before launching kitty. Idempotent (e.g. `compose up -d`).
+- `teardown` (optional) — argv hop runs at `hop kill` after closing windows.
+- `workspace` (optional) — argv whose stdout is the path inside the backend that maps to the host project root. Used by the open_selection kitten to translate visible-output cwds back to host paths. Captured once at session creation.
+
+Supported placeholders inside command lists: `{listen_addr}` (in `editor`) and `{project_root}` (anywhere).
+
+The name `host` is reserved for the implicit fallback — an explicit `[backends.host]` table is ignored.
+
+### Project config
+
+`<project_root>/.hop.toml` uses **the same `[backends.<name>]` schema** as the global file. Drop in whatever subset of fields you want — partial entries are fine. Hop merges the two files when resolving the session backend:
+
+- Project entries come first in auto-detect order.
+- Same-named entries are field-merged with project fields winning.
+- Backends without `shell` and `editor` after merge are unusable and dropped silently.
+
+So the same syntax handles every project-level use case in one example:
+
+```toml
+# Project's docker-compose.dev.yml uses a different service name.
+[backends.devcontainer]
+shell = ["docker", "compose", "-f", "compose.dev.yml", "exec", "app", "zsh"]
+
+# Always force devcontainer here even when something else would also match.
+# (default = ["true"] always exits 0; default = ["false"] always skips.)
+# [backends.devcontainer]
+# default = ["true"]
+
+# Define a project-specific backend that doesn't exist in ~/.config/hop/config.toml.
+[backends.my-vm]
+default   = ["test", "-f", ".my-vm-marker"]
+shell     = ["lima", "shell", "default", "--", "/usr/bin/zsh"]
+editor    = ["lima", "shell", "default", "--", "nvim", "--listen", "{listen_addr}"]
+workspace = ["lima", "shell", "default", "--", "pwd"]
+```
+
+To force the host backend in a project, either pass `hop --backend host` once at session creation (persisted afterwards) or override every configured backend's `default` to a failing command.
+
+### Per-invocation override: `--backend <name>`
+
+`hop --backend <name>` from a project root creates the session with the named backend, regardless of auto-detect. Use `hop --backend host` to force the host backend in a project that would otherwise auto-activate something else. The choice is persisted, so subsequent `hop term`, `hop run`, etc. against that session keep using the same backend without you re-passing the flag.
+
+The flag is only valid on the bare `hop` entry — `hop switch --backend …`, `hop run --backend …` (etc.) are rejected. Once a session exists, the flag has no effect; it's a session-creation knob. Passing a backend name that isn't configured (and isn't `host`) errors out.
+
+### Self-contained project compose files
+
+Each project's `docker-compose.dev.yml` should be **self-contained** so hop (and any other tool) can run it standalone without an overlay flag. The recommended pattern is `include:`:
+
+```yaml
+include:
+  - ${HOME}/projects/dotfiles/devcontainer/docker-compose.yml
+services:
+  devcontainer:
+    # any project-specific overrides
+```
+
+Notes:
+
+- `podman-compose` (the Python implementation) accepts the legacy plain-string `include:` list shape; the modern `{path: ...}` dict form will fail. Use plain strings.
+- `${HOME}` is expanded by compose's environment substitution. `~` is **not** expanded — use `${HOME}` instead.
+
+For step-by-step setup and troubleshooting, see [`docs/devcontainer.md`](docs/devcontainer.md).
+
 ## Development
 
 Run tests with:

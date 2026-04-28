@@ -7,6 +7,7 @@ from typing import Mapping, Sequence
 
 import pytest
 from hop.app import HopServices, execute_command
+from hop.backends import CommandBackend, HostBackend
 from hop.commands import (
     BrowserCommand,
     EditCommand,
@@ -18,6 +19,7 @@ from hop.commands import (
     TailCommand,
     TermCommand,
 )
+from hop.config import BackendConfig, HopConfig
 from hop.kitty import KittyRemoteControlAdapter, KittyWindow, KittyWindowContext, KittyWindowState
 from hop.session import ProjectSession
 from hop.sway import SwayWindow
@@ -112,7 +114,18 @@ class StubHopServices:
     browser: StubBrowserAdapter
 
     def as_services(self) -> HopServices:
-        return HopServices(sway=self.sway, kitty=self.kitty, neovim=self.neovim, browser=self.browser)
+        from hop.app import SessionBackendRegistry
+
+        return HopServices(
+            sway=self.sway,
+            kitty=self.kitty,
+            neovim=self.neovim,
+            browser=self.browser,
+            session_backends=SessionBackendRegistry(
+                global_config_loader=lambda: HopConfig(),
+                sessions_loader=lambda: {},
+            ),
+        )
 
 
 def build_services(
@@ -163,12 +176,18 @@ def test_hop_enter_session_passes_invocation_directory_as_kitty_launch_cwd(
     project_root = tmp_path / "demo"
     project_root.mkdir()
 
+    from hop.app import SessionBackendRegistry
+
     factory = CapturingKittyFactory([{"ok": True, "data": []}, {"ok": True}])
     services = HopServices(
         sway=StubSwayAdapter(),
         kitty=KittyRemoteControlAdapter(transport_factory=factory, launcher=_NoopLauncher()),
         neovim=StubNeovimAdapter(),
         browser=StubBrowserAdapter(),
+        session_backends=SessionBackendRegistry(
+            global_config_loader=lambda: HopConfig(),
+            sessions_loader=lambda: {},
+        ),
     )
 
     assert execute_command(EnterSessionCommand(), cwd=project_root, services=services) == 0
@@ -398,3 +417,249 @@ def test_execute_command_kills_managed_windows_and_removes_workspace(tmp_path: P
 
     assert execute_command(KillCommand(), cwd=project_root, services=services.as_services()) == 0
     assert services.sway.removed_workspaces == [workspace_name]
+
+
+# --- SessionBackendRegistry --------------------------------------------------
+
+
+def _devcontainer_config() -> BackendConfig:
+    return BackendConfig(
+        name="devcontainer",
+        default=("test", "-f", "docker-compose.dev.yml"),
+        prepare=("compose", "up", "-d", "devcontainer"),
+        shell=("compose", "exec", "devcontainer", "/usr/bin/zsh"),
+        editor=("compose", "exec", "devcontainer", "nvim", "--listen", "{listen_addr}"),
+        teardown=("compose", "down"),
+        workspace=("compose", "exec", "devcontainer", "pwd"),
+    )
+
+
+def _make_session(project_root: Path) -> ProjectSession:
+    return ProjectSession(
+        project_root=project_root,
+        session_name=project_root.name,
+        workspace_name=f"p:{project_root.name}",
+    )
+
+
+def test_session_base_registry_falls_back_to_host_when_no_config(tmp_path: Path) -> None:
+    from hop.app import SessionBackendRegistry
+
+    registry = SessionBackendRegistry(
+        global_config_loader=lambda: HopConfig(),
+        sessions_loader=lambda: {},
+    )
+
+    backend = registry.resolve_for_entry(_make_session(tmp_path), backend_name=None)
+
+    assert isinstance(backend, HostBackend)
+
+
+def test_session_base_registry_backend_host_returns_host_base(tmp_path: Path) -> None:
+    import subprocess
+
+    from hop.app import SessionBackendRegistry
+
+    (tmp_path / "docker-compose.dev.yml").write_text("")
+    config = HopConfig(backends=(_devcontainer_config(),))
+
+    calls: list[tuple[str, ...]] = []
+
+    def runner(args: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+        calls.append(tuple(args))
+        return subprocess.CompletedProcess(args=list(args), returncode=0, stdout="", stderr="")
+
+    registry = SessionBackendRegistry(
+        global_config_loader=lambda: config,
+        sessions_loader=lambda: {},
+        runner=runner,
+    )
+
+    backend = registry.resolve_for_entry(_make_session(tmp_path), backend_name="host")
+
+    assert isinstance(backend, HostBackend)
+    assert calls == []  # host short-circuits before any command runs
+
+
+def test_session_base_registry_runs_default_then_prepare_and_discovers_workspace(
+    tmp_path: Path,
+) -> None:
+    import subprocess
+
+    from hop.app import SessionBackendRegistry
+
+    (tmp_path / "docker-compose.dev.yml").write_text("")
+    config = HopConfig(backends=(_devcontainer_config(),))
+
+    calls: list[tuple[str, ...]] = []
+
+    def runner(args: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+        calls.append(tuple(args))
+        if "pwd" in args:
+            return subprocess.CompletedProcess(args=list(args), returncode=0, stdout="/workspace\n", stderr="")
+        return subprocess.CompletedProcess(args=list(args), returncode=0, stdout="", stderr="")
+
+    registry = SessionBackendRegistry(
+        global_config_loader=lambda: config,
+        sessions_loader=lambda: {},
+        runner=runner,
+    )
+
+    backend = registry.resolve_for_entry(_make_session(tmp_path), backend_name=None)
+
+    assert isinstance(backend, CommandBackend)
+    assert backend.workspace_path == "/workspace"
+    assert calls == [
+        ("test", "-f", "docker-compose.dev.yml"),  # default probe
+        ("compose", "up", "-d", "devcontainer"),
+        ("compose", "exec", "devcontainer", "pwd"),
+    ]
+
+
+def test_session_base_registry_project_override_can_flip_autodetect(tmp_path: Path) -> None:
+    """A project's `.hop.toml` overrides a backend's `default` command to
+    pick a different backend than the global auto-detect would choose.
+    """
+    import subprocess
+
+    from hop.app import SessionBackendRegistry
+
+    # Two backends, both with defaults that *would* succeed (test -e .).
+    config = HopConfig(
+        backends=(
+            BackendConfig(
+                name="primary",
+                default=("test", "-e", "."),  # would normally win
+                shell=("primary-shell",),
+                editor=("primary-editor",),
+            ),
+            BackendConfig(
+                name="secondary",
+                default=("test", "-e", "."),
+                shell=("secondary-shell",),
+                editor=("secondary-editor",),
+            ),
+        )
+    )
+
+    # Project disables primary by overriding its default to false.
+    (tmp_path / ".hop.toml").write_text(
+        """
+[backends.primary]
+default = ["false"]
+""",
+    )
+
+    def runner(args: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+        # Default probes: ["false"] → returncode 1; ["test", "-e", "."] → 0.
+        if args[:1] == ("false",):
+            return subprocess.CompletedProcess(args=list(args), returncode=1, stdout="", stderr="")
+        return subprocess.CompletedProcess(args=list(args), returncode=0, stdout="", stderr="")
+
+    registry = SessionBackendRegistry(
+        global_config_loader=lambda: config,
+        sessions_loader=lambda: {},
+        runner=runner,
+    )
+
+    backend = registry.resolve_for_entry(_make_session(tmp_path), backend_name=None)
+
+    assert isinstance(backend, CommandBackend)
+    assert backend.name == "secondary"
+
+
+def test_session_backend_registry_uses_project_only_backend_definition(tmp_path: Path) -> None:
+    """A project's `.hop.toml` can define a brand-new backend (with shell+editor),
+    selectable via --backend.
+    """
+    import subprocess
+
+    from hop.app import SessionBackendRegistry
+
+    (tmp_path / ".hop.toml").write_text(
+        """
+[backends.project-only]
+shell = ["my-shell"]
+editor = ["my-editor", "--listen", "{listen_addr}"]
+default = ["true"]
+""",
+    )
+
+    def runner(args: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(args=list(args), returncode=0, stdout="", stderr="")
+
+    registry = SessionBackendRegistry(
+        global_config_loader=lambda: HopConfig(),
+        sessions_loader=lambda: {},
+        runner=runner,
+    )
+
+    backend = registry.resolve_for_entry(_make_session(tmp_path), backend_name="project-only")
+
+    assert isinstance(backend, CommandBackend)
+    assert backend.name == "project-only"
+    assert backend.shell == ("my-shell",)
+
+
+def test_session_backend_registry_project_only_backend_wins_autodetect(tmp_path: Path) -> None:
+    """A project-only backend with a `default` that succeeds wins auto-detect
+    when no global backend's default does.
+    """
+    import subprocess
+
+    from hop.app import SessionBackendRegistry
+
+    (tmp_path / ".hop.toml").write_text(
+        """
+[backends.project-only]
+shell = ["my-shell"]
+editor = ["my-editor", "--listen", "{listen_addr}"]
+default = ["true"]
+""",
+    )
+
+    def runner(args: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+        if args == ("true",):
+            return subprocess.CompletedProcess(args=list(args), returncode=0, stdout="", stderr="")
+        return subprocess.CompletedProcess(args=list(args), returncode=1, stdout="", stderr="")
+
+    registry = SessionBackendRegistry(
+        global_config_loader=lambda: HopConfig(),
+        sessions_loader=lambda: {},
+        runner=runner,
+    )
+
+    backend = registry.resolve_for_entry(_make_session(tmp_path), backend_name=None)
+
+    assert isinstance(backend, CommandBackend)
+    assert backend.name == "project-only"
+
+
+def test_session_base_registry_persisted_state_wins_over_autodetect(tmp_path: Path) -> None:
+    from hop.app import SessionBackendRegistry
+    from hop.state import CommandBackendRecord, SessionState
+
+    (tmp_path / "docker-compose.dev.yml").write_text("")
+    persisted = {
+        tmp_path.name: SessionState(
+            name=tmp_path.name,
+            project_root=tmp_path,
+            backend=CommandBackendRecord(
+                name="legacy",
+                shell=("legacy-shell",),
+                editor=("legacy-editor",),
+                workspace_path="/legacy",
+            ),
+        )
+    }
+
+    registry = SessionBackendRegistry(
+        global_config_loader=lambda: HopConfig(backends=(_devcontainer_config(),)),
+        sessions_loader=lambda: persisted,
+    )
+
+    backend = registry.resolve_for_entry(_make_session(tmp_path), backend_name=None)
+
+    assert isinstance(backend, CommandBackend)
+    assert backend.name == "legacy"
+    assert backend.workspace_path == "/legacy"

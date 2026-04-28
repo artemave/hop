@@ -8,6 +8,7 @@ from hop.kitty import (
     KittyRemoteControlAdapter,
     KittyTransport,
     KittyWindowState,
+    session_socket_address,
 )
 from hop.session import ProjectSession
 
@@ -65,7 +66,7 @@ def build_session() -> ProjectSession:
     )
 
 
-SESSION_SOCKET = "unix:@hop-demo"
+SESSION_SOCKET = session_socket_address("demo")
 
 
 def test_ensure_terminal_focuses_existing_role_window() -> None:
@@ -146,10 +147,14 @@ def test_bootstrap_invokes_on_session_bootstrap_hook_after_kitty_listens_and_tag
         ]
     )
     bootstrapped: list[ProjectSession] = []
+
+    def on_bootstrap(session: ProjectSession, _base: object) -> None:
+        bootstrapped.append(session)
+
     adapter = KittyRemoteControlAdapter(
         transport_factory=factory,
         launcher=StubLauncher(),
-        on_session_bootstrap=bootstrapped.append,
+        on_session_bootstrap=on_bootstrap,
         sleep=lambda _: None,
     )
 
@@ -268,6 +273,79 @@ def test_run_in_terminal_returns_window_id_for_existing_role_window() -> None:
         "send-text",
         {"match": "id:24", "data": "text:ls\n"},
     )
+
+
+def test_ensure_terminal_uses_base_shell_args_in_launch_payload() -> None:
+    factory = StubKittyFactory(
+        [
+            {"ok": True, "data": []},
+            {"ok": True},
+        ]
+    )
+
+    class FakeBackend:
+        def shell_args(self, _session: ProjectSession) -> Sequence[str]:
+            return ("podman-compose", "-f", "docker-compose.dev.yml", "exec", "devcontainer", "/usr/bin/zsh")
+
+        def prepare(self, _session: ProjectSession) -> None:
+            return None
+
+    adapter = KittyRemoteControlAdapter(
+        session_backend_for=lambda _session: FakeBackend(),  # type: ignore[arg-type]
+        transport_factory=factory,
+        launcher=StubLauncher(),
+    )
+
+    adapter.ensure_terminal(build_session(), role="shell")
+
+    launch_call = factory.calls[1]
+    assert launch_call[1] == "launch"
+    payload = launch_call[2]
+    assert payload is not None
+    assert payload["args"] == [
+        "podman-compose",
+        "-f",
+        "docker-compose.dev.yml",
+        "exec",
+        "devcontainer",
+        "/usr/bin/zsh",
+    ]
+
+
+def test_bootstrap_calls_base_prepare_and_appends_shell_args_after_dash_dash() -> None:
+    factory = StubKittyFactory(
+        [
+            KittyConnectionError("no socket"),  # _find_window
+            KittyConnectionError("still no socket"),  # _launch_window
+            {"ok": True, "data": []},  # poll succeeds
+            {"ok": True},  # set-user-vars
+        ]
+    )
+    launcher = StubLauncher()
+
+    prepared: list[ProjectSession] = []
+
+    class FakeBackend:
+        def shell_args(self, _session: ProjectSession) -> Sequence[str]:
+            return ("podman-compose", "exec", "devcontainer", "/usr/bin/zsh")
+
+        def prepare(self, session: ProjectSession) -> None:
+            prepared.append(session)
+
+    adapter = KittyRemoteControlAdapter(
+        session_backend_for=lambda _session: FakeBackend(),  # type: ignore[arg-type]
+        transport_factory=factory,
+        launcher=launcher,
+        sleep=lambda _: None,
+    )
+
+    adapter.ensure_terminal(build_session(), role="shell")
+
+    assert prepared == [build_session()]
+    assert len(launcher.calls) == 1
+    args, _env = launcher.calls[0]
+    # Tail of args must be "--" then the shell_args list.
+    assert args[-5:] == ("--", "podman-compose", "exec", "devcontainer", "/usr/bin/zsh")
 
 
 def test_close_window_addresses_session_socket() -> None:
@@ -444,6 +522,6 @@ def test_inspect_window_forwards_explicit_listen_on_to_transport_factory() -> No
     )
     adapter = KittyRemoteControlAdapter(transport_factory=factory, launcher=StubLauncher())
 
-    adapter.inspect_window(17, listen_on="unix:@hop-demo")
+    adapter.inspect_window(17, listen_on=SESSION_SOCKET)
 
-    assert factory.calls[0][0] == "unix:@hop-demo"
+    assert factory.calls[0][0] == SESSION_SOCKET

@@ -4,6 +4,8 @@ from pathlib import Path
 import pytest
 from hop.session import ProjectSession
 from hop.state import (
+    CommandBackendRecord,
+    HostBackendRecord,
     SessionState,
     default_sessions_dir,
     forget_session,
@@ -27,7 +29,65 @@ def test_record_session_writes_json_payload(tmp_path: Path) -> None:
     record_session(session, sessions_dir=sessions_dir)
 
     payload = json.loads((sessions_dir / "demo.json").read_text())
-    assert payload == {"name": "demo", "project_root": str(tmp_path / "demo")}
+    assert payload == {
+        "name": "demo",
+        "project_root": str(tmp_path / "demo"),
+        "backend": {"type": "host"},
+    }
+
+
+def test_record_session_persists_backend_base(tmp_path: Path) -> None:
+    sessions_dir = tmp_path / "sessions"
+    session = make_session(name="demo", project_root=tmp_path / "demo")
+
+    record_session(
+        session,
+        backend=CommandBackendRecord(
+            name="devcontainer",
+            shell=("podman-compose", "exec", "devcontainer", "/usr/bin/zsh"),
+            editor=("podman-compose", "exec", "devcontainer", "nvim"),
+            prepare=("podman-compose", "up", "-d", "devcontainer"),
+            teardown=("podman-compose", "down"),
+            workspace_command=("podman-compose", "exec", "devcontainer", "pwd"),
+            workspace_path="/workspace",
+        ),
+        sessions_dir=sessions_dir,
+    )
+
+    payload = json.loads((sessions_dir / "demo.json").read_text())
+    assert payload["backend"] == {
+        "type": "command",
+        "name": "devcontainer",
+        "shell": ["podman-compose", "exec", "devcontainer", "/usr/bin/zsh"],
+        "editor": ["podman-compose", "exec", "devcontainer", "nvim"],
+        "prepare": ["podman-compose", "up", "-d", "devcontainer"],
+        "teardown": ["podman-compose", "down"],
+        "workspace_command": ["podman-compose", "exec", "devcontainer", "pwd"],
+        "workspace_path": "/workspace",
+    }
+
+
+def test_record_session_omits_optional_backend_fields(tmp_path: Path) -> None:
+    sessions_dir = tmp_path / "sessions"
+    session = make_session(name="demo", project_root=tmp_path / "demo")
+
+    record_session(
+        session,
+        backend=CommandBackendRecord(
+            name="ssh",
+            shell=("ssh", "host", "zsh"),
+            editor=("ssh", "host", "nvim"),
+        ),
+        sessions_dir=sessions_dir,
+    )
+
+    payload = json.loads((sessions_dir / "demo.json").read_text())
+    assert payload["backend"] == {
+        "type": "command",
+        "name": "ssh",
+        "shell": ["ssh", "host", "zsh"],
+        "editor": ["ssh", "host", "nvim"],
+    }
 
 
 def test_forget_session_removes_state_file(tmp_path: Path) -> None:
@@ -62,7 +122,60 @@ def test_load_sessions_skips_non_json_and_malformed_files(tmp_path: Path) -> Non
 
     sessions = load_sessions(sessions_dir=sessions_dir)
 
-    assert sessions == {"alpha": SessionState(name="alpha", project_root=Path("/projects/alpha"))}
+    assert sessions == {
+        "alpha": SessionState(
+            name="alpha",
+            project_root=Path("/projects/alpha"),
+            backend=HostBackendRecord(),
+        )
+    }
+
+
+def test_load_sessions_decodes_backend_base(tmp_path: Path) -> None:
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir()
+    (sessions_dir / "alpha.json").write_text(
+        json.dumps(
+            {
+                "name": "alpha",
+                "project_root": "/projects/alpha",
+                "backend": {
+                    "type": "command",
+                    "name": "devcontainer",
+                    "shell": ["compose", "exec", "devcontainer", "zsh"],
+                    "editor": ["compose", "exec", "devcontainer", "nvim"],
+                    "prepare": ["compose", "up", "-d", "devcontainer"],
+                    "teardown": ["compose", "down"],
+                    "workspace_command": ["compose", "exec", "devcontainer", "pwd"],
+                    "workspace_path": "/workspace",
+                },
+            }
+        )
+    )
+
+    sessions = load_sessions(sessions_dir=sessions_dir)
+
+    assert sessions["alpha"].backend == CommandBackendRecord(
+        name="devcontainer",
+        shell=("compose", "exec", "devcontainer", "zsh"),
+        editor=("compose", "exec", "devcontainer", "nvim"),
+        prepare=("compose", "up", "-d", "devcontainer"),
+        teardown=("compose", "down"),
+        workspace_command=("compose", "exec", "devcontainer", "pwd"),
+        workspace_path="/workspace",
+    )
+
+
+def test_load_sessions_treats_legacy_records_as_host_base(tmp_path: Path) -> None:
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir()
+    (sessions_dir / "alpha.json").write_text(
+        json.dumps({"name": "alpha", "project_root": "/projects/alpha"})
+    )
+
+    sessions = load_sessions(sessions_dir=sessions_dir)
+
+    assert sessions["alpha"].backend == HostBackendRecord()
 
 
 def test_default_sessions_dir_honors_explicit_override(monkeypatch: pytest.MonkeyPatch) -> None:

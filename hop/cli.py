@@ -24,6 +24,16 @@ from hop.errors import HopError
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="hop")
+    parser.add_argument(
+        "--backend",
+        default=None,
+        dest="backend",
+        metavar="NAME",
+        help=(
+            "Pin a specific backend when creating a new session "
+            "(only valid without a subcommand). Use 'host' to opt out of auto-detect."
+        ),
+    )
     subparsers = parser.add_subparsers(dest="command")
 
     switch_parser = subparsers.add_parser("switch")
@@ -55,10 +65,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 def parse_command(argv: Sequence[str] | None = None) -> Command:
     namespace = build_parser().parse_args(list(argv) if argv is not None else None)
+    backend: str | None = getattr(namespace, "backend", None)
+
+    if backend is not None and namespace.command not in (None, "term"):
+        raise ValueError("--backend is only valid without a subcommand")
 
     match namespace.command:
         case None:
-            return EnterSessionCommand()
+            return EnterSessionCommand(backend=backend)
         case "switch":
             return SwitchSessionCommand(session_name=namespace.session_name)
         case "list":
@@ -67,7 +81,9 @@ def parse_command(argv: Sequence[str] | None = None) -> Command:
             return EditCommand(target=namespace.target)
         case "term":
             if namespace.role is None:
-                return EnterSessionCommand()
+                return EnterSessionCommand(backend=backend)
+            if backend is not None:
+                raise ValueError("--backend is only valid without a subcommand")
             return TermCommand(role=namespace.role)
         case "run":
             return RunCommand(role=namespace.role, command_text=namespace.command_text)

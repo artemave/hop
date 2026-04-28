@@ -7,7 +7,7 @@ from hop.commands.run import DEFAULT_RUN_ROLE
 
 @dataclass(frozen=True, slots=True)
 class EnterSessionCommand:
-    pass
+    backend: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

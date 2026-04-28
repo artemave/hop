@@ -9,7 +9,6 @@ from hop.editor import (
     NeovimCommandError,
     SharedNeovimEditorAdapter,
     _remove_stale_socket,
-    _resolve_runtime_dir,
     _SubprocessRunner,
 )
 from hop.session import ProjectSession
@@ -92,7 +91,6 @@ def test_focus_raises_when_sway_has_no_editor_window(tmp_path: Path) -> None:
         sway=StubSwayAdapter([]),
         kitty_transport=transport,
         process_runner=runner,
-        runtime_dir=tmp_path / "runtime",
     )
 
     with pytest.raises(NeovimCommandError, match="no editor window"):
@@ -107,7 +105,6 @@ def test_focus_picks_lowest_id_when_multiple_marked_editor_windows_exist(tmp_pat
         sway=sway,
         kitty_transport=transport,
         process_runner=runner,
-        runtime_dir=tmp_path / "runtime",
     )
 
     adapter.focus(build_session())
@@ -124,7 +121,6 @@ def test_focus_marks_unmarked_editor_on_first_sighting(tmp_path: Path) -> None:
         sway=sway,
         kitty_transport=transport,
         process_runner=runner,
-        runtime_dir=tmp_path / "runtime",
     )
 
     adapter.focus(build_session())
@@ -148,7 +144,6 @@ def test_focus_skips_unmarked_editor_belonging_to_a_different_session(tmp_path: 
         sway=sway,
         kitty_transport=transport,
         process_runner=runner,
-        runtime_dir=tmp_path / "runtime",
     )
 
     with pytest.raises(NeovimCommandError, match="no editor window"):
@@ -172,7 +167,6 @@ def test_focus_matches_xwayland_editor_via_window_class(tmp_path: Path) -> None:
         sway=sway,
         kitty_transport=transport,
         process_runner=runner,
-        runtime_dir=tmp_path / "runtime",
     )
 
     adapter.focus(build_session())
@@ -193,7 +187,6 @@ def test_wait_for_server_times_out_when_neovim_never_becomes_ready(tmp_path: Pat
         sway=StubSwayAdapter(),
         kitty_transport=transport,
         process_runner=runner,
-        runtime_dir=tmp_path / "runtime",
         ready_timeout_seconds=0.001,
         ready_poll_interval_seconds=0.0,
     )
@@ -208,8 +201,10 @@ def test_wait_for_server_times_out_when_neovim_never_becomes_ready(tmp_path: Pat
         monkeypatch.undo()
 
 
-def test_open_target_raises_stderr_when_remote_send_fails(tmp_path: Path) -> None:
-    address = (tmp_path / "runtime" / "hop.sock").resolve()
+def test_open_target_raises_stderr_when_remote_send_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
     runner = StubProcessRunner(
         [
             subprocess.CompletedProcess(("nvim",), 0, "", ""),
@@ -221,24 +216,10 @@ def test_open_target_raises_stderr_when_remote_send_fails(tmp_path: Path) -> Non
         sway=StubSwayAdapter([_marked_editor(31)]),
         kitty_transport=transport,
         process_runner=runner,
-        runtime_dir=address.parent,
     )
 
     with pytest.raises(NeovimCommandError, match="permission denied"):
         adapter.open_target(build_session(), target="README.md")
-
-
-def test_resolve_runtime_dir_prefers_xdg_runtime_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
-
-    assert _resolve_runtime_dir(None) == (tmp_path / "hop").resolve()
-
-
-def test_resolve_runtime_dir_falls_back_to_tempdir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
-    monkeypatch.setattr("hop.editor.gettempdir", lambda: str(tmp_path))
-
-    assert _resolve_runtime_dir(None) == (tmp_path / "hop").resolve()
 
 
 def test_remove_stale_socket_ignores_missing_paths(tmp_path: Path) -> None:

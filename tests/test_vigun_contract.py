@@ -87,7 +87,19 @@ class StubHopServices:
     browser: StubBrowserAdapter
 
     def as_services(self) -> HopServices:
-        return HopServices(sway=self.sway, kitty=self.kitty, neovim=self.neovim, browser=self.browser)
+        from hop.app import SessionBackendRegistry
+        from hop.config import HopConfig
+
+        return HopServices(
+            sway=self.sway,
+            kitty=self.kitty,
+            neovim=self.neovim,
+            browser=self.browser,
+            session_backends=SessionBackendRegistry(
+                global_config_loader=lambda: HopConfig(),
+                sessions_loader=lambda: {},
+            ),
+        )
 
 
 def build_services() -> StubHopServices:
