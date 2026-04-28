@@ -208,6 +208,8 @@ That picker works over visible terminal output and dispatches supported selectio
 - `https://example.com`
 - `Processing UsersController#index`
 
+File-shaped tokens that don't resolve to a real file under the source window's cwd are not highlighted. Dispatch attempts (and skip reasons) are written to `$XDG_RUNTIME_DIR/hop/open-selection.log` for debugging.
+
 ## Development
 
 Run tests with:

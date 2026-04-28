@@ -151,10 +151,13 @@ class KittyRemoteControlAdapter:
             return str(cast(Any, response).get("data", ""))
         return str(response)
 
-    def inspect_window(self, window_id: int) -> KittyWindowContext | None:
-        # Used by the open_selection kitten which runs *inside* a kitty terminal,
-        # so KITTY_LISTEN_ON is set by kitty in env. Use the env-driven transport.
-        transport = self._transport_factory(None)
+    def inspect_window(
+        self, window_id: int, *, listen_on: str | None = None
+    ) -> KittyWindowContext | None:
+        # Used by the open_selection kitten. Callers in kitty's boss process should
+        # pass `boss.listening_on` because os.environ["KITTY_LISTEN_ON"] inside the
+        # boss may have been inherited from a different kitty instance.
+        transport = self._transport_factory(listen_on)
         response = transport.send_command(
             "ls",
             {

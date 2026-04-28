@@ -1,18 +1,16 @@
 from __future__ import annotations
 
-import os
+import logging
+from pathlib import Path
 from typing import Callable, Protocol
 
-from hop.kitty import KITTY_LISTEN_ON_ENV_VAR, KittyWindowContext
 from hop.session import ProjectSession, resolve_project_session
 from hop.state import SessionState, load_sessions
 from hop.targets import ResolvedUrlTarget, resolve_visible_output_target
 
 SESSION_SOCKET_PREFIX = "unix:@hop-"
 
-
-class OpenSelectionKittyAdapter(Protocol):
-    def inspect_window(self, window_id: int) -> KittyWindowContext | None: ...
+logger = logging.getLogger("hop.open_selection")
 
 
 class OpenSelectionNeovimAdapter(Protocol):
@@ -26,38 +24,50 @@ class OpenSelectionBrowserAdapter(Protocol):
 def open_selection_in_window(
     selection: str,
     *,
-    source_window_id: int,
-    kitty: OpenSelectionKittyAdapter,
+    source_cwd: Path | str | None,
+    listen_on: str | None,
     neovim: OpenSelectionNeovimAdapter,
     browser: OpenSelectionBrowserAdapter,
     sessions_loader: Callable[[], dict[str, SessionState]] = load_sessions,
-    listen_on_env: str | None = None,
 ) -> ProjectSession | None:
-    source_window = kitty.inspect_window(source_window_id)
-    if source_window is None or source_window.cwd is None:
-        return None
-
-    listen_on = listen_on_env if listen_on_env is not None else os.environ.get(KITTY_LISTEN_ON_ENV_VAR, "")
-    if not listen_on.startswith(SESSION_SOCKET_PREFIX):
+    if not listen_on or not listen_on.startswith(SESSION_SOCKET_PREFIX):
+        logger.info("listen_on=%r is not a hop session socket; selection=%r", listen_on, selection)
         return None
     session_name = listen_on.removeprefix(SESSION_SOCKET_PREFIX)
 
     state = sessions_loader().get(session_name)
     if state is None:
+        logger.warning("no recorded session state for %r; selection=%r", session_name, selection)
+        return None
+
+    if source_cwd is None:
+        logger.warning("source window has no cwd; selection=%r", selection)
         return None
 
     session = resolve_project_session(state.project_root)
     resolved_target = resolve_visible_output_target(
         selection,
-        terminal_cwd=source_window.cwd,
+        terminal_cwd=source_cwd,
         project_root=session.project_root,
     )
     if resolved_target is None:
+        logger.info(
+            "could not resolve %r against terminal_cwd=%s project_root=%s",
+            selection,
+            source_cwd,
+            session.project_root,
+        )
         return None
 
     if isinstance(resolved_target, ResolvedUrlTarget):
+        logger.info("dispatching url %r to session %r", resolved_target.url, session_name)
         browser.ensure_browser(session, url=resolved_target.url)
     else:
+        logger.info(
+            "dispatching file %r to session %r",
+            resolved_target.editor_target,
+            session_name,
+        )
         neovim.open_target(session, target=resolved_target.editor_target)
 
     return session

@@ -1,19 +1,10 @@
+import logging
 from pathlib import Path
 
+import pytest
 from hop.commands.open_selection import open_selection_in_window
-from hop.kitty import KittyWindowContext
 from hop.session import ProjectSession
 from hop.state import SessionState
-
-
-class StubKittyAdapter:
-    def __init__(self, context: KittyWindowContext | None) -> None:
-        self.context = context
-        self.inspected_window_ids: list[int] = []
-
-    def inspect_window(self, window_id: int) -> KittyWindowContext | None:
-        self.inspected_window_ids.append(window_id)
-        return self.context
 
 
 class StubNeovimAdapter:
@@ -39,25 +30,22 @@ def test_open_selection_in_window_routes_files_to_shared_editor(tmp_path: Path) 
     selected_file.parent.mkdir(parents=True)
     selected_file.write_text("class User\nend\n")
 
-    kitty = StubKittyAdapter(KittyWindowContext(id=17, role="shell", cwd=terminal_cwd.resolve()))
     neovim = StubNeovimAdapter()
     browser = StubBrowserAdapter()
 
     session = open_selection_in_window(
         "app/models/user.rb:7",
-        source_window_id=17,
-        kitty=kitty,
+        source_cwd=terminal_cwd.resolve(),
+        listen_on="unix:@hop-demo",
         neovim=neovim,
         browser=browser,
         sessions_loader=lambda: {
             "demo": SessionState(name="demo", project_root=project_root.resolve()),
         },
-        listen_on_env="unix:@hop-demo",
     )
 
     assert session is not None
     assert session.session_name == "demo"
-    assert kitty.inspected_window_ids == [17]
     assert neovim.opened_targets == [("demo", f"{selected_file.resolve()}:7")]
     assert browser.urls == []
 
@@ -67,20 +55,18 @@ def test_open_selection_in_window_routes_urls_to_session_browser(tmp_path: Path)
     terminal_cwd = project_root / "src"
     terminal_cwd.mkdir(parents=True)
 
-    kitty = StubKittyAdapter(KittyWindowContext(id=17, role="shell", cwd=terminal_cwd.resolve()))
     neovim = StubNeovimAdapter()
     browser = StubBrowserAdapter()
 
     session = open_selection_in_window(
         "https://example.com",
-        source_window_id=17,
-        kitty=kitty,
+        source_cwd=terminal_cwd.resolve(),
+        listen_on="unix:@hop-demo",
         neovim=neovim,
         browser=browser,
         sessions_loader=lambda: {
             "demo": SessionState(name="demo", project_root=project_root.resolve()),
         },
-        listen_on_env="unix:@hop-demo",
     )
 
     assert session is not None
@@ -93,22 +79,124 @@ def test_open_selection_in_window_ignores_unresolvable_matches(tmp_path: Path) -
     terminal_cwd = project_root / "src"
     terminal_cwd.mkdir(parents=True)
 
-    kitty = StubKittyAdapter(KittyWindowContext(id=17, role="shell", cwd=terminal_cwd.resolve()))
     neovim = StubNeovimAdapter()
     browser = StubBrowserAdapter()
 
     session = open_selection_in_window(
         "missing/file.rb:4",
-        source_window_id=17,
-        kitty=kitty,
+        source_cwd=terminal_cwd.resolve(),
+        listen_on="unix:@hop-demo",
         neovim=neovim,
         browser=browser,
         sessions_loader=lambda: {
             "demo": SessionState(name="demo", project_root=project_root.resolve()),
         },
-        listen_on_env="unix:@hop-demo",
     )
 
     assert session is None
     assert neovim.opened_targets == []
     assert browser.urls == []
+
+
+def test_open_selection_in_window_logs_when_listen_on_is_not_a_hop_socket(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.INFO, logger="hop.open_selection"):
+        result = open_selection_in_window(
+            "app/models/user.rb",
+            source_cwd=tmp_path.resolve(),
+            listen_on="unix:@something-else",
+            neovim=StubNeovimAdapter(),
+            browser=StubBrowserAdapter(),
+            sessions_loader=lambda: {},
+        )
+
+    assert result is None
+    assert any("not a hop session socket" in record.message for record in caplog.records)
+
+
+def test_open_selection_in_window_logs_when_listen_on_is_none(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level(logging.INFO, logger="hop.open_selection"):
+        result = open_selection_in_window(
+            "app/models/user.rb",
+            source_cwd=tmp_path.resolve(),
+            listen_on=None,
+            neovim=StubNeovimAdapter(),
+            browser=StubBrowserAdapter(),
+            sessions_loader=lambda: {},
+        )
+
+    assert result is None
+    assert any("not a hop session socket" in record.message for record in caplog.records)
+
+
+def test_open_selection_in_window_logs_when_source_cwd_missing(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    project_root = tmp_path / "demo"
+    project_root.mkdir(parents=True)
+
+    with caplog.at_level(logging.INFO, logger="hop.open_selection"):
+        result = open_selection_in_window(
+            "app/models/user.rb",
+            source_cwd=None,
+            listen_on="unix:@hop-demo",
+            neovim=StubNeovimAdapter(),
+            browser=StubBrowserAdapter(),
+            sessions_loader=lambda: {
+                "demo": SessionState(name="demo", project_root=project_root.resolve()),
+            },
+        )
+
+    assert result is None
+    assert any("source window has no cwd" in record.message for record in caplog.records)
+
+
+def test_open_selection_in_window_logs_when_target_does_not_resolve(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    project_root = tmp_path / "demo"
+    terminal_cwd = project_root / "src"
+    terminal_cwd.mkdir(parents=True)
+
+    with caplog.at_level(logging.INFO, logger="hop.open_selection"):
+        result = open_selection_in_window(
+            "missing/file.rb:4",
+            source_cwd=terminal_cwd.resolve(),
+            listen_on="unix:@hop-demo",
+            neovim=StubNeovimAdapter(),
+            browser=StubBrowserAdapter(),
+            sessions_loader=lambda: {
+                "demo": SessionState(name="demo", project_root=project_root.resolve()),
+            },
+        )
+
+    assert result is None
+    assert any("could not resolve" in record.message for record in caplog.records)
+
+
+def test_open_selection_in_window_logs_dispatch_on_success(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    project_root = tmp_path / "demo"
+    terminal_cwd = project_root / "src"
+    selected_file = terminal_cwd / "app/models/user.rb"
+    selected_file.parent.mkdir(parents=True)
+    selected_file.write_text("class User\nend\n")
+
+    with caplog.at_level(logging.INFO, logger="hop.open_selection"):
+        result = open_selection_in_window(
+            "app/models/user.rb:7",
+            source_cwd=terminal_cwd.resolve(),
+            listen_on="unix:@hop-demo",
+            neovim=StubNeovimAdapter(),
+            browser=StubBrowserAdapter(),
+            sessions_loader=lambda: {
+                "demo": SessionState(name="demo", project_root=project_root.resolve()),
+            },
+        )
+
+    assert result is not None
+    assert any("dispatching file" in record.message for record in caplog.records)

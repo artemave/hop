@@ -410,6 +410,40 @@ def test_inspect_window_uses_env_driven_transport_for_kitten_callers() -> None:
 
     assert window is not None
     assert window.id == 17
-    # inspect_window calls the factory with no listen_on — it relies on
-    # KITTY_LISTEN_ON in the kitten's env (set by kitty itself).
+    # No explicit listen_on: factory gets None and falls back to env
+    # (KITTY_LISTEN_ON in the kitten's process).
     assert factory.calls[0][0] is None
+
+
+def test_inspect_window_forwards_explicit_listen_on_to_transport_factory() -> None:
+    factory = StubKittyFactory(
+        [
+            {
+                "ok": True,
+                "data": [
+                    {
+                        "tabs": [
+                            {
+                                "windows": [
+                                    {
+                                        "id": 17,
+                                        "user_vars": {
+                                            "hop_session": "demo",
+                                            "hop_role": "shell",
+                                            "hop_project_root": str(build_session().project_root),
+                                        },
+                                        "cwd": str(build_session().project_root),
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ],
+            }
+        ]
+    )
+    adapter = KittyRemoteControlAdapter(transport_factory=factory, launcher=StubLauncher())
+
+    adapter.inspect_window(17, listen_on="unix:@hop-demo")
+
+    assert factory.calls[0][0] == "unix:@hop-demo"

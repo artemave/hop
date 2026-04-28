@@ -48,7 +48,9 @@ class StubKittyAdapter:
         self.runs.append((session.session_name, role, command, session.project_root))
         return 99
 
-    def inspect_window(self, window_id: int) -> KittyWindowContext | None:
+    def inspect_window(
+        self, window_id: int, *, listen_on: str | None = None
+    ) -> KittyWindowContext | None:
         return None
 
     def list_session_windows(self, session: ProjectSession) -> Sequence[KittyWindow]:
