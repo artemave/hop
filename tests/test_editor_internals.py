@@ -54,6 +54,19 @@ class StubSwayAdapter:
 
     def mark_window(self, window_id: int, mark: str) -> None:
         self.marked.append((window_id, mark))
+        self._windows = [
+            SwayWindow(
+                id=window.id,
+                workspace_name=window.workspace_name,
+                app_id=window.app_id,
+                window_class=window.window_class,
+                marks=window.marks + (mark,),
+                focused=window.focused,
+            )
+            if window.id == window_id
+            else window
+            for window in self._windows
+        ]
 
 
 def build_session() -> ProjectSession:
@@ -85,7 +98,15 @@ def _unmarked_editor(window_id: int, *, app_id: str = "hop:editor") -> SwayWindo
 
 
 def test_focus_raises_when_sway_has_no_editor_window(tmp_path: Path) -> None:
-    runner = StubProcessRunner([subprocess.CompletedProcess(("nvim",), 0, "", "")])
+    # Gate poll (rc=1): server not alive → fall through to launch.
+    # _wait_for_server reads v:vim_did_enter; rc=0 stdout="1" → ready.
+    # Launch transport doesn't add a Sway window, so _focus_editor_window raises.
+    runner = StubProcessRunner(
+        [
+            subprocess.CompletedProcess(("nvim",), 1, "", ""),
+            subprocess.CompletedProcess(("nvim",), 0, "1", ""),
+        ]
+    )
     transport = StubKittyTransport([])
     adapter = SharedNeovimEditorAdapter(
         sway=StubSwayAdapter([]),
@@ -130,7 +151,15 @@ def test_focus_marks_unmarked_editor_on_first_sighting(tmp_path: Path) -> None:
 
 
 def test_focus_skips_unmarked_editor_belonging_to_a_different_session(tmp_path: Path) -> None:
-    runner = StubProcessRunner([subprocess.CompletedProcess(("nvim",), 0, "", "")])
+    # Server not alive at gate → relaunch path → _wait_for_server (vim_did_enter)
+    # succeeds → _focus_editor_window doesn't accept the foreign-marked window
+    # for this session and raises.
+    runner = StubProcessRunner(
+        [
+            subprocess.CompletedProcess(("nvim",), 1, "", ""),
+            subprocess.CompletedProcess(("nvim",), 0, "1", ""),
+        ]
+    )
     transport = StubKittyTransport([])
     foreign_editor = SwayWindow(
         id=42,
@@ -220,6 +249,44 @@ def test_open_target_raises_stderr_when_remote_send_fails(
 
     with pytest.raises(NeovimCommandError, match="permission denied"):
         adapter.open_target(build_session(), target="README.md")
+
+
+def test_open_target_retries_remote_expr_on_connection_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Right after launch, the in-backend nvim's listener can briefly flap
+    (compose-exec startup race, UI attach init); the first --remote-expr
+    lands in the gap with `connection refused`. Adapter should wait for the
+    listener to recover and retry once."""
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    runner = StubProcessRunner(
+        [
+            # _ensure_editor → _server_is_running gate: alive.
+            subprocess.CompletedProcess(("nvim",), 0, "", ""),
+            # First open-expr: connection refused (listener flapped).
+            subprocess.CompletedProcess(
+                ("nvim",), 1, "", "E247: Failed to connect to '...': connection refused. Send failed.\n"
+            ),
+            # _wait_for_server readiness poll after the refusal: ready.
+            subprocess.CompletedProcess(("nvim",), 0, "1", ""),
+            # Retry open-expr: success.
+            subprocess.CompletedProcess(("nvim",), 0, "", ""),
+        ]
+    )
+    transport = StubKittyTransport([])
+    adapter = SharedNeovimEditorAdapter(
+        sway=StubSwayAdapter([_marked_editor(31)]),
+        kitty_transport=transport,
+        process_runner=runner,
+    )
+
+    adapter.open_target(build_session(), target="README.md")
+
+    # 4 nvim calls total: gate poll + first open-expr (refused) + recovery
+    # poll + retry open-expr. All --remote-expr; none use --remote-send.
+    assert len(runner.commands) == 4
+    assert all("--remote-expr" in cmd for cmd in runner.commands)
+    assert not any("--remote-send" in cmd for cmd in runner.commands)
 
 
 def test_remove_stale_socket_ignores_missing_paths(tmp_path: Path) -> None:

@@ -18,6 +18,11 @@ EDITOR_MARK_PREFIX = "_hop_editor:"
 EDITOR_READY_TIMEOUT_SECONDS = 5.0
 EDITOR_READY_POLL_INTERVAL_SECONDS = 0.05
 DEFAULT_REMOTE_CHECK_EXPRESSION = "1"
+# `v:vim_did_enter` flips from 0 to 1 right after VimEnter fires — i.e. after
+# init.lua and all plugins have finished. Polling on it (instead of just
+# "RPC reachable") avoids racing against startup buffer-clobbering plugins
+# (dashboards, oil/telescope auto-open, etc.) that would discard our `:drop`.
+READY_EXPRESSION = "v:vim_did_enter"
 
 SessionBackendFactory = Callable[[ProjectSession], SessionBackend]
 
@@ -67,11 +72,31 @@ class SharedNeovimEditorAdapter:
     def open_target(self, session: ProjectSession, *, target: str) -> None:
         self._ensure_editor(session)
         self._focus_editor_window(session)
-        self._send_remote_keys(session, build_remote_open_command(target))
+        self._send_remote_expr(
+            session, build_remote_open_expr(self._translate_target(session, target))
+        )
+
+    def _translate_target(self, session: ProjectSession, target: str) -> str:
+        # `target` is a host path (optionally with `:line`). For backends whose
+        # nvim runs in a different filesystem namespace (e.g. devcontainer),
+        # rewrite the path to its in-backend location so `:drop <path>` finds
+        # the file. The line suffix is reattached unchanged.
+        path_text, line_number = _split_target(target)
+        backend = self._session_backend_for(session)
+        translated = backend.translate_host_path(session, Path(path_text))
+        if line_number is None:
+            return str(translated)
+        return f"{translated}:{line_number}"
 
     def _ensure_editor(self, session: ProjectSession) -> None:
+        # Both the nvim server *and* a Sway window must be present. The kitty
+        # window can disappear (manual `swaymsg kill`, kitty crash) while the
+        # in-container nvim survives — `compose exec` does not reliably forward
+        # SIGHUP into the container — leaving an orphan socket. In that case
+        # we relaunch; the orphan nvim becomes unreachable once we replace the
+        # socket file and is reaped at session teardown.
         address = self._remote_address(session)
-        if self._server_is_running(address):
+        if self._server_is_running(address) and self._find_editor_window(session) is not None:
             return
 
         _remove_stale_socket(address)
@@ -128,11 +153,18 @@ class SharedNeovimEditorAdapter:
                 "allow_remote_control": True,
                 "window_title": EDITOR_ROLE,
                 "os_window_title": EDITOR_ROLE,
-                "os_window_name": EDITOR_OS_WINDOW_NAME,
+                # `os_window_class` sets Sway's `app_id` on Wayland;
+                # `os_window_name` would only set the X11 WM_CLASS-name half
+                # and leave Wayland's app_id at the default (`kitty`), which
+                # would prevent _find_editor_window from matching.
+                "os_window_class": EDITOR_OS_WINDOW_NAME,
             },
         )
 
     def _server_is_running(self, address: Path) -> bool:
+        # Cheap reachability check — used by the `_ensure_editor` gate to
+        # detect orphan sockets from previous sessions. Doesn't gate on init
+        # completion (that's `_server_is_ready`'s job).
         result = self._process_runner.run(
             [
                 NVIM_COMMAND,
@@ -144,31 +176,60 @@ class SharedNeovimEditorAdapter:
         )
         return result.returncode == 0
 
+    def _server_is_ready(self, address: Path) -> bool:
+        result = self._process_runner.run(
+            [
+                NVIM_COMMAND,
+                "--server",
+                str(address),
+                "--remote-expr",
+                READY_EXPRESSION,
+            ]
+        )
+        return result.returncode == 0 and result.stdout.strip() == "1"
+
     def _wait_for_server(self, address: Path) -> None:
         deadline = time.monotonic() + self._ready_timeout_seconds
         while time.monotonic() < deadline:
-            if self._server_is_running(address):
+            if self._server_is_ready(address):
                 return
             time.sleep(self._ready_poll_interval_seconds)
 
         msg = f"Neovim did not become ready at {address!s}."
         raise NeovimCommandError(msg)
 
-    def _send_remote_keys(self, session: ProjectSession, keys: str) -> None:
+    def _send_remote_expr(self, session: ProjectSession, expr: str) -> None:
+        # Use --remote-expr (direct vimscript eval) rather than --remote-send
+        # (keystroke injection): expr-eval runs through the API regardless of
+        # nvim's mode and is robust against keys arriving mid-init, where
+        # mappings (and thus `<Cmd>...`) may not yet be wired up.
         address = self._remote_address(session)
-        result = self._process_runner.run(
-            [
-                NVIM_COMMAND,
-                "--server",
-                str(address),
-                "--remote-send",
-                keys,
-            ]
+        result = self._send_expr_once(address, expr)
+        if result.returncode == 0:
+            return
+
+        # The in-backend nvim's listener can briefly flap right after
+        # `_wait_for_server` first sees it (compose-exec startup, UI attach
+        # init). The first connect can land in that gap and get
+        # `connection refused`. Wait for the listener to recover and retry.
+        if "connection refused" in (result.stderr or "").lower():
+            try:
+                self._wait_for_server(address)
+            except NeovimCommandError:
+                pass
+            else:
+                result = self._send_expr_once(address, expr)
+                if result.returncode == 0:
+                    return
+
+        stderr = (result.stderr or "").strip()
+        msg = stderr or f"Could not evaluate expression in Neovim at {address!s}."
+        raise NeovimCommandError(msg)
+
+    def _send_expr_once(self, address: Path, expr: str) -> subprocess.CompletedProcess[str]:
+        return self._process_runner.run(
+            [NVIM_COMMAND, "--server", str(address), "--remote-expr", expr]
         )
-        if result.returncode != 0:
-            stderr = result.stderr.strip()
-            msg = stderr or f"Could not send keys to Neovim at {address!s}."
-            raise NeovimCommandError(msg)
 
     def _remote_address(self, session: ProjectSession) -> Path:
         return self._session_backend_for(session).editor_remote_address(session)
@@ -184,13 +245,19 @@ class _SubprocessRunner:
         )
 
 
-def build_remote_open_command(target: str) -> str:
+def build_remote_open_expr(target: str) -> str:
+    """Build a vimscript expression that opens ``target`` in the remote nvim.
+
+    Uses ``execute()`` with a list of commands so a single RPC eval covers
+    the open-and-jump-to-line case without any keystroke injection.
+    """
+
     path_text, line_number = _split_target(target)
     escaped_path = _quote_vimscript_string(path_text)
-    commands = [f"<Cmd>execute 'drop ' . fnameescape('{escaped_path}')<CR>"]
-    if line_number is not None:
-        commands.append(f"<Cmd>{line_number}<CR>")
-    return "".join(commands)
+    drop_expr = f"'drop ' . fnameescape('{escaped_path}')"
+    if line_number is None:
+        return f"execute({drop_expr})"
+    return f"execute([{drop_expr}, '{line_number}'])"
 
 
 def _split_target(target: str) -> tuple[str, int | None]:

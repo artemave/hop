@@ -35,6 +35,8 @@ class SessionBackend(Protocol):
 
     def translate_terminal_cwd(self, session: ProjectSession, cwd: Path) -> Path: ...
 
+    def translate_host_path(self, session: ProjectSession, host_path: Path) -> Path: ...
+
     def teardown(self, session: ProjectSession) -> None: ...
 
 
@@ -54,6 +56,9 @@ class HostBackend:
 
     def translate_terminal_cwd(self, session: ProjectSession, cwd: Path) -> Path:
         return cwd
+
+    def translate_host_path(self, session: ProjectSession, host_path: Path) -> Path:
+        return host_path
 
     def teardown(self, session: ProjectSession) -> None:
         return None
@@ -118,6 +123,18 @@ class CommandBackend:
         except ValueError:
             return cwd
         return session.project_root / relative
+
+    def translate_host_path(self, session: ProjectSession, host_path: Path) -> Path:
+        # Inverse of translate_terminal_cwd: rewrite a host path under the
+        # project root to its in-backend location so commands like nvim's
+        # `:drop <path>` reach the right file from inside the container.
+        if self.workspace_path is None:
+            return host_path
+        try:
+            relative = host_path.relative_to(session.project_root)
+        except ValueError:
+            return host_path
+        return Path(self.workspace_path) / relative
 
     def teardown(self, session: ProjectSession) -> None:
         if self.teardown_command is None:

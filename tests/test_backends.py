@@ -123,6 +123,40 @@ def test_command_backend_translate_leaves_unrelated_paths(tmp_path: Path) -> Non
     assert backend.translate_terminal_cwd(session, other) == other
 
 
+def test_command_backend_translate_host_path_rewrites_under_project_root(tmp_path: Path) -> None:
+    backend = backend_from_config(make_backend(), workspace_path="/workspace")
+    session = build_session(tmp_path)
+
+    host_path = tmp_path / "lib" / "foo.py"
+
+    assert backend.translate_host_path(session, host_path) == Path("/workspace/lib/foo.py")
+
+
+def test_command_backend_translate_host_path_is_identity_outside_project(tmp_path: Path) -> None:
+    backend = backend_from_config(make_backend(), workspace_path="/workspace")
+    session = build_session(tmp_path)
+
+    other = Path("/etc/hosts")
+
+    assert backend.translate_host_path(session, other) == other
+
+
+def test_command_backend_translate_host_path_is_identity_without_workspace(tmp_path: Path) -> None:
+    backend = backend_from_config(make_backend(), workspace_path=None)
+    session = build_session(tmp_path)
+
+    host_path = tmp_path / "lib" / "foo.py"
+
+    assert backend.translate_host_path(session, host_path) == host_path
+
+
+def test_host_backend_translate_host_path_is_identity(tmp_path: Path) -> None:
+    session = build_session(tmp_path)
+    host_path = tmp_path / "lib" / "foo.py"
+
+    assert HostBackend().translate_host_path(session, host_path) == host_path
+
+
 def test_command_backend_prepare_runs_prepare_command(tmp_path: Path) -> None:
     runner = RecordingRunner()
     backend = backend_from_config(make_backend(), runner=runner)

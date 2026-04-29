@@ -277,7 +277,10 @@ class KittyRemoteControlAdapter:
             addr,
             "--title",
             role,
-            "--name",
+            # `--class` sets Sway's `app_id` on Wayland (and the WM_CLASS
+            # class half on X11). `--name` would only cover the X11 name
+            # half and leave Wayland app_id at the default `kitty`.
+            "--class",
             _os_window_name(role),
             "--override",
             "allow_remote_control=yes",
@@ -363,7 +366,9 @@ class KittyRemoteControlAdapter:
             "allow_remote_control": True,
             "window_title": role,
             "os_window_title": role,
-            "os_window_name": _os_window_name(role),
+            # `os_window_class` sets Sway's `app_id` on Wayland;
+            # `os_window_name` only sets the X11 WM_CLASS-name half.
+            "os_window_class": _os_window_name(role),
             "var": [f"{HOP_ROLE_VAR}={role}"],
         }
 
