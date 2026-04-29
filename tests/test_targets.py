@@ -115,3 +115,62 @@ def test_resolve_visible_output_target_ignores_unresolvable_matches(tmp_path: Pa
     )
 
     assert resolved is None
+
+
+def test_resolve_visible_output_target_resolves_bare_directory(tmp_path: Path) -> None:
+    project_root = tmp_path / "demo"
+    app_dir = project_root / "app"
+    app_dir.mkdir(parents=True)
+
+    resolved = resolve_visible_output_target(
+        "app",
+        terminal_cwd=project_root,
+        project_root=project_root,
+    )
+
+    assert resolved == ResolvedFileTarget(path=app_dir.resolve())
+
+
+def test_resolve_visible_output_target_resolves_extensionless_file(tmp_path: Path) -> None:
+    project_root = tmp_path / "demo"
+    project_root.mkdir(parents=True)
+    gemfile = project_root / "Gemfile"
+    gemfile.write_text("source 'https://rubygems.org'\n")
+
+    resolved = resolve_visible_output_target(
+        "Gemfile",
+        terminal_cwd=project_root,
+        project_root=project_root,
+    )
+
+    assert resolved == ResolvedFileTarget(path=gemfile.resolve())
+
+
+def test_resolve_visible_output_target_resolves_dotfile(tmp_path: Path) -> None:
+    project_root = tmp_path / "demo"
+    project_root.mkdir(parents=True)
+    dotfile = project_root / ".gitignore"
+    dotfile.write_text("node_modules\n")
+
+    resolved = resolve_visible_output_target(
+        ".gitignore",
+        terminal_cwd=project_root,
+        project_root=project_root,
+    )
+
+    assert resolved == ResolvedFileTarget(path=dotfile.resolve())
+
+
+def test_resolve_visible_output_target_parses_python_traceback_line_form(tmp_path: Path) -> None:
+    project_root = tmp_path / "demo"
+    project_root.mkdir(parents=True)
+    script = project_root / "foo.py"
+    script.write_text("print('hi')\n")
+
+    resolved = resolve_visible_output_target(
+        'foo.py", line 42',
+        terminal_cwd=project_root,
+        project_root=project_root,
+    )
+
+    assert resolved == ResolvedFileTarget(path=script.resolve(), line_number=42)

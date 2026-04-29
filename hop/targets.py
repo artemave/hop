@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
+# Permissive on purpose: any path-shaped token may match. The disk-existence
+# check in `_resolve_file_candidate` is what filters real targets from noise.
 VISIBLE_OUTPUT_TARGET_PATTERN = re.compile(
     r"""
     (?P<url>https?://[^\s<>"'`)\]}]+)
@@ -13,23 +15,19 @@ VISIBLE_OUTPUT_TARGET_PATTERN = re.compile(
     |
     (?P<rails_bare>[A-Z][A-Za-z0-9_:]*Controller\#[A-Za-z_][A-Za-z0-9_]*)
     |
+    (?:\w+\()?
     (?P<file>
-        (?:
-            ~/(?:[\w.-]+/)*[\w.-]+
-            |
-            /(?:[\w.-]+/)*[\w.-]+
-            |
-            (?:\.\.?/)+(?:[\w.-]+/)*[\w.-]+
-            |
-            (?:[\w.-]+/)+[\w.-]+
-            |
-            [\w.-]+\.[\w.-]+
-        )
-        (?::\d+)?
+        [~./]?[-a-zA-Z0-9_./]
+        [-a-zA-Z0-9_+\-,./@\[\]$]*
+        (?:\([-a-zA-Z0-9_+\-,./@\[\]$]*\)[-a-zA-Z0-9_+\-,./@\[\]$]*)*
+        (?:(?::|",\s+line\s+)\d+)?
     )
+    \)?
     """,
     re.VERBOSE,
 )
+
+_PYTHON_TRACEBACK_LINE_SUFFIX = re.compile(r'",\s+line\s+(\d+)$')
 
 RAILS_REFERENCE_PATTERN = re.compile(
     r"^(?:Processing\s+)?(?P<controller>[A-Z][A-Za-z0-9_:]*Controller)#(?P<action>[A-Za-z_][A-Za-z0-9_]*)$"
@@ -125,6 +123,9 @@ def _underscore_word(value: str) -> str:
 
 
 def _split_file_target(selection: str) -> tuple[str, int | None]:
+    traceback_match = _PYTHON_TRACEBACK_LINE_SUFFIX.search(selection)
+    if traceback_match is not None:
+        return selection[: traceback_match.start()], int(traceback_match.group(1))
     path_text, separator, suffix = selection.rpartition(":")
     if separator and suffix.isdigit() and path_text:
         return path_text, int(suffix)
@@ -148,7 +149,7 @@ def _resolve_file_candidate(
 
     for path_candidate in path_candidates:
         resolved_candidate = path_candidate.resolve(strict=False)
-        if resolved_candidate.is_file():
+        if resolved_candidate.exists():
             return resolved_candidate
     return None
 

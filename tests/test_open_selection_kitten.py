@@ -41,6 +41,35 @@ def test_mark_skips_file_shaped_tokens_that_do_not_exist(
     assert [match["index"] for match in matches] == [0, 1, 2]
 
 
+def test_mark_finds_bare_directories_and_extensionless_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "app").mkdir()
+    (tmp_path / "Gemfile").write_text("")
+    (tmp_path / ".gitignore").write_text("")
+    monkeypatch.chdir(tmp_path)
+
+    # Mimic an `ls` output line.
+    text = "app Gemfile .gitignore Rakefile-missing"
+    matches = list(main.mark(text, None, _mark_factory, [], None))
+
+    assert [match["text"] for match in matches] == ["app", "Gemfile", ".gitignore"]
+
+
+def test_mark_unwraps_function_call_around_file_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "foo.js").write_text("")
+    monkeypatch.chdir(tmp_path)
+
+    text = "require(foo.js)"
+    matches = list(main.mark(text, None, _mark_factory, [], None))
+
+    assert len(matches) == 1
+    assert matches[0]["text"] == "foo.js"
+    assert text[matches[0]["start"] : matches[0]["end"]] == "foo.js"
+
+
 class StubWindow:
     def __init__(self, cwd_of_child: str | None) -> None:
         self.cwd_of_child = cwd_of_child

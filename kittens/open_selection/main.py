@@ -51,8 +51,14 @@ def mark(text: Any, args: Any, Mark: Any, extra_cli_args: Any, *unused_args: Any
     base_cwd = Path.cwd()
     index = 0
     for match in VISIBLE_OUTPUT_TARGET_PATTERN.finditer(text):
-        start, end = match.span()
-        selected_text = match.group(0).replace("\0", "").replace("\n", "")
+        for group_name in ("url", "rails", "rails_bare", "file"):
+            group_value = match.group(group_name)
+            if group_value:
+                start, end = match.span(group_name)
+                break
+        else:
+            continue
+        selected_text = group_value.replace("\0", "").replace("\n", "")
         if resolve_visible_output_target(
             selected_text,
             terminal_cwd=base_cwd,
