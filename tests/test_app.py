@@ -70,9 +70,7 @@ class StubKittyAdapter:
         self.runs.append((session.session_name, role, command, session.project_root))
         return 0
 
-    def inspect_window(
-        self, window_id: int, *, listen_on: str | None = None
-    ) -> KittyWindowContext | None:
+    def inspect_window(self, window_id: int, *, listen_on: str | None = None) -> KittyWindowContext | None:
         return None
 
     def list_session_windows(self, session: ProjectSession) -> list[KittyWindow]:
@@ -529,13 +527,17 @@ def test_session_base_registry_runs_default_then_prepare_and_discovers_workspace
         runner=runner,
     )
 
-    backend = registry.resolve_for_entry(_make_session(tmp_path), backend_name=None)
+    session = _make_session(tmp_path)
+    backend = registry.resolve_for_entry(session, backend_name=None)
 
     assert isinstance(backend, CommandBackend)
     assert backend.workspace_path == "/workspace"
+    flock_args = calls[1][:2]
+    assert flock_args[0] == "flock"
+    assert flock_args[1].endswith(f"backend-{session.session_name}.lock")
     assert calls == [
         ("test", "-f", "docker-compose.dev.yml"),  # default probe
-        ("compose", "up", "-d", "devcontainer"),
+        flock_args + ("compose", "up", "-d", "devcontainer"),
         ("compose", "exec", "devcontainer", "pwd"),
     ]
 

@@ -72,9 +72,7 @@ def test_host_base_translate_terminal_cwd_is_identity(tmp_path: Path) -> None:
 
 
 def test_command_backend_shell_substitutes_project_root(tmp_path: Path) -> None:
-    backend = backend_from_config(
-        make_backend(shell=("ssh", "host", "cd", "{project_root}", "&&", "exec", "zsh"))
-    )
+    backend = backend_from_config(make_backend(shell=("ssh", "host", "cd", "{project_root}", "&&", "exec", "zsh")))
 
     args = backend.shell_args(build_session(tmp_path))
 
@@ -157,13 +155,15 @@ def test_host_backend_translate_host_path_is_identity(tmp_path: Path) -> None:
     assert HostBackend().translate_host_path(session, host_path) == host_path
 
 
-def test_command_backend_prepare_runs_prepare_command(tmp_path: Path) -> None:
+def test_command_backend_prepare_runs_prepare_command(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
     runner = RecordingRunner()
     backend = backend_from_config(make_backend(), runner=runner)
 
     backend.prepare(build_session(tmp_path))
 
-    assert runner.calls == [(("compose", "up", "-d", "devcontainer"), tmp_path)]
+    lock = tmp_path / "hop" / f"backend-{tmp_path.name}.lock"
+    assert runner.calls == [(("flock", str(lock), "compose", "up", "-d", "devcontainer"), tmp_path)]
 
 
 def test_command_backend_prepare_is_noop_without_command(tmp_path: Path) -> None:
@@ -183,13 +183,15 @@ def test_command_backend_prepare_raises_on_failure(tmp_path: Path) -> None:
         backend.prepare(build_session(tmp_path))
 
 
-def test_command_backend_teardown_runs_teardown_command(tmp_path: Path) -> None:
+def test_command_backend_teardown_runs_teardown_command(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
     runner = RecordingRunner()
     backend = backend_from_config(make_backend(), runner=runner)
 
     backend.teardown(build_session(tmp_path))
 
-    assert runner.calls == [(("compose", "down"), tmp_path)]
+    lock = tmp_path / "hop" / f"backend-{tmp_path.name}.lock"
+    assert runner.calls == [(("flock", str(lock), "compose", "down"), tmp_path)]
 
 
 def test_command_backend_teardown_raises_on_failure(tmp_path: Path) -> None:
@@ -198,6 +200,27 @@ def test_command_backend_teardown_raises_on_failure(tmp_path: Path) -> None:
 
     with pytest.raises(SessionBackendError, match="teardown failed"):
         backend.teardown(build_session(tmp_path))
+
+
+def test_command_backend_prepare_and_teardown_share_a_session_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The same lock path must wrap both prepare and teardown so that a
+    # `hop` invocation that follows a still-running `hop kill` blocks until
+    # the teardown subprocess exits, instead of racing it inside
+    # podman-compose.
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    runner = RecordingRunner()
+    backend = backend_from_config(make_backend(), runner=runner)
+    session = build_session(tmp_path)
+
+    backend.prepare(session)
+    backend.teardown(session)
+
+    prepare_args, _ = runner.calls[0]
+    teardown_args, _ = runner.calls[1]
+    assert prepare_args[:2] == ("flock", str(tmp_path / "hop" / f"backend-{tmp_path.name}.lock"))
+    assert teardown_args[:2] == prepare_args[:2]
 
 
 def test_command_backend_discover_workspace_returns_stdout(tmp_path: Path) -> None:

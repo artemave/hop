@@ -6,4 +6,15 @@
 
 set -euo pipefail
 
-exec "$(dirname "$(readlink -f "$0")")/../sway/hop-kill-session"
+# Detach the actual work into a new session before doing anything else.
+# Once the user activates this action vicinae SIGTERMs the script's process
+# group, which would otherwise truncate `hop kill`'s teardown step (e.g.
+# leaving a devcontainer stuck in `stopping` state because podman-compose
+# down was killed mid-flight). setsid -f forks past that signal so cleanup
+# runs to completion. `vicinae close` is invoked from the detached session
+# for the same reason.
+SWAY_SCRIPT="$(dirname "$(readlink -f "$0")")/../sway/hop-kill-session"
+exec setsid -f bash -c '
+    vicinae close
+    exec "$1"
+' _ "$SWAY_SCRIPT"

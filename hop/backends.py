@@ -99,7 +99,7 @@ class CommandBackend:
     def prepare(self, session: ProjectSession) -> None:
         if self.prepare_command is None:
             return
-        result = self.runner(self.prepare_command, session.project_root)
+        result = self.runner(_flock_wrap(self.prepare_command, session), session.project_root)
         if result.returncode != 0:
             stderr = (result.stderr or result.stdout).strip()
             msg = f"backend {self.name!r} prepare failed for {session.session_name!r}: {stderr}"
@@ -139,7 +139,7 @@ class CommandBackend:
     def teardown(self, session: ProjectSession) -> None:
         if self.teardown_command is None:
             return
-        result = self.runner(self.teardown_command, session.project_root)
+        result = self.runner(_flock_wrap(self.teardown_command, session), session.project_root)
         if result.returncode != 0:
             stderr = (result.stderr or result.stdout).strip()
             msg = f"backend {self.name!r} teardown failed for {session.session_name!r}: {stderr}"
@@ -233,10 +233,7 @@ def backend_from_config(
     runner: CommandRunner = _default_runner,
 ) -> CommandBackend:
     if config.shell is None or config.editor is None:
-        msg = (
-            f"backend {config.name!r} is missing shell or editor; "
-            f"only runnable backends can be instantiated"
-        )
+        msg = f"backend {config.name!r} is missing shell or editor; only runnable backends can be instantiated"
         raise UnknownBackendError(msg)
     return CommandBackend(
         name=config.name,
@@ -277,3 +274,20 @@ def _editor_remote_address(session: ProjectSession) -> Path:
     runtime_dir.mkdir(parents=True, exist_ok=True)
     root_hash = hashlib.sha256(str(session.project_root).encode()).hexdigest()[:16]
     return runtime_dir / f"hop-{root_hash}.sock"
+
+
+def _backend_lock_path(session: ProjectSession) -> Path:
+    runtime_root = os.environ.get("XDG_RUNTIME_DIR") or gettempdir()
+    runtime_dir = Path(runtime_root).expanduser().resolve() / "hop"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    return runtime_dir / f"backend-{session.session_name}.lock"
+
+
+def _flock_wrap(command: tuple[str, ...], session: ProjectSession) -> tuple[str, ...]:
+    # Serialize prepare and teardown for the same session: when `hop kill`
+    # detaches its teardown via setsid -f (so it survives vicinae's SIGTERM),
+    # a subsequent `hop` would otherwise race the still-running teardown and
+    # leave podman-compose in an inconsistent state. flock(1) holds the lock
+    # for the lifetime of the wrapped command, so even if our parent dies the
+    # lock is held by the subprocess and the next caller blocks on it.
+    return ("flock", str(_backend_lock_path(session))) + command
