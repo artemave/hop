@@ -174,3 +174,21 @@ def test_resolve_visible_output_target_parses_python_traceback_line_form(tmp_pat
     )
 
     assert resolved == ResolvedFileTarget(path=script.resolve(), line_number=42)
+
+
+def test_resolve_visible_output_target_skips_tilde_paths_with_unknown_user(tmp_path: Path) -> None:
+    # When kitty runs inside a devcontainer, the host's `~user/...` paths in
+    # visible output reference a user that doesn't exist in the container's
+    # passwd. Path.expanduser would raise RuntimeError on those; we must skip
+    # them cleanly so the mark pass keeps scanning the rest of the screen.
+    project_root = tmp_path / "demo"
+    terminal_cwd = project_root / "src"
+    terminal_cwd.mkdir(parents=True)
+
+    resolved = resolve_visible_output_target(
+        "~hop_test_nonexistent_user_xyz/projects/foo.py:7",
+        terminal_cwd=terminal_cwd,
+        project_root=project_root,
+    )
+
+    assert resolved is None

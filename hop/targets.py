@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os.path
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -139,7 +140,7 @@ def _resolve_file_candidate(
     project_root: Path,
 ) -> Path | None:
     normalized_candidate = _normalize_file_candidate(candidate)
-    expanded_candidate = Path(normalized_candidate).expanduser()
+    expanded_candidate = Path(os.path.expanduser(normalized_candidate))
     path_candidates: list[Path] = []
     if expanded_candidate.is_absolute():
         path_candidates.append(expanded_candidate)
