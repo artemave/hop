@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# @vicinae.schemaVersion 1
+# @vicinae.title Hop kill current session
+# @vicinae.description Kill the hop session whose workspace is currently focused. No-op when not on a hop workspace.
+# @vicinae.mode silent
+
+set -euo pipefail
+
+exec "$(dirname "$(readlink -f "$0")")/../sway/hop-kill-session"

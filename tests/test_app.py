@@ -26,12 +26,18 @@ from hop.sway import SwayWindow
 
 
 class StubSwayAdapter:
-    def __init__(self, workspaces: tuple[str, ...] = (), *, focused_workspace: str = "") -> None:
+    def __init__(
+        self,
+        workspaces: tuple[str, ...] = (),
+        *,
+        focused_workspace: str = "",
+        windows: tuple[SwayWindow, ...] = (),
+    ) -> None:
         self.workspaces = workspaces
         self.focused_workspace = focused_workspace
+        self.windows = windows
         self.switched_workspaces: list[str] = []
         self.closed_windows: list[int] = []
-        self.removed_workspaces: list[str] = []
 
     def switch_to_workspace(self, workspace_name: str) -> None:
         self.switched_workspaces.append(workspace_name)
@@ -40,13 +46,10 @@ class StubSwayAdapter:
         return tuple(workspace for workspace in self.workspaces if workspace.startswith(prefix))
 
     def list_windows(self) -> tuple[SwayWindow, ...]:
-        return ()
+        return self.windows
 
     def close_window(self, window_id: int) -> None:
         self.closed_windows.append(window_id)
-
-    def remove_workspace(self, workspace_name: str) -> None:
-        self.removed_workspaces.append(workspace_name)
 
     def get_focused_workspace(self) -> str:
         return self.focused_workspace
@@ -133,9 +136,14 @@ def build_services(
     workspaces: tuple[str, ...] = (),
     focused_workspace: str = "",
     last_cmd_output: str = "",
+    sway_windows: tuple[SwayWindow, ...] = (),
 ) -> StubHopServices:
     return StubHopServices(
-        sway=StubSwayAdapter(workspaces=workspaces, focused_workspace=focused_workspace),
+        sway=StubSwayAdapter(
+            workspaces=workspaces,
+            focused_workspace=focused_workspace,
+            windows=sway_windows,
+        ),
         kitty=StubKittyAdapter(last_cmd_output=last_cmd_output),
         neovim=StubNeovimAdapter(),
         browser=StubBrowserAdapter(),
@@ -408,15 +416,31 @@ def test_execute_command_uses_invocation_directory_for_browser_sessions(tmp_path
     assert services.browser.calls == [("src", nested_directory.resolve(), "https://example.com")]
 
 
-def test_execute_command_kills_managed_windows_and_removes_workspace(tmp_path: Path) -> None:
+def test_execute_command_kills_every_window_on_session_workspace(tmp_path: Path) -> None:
     project_root = tmp_path / "demo"
     project_root.mkdir()
     workspace_name = f"p:{project_root.name}"
 
-    services = build_services(workspaces=(workspace_name,))
+    session_window = SwayWindow(
+        id=11,
+        workspace_name=workspace_name,
+        app_id="kitty",
+        window_class=None,
+    )
+    drifted_browser = SwayWindow(
+        id=12,
+        workspace_name="p:other",
+        app_id="firefox",
+        window_class=None,
+        marks=("_hop_browser:demo",),
+    )
+    services = build_services(
+        workspaces=(workspace_name,),
+        sway_windows=(session_window, drifted_browser),
+    )
 
     assert execute_command(KillCommand(), cwd=project_root, services=services.as_services()) == 0
-    assert services.sway.removed_workspaces == [workspace_name]
+    assert sorted(services.sway.closed_windows) == [11, 12]
 
 
 # --- SessionBackendRegistry --------------------------------------------------

@@ -156,6 +156,22 @@ hop browser https://example.com
 
 This reuses or creates a session-owned window in your default browser. If that window was moved to another workspace, `hop browser` moves it back to the session workspace before focusing it.
 
+### Kill the current session
+
+```bash
+hop kill # run from the project root
+```
+
+Closes every Sway/Kitty window owned by the session, removes its workspace, and runs the backend's `teardown` (e.g. `compose down`).
+
+For one-keystroke access from the focused session workspace, bind a sway shortcut to `sway/hop-kill-session`:
+
+```conf
+bindsym $mod+Shift+k exec /path/to/hop/sway/hop-kill-session
+```
+
+The script reads the focused workspace from sway, looks up its host `project_root` via `hop list --json`, and runs `hop kill` from there. Handy when the session's shells live inside a container or remote backend without `hop` installed, so you can't run `hop kill` from inside the session terminal.
+
 ### Switch sessions from the Vicinae launcher
 
 `vicinae/hop-switch-session` is a [Vicinae](https://www.vicinae.com/) script command that lists live hop sessions in the launcher and switches to the one you pick.
@@ -191,6 +207,17 @@ ln -s "$PWD/vicinae/hop-move-window-to-session" ~/.local/share/vicinae/scripts/
 ```conf
 bindsym $mod+Shift+m exec /path/to/hop/vicinae/hop-move-window-to-session
 ```
+
+### Kill the focused hop session from the Vicinae launcher
+
+`vicinae/hop-kill-session` is a thin wrapper around the `sway/hop-kill-session` helper that exposes it under Vicinae as *Hop kill current session*. Open Vicinae, type `hk` (or any prefix that fuzzy-matches), hit Enter, and the focused hop session is gone. No-op when the focused workspace isn't a `p:*` workspace.
+
+```bash
+mkdir -p ~/.local/share/vicinae/scripts
+ln -s "$PWD/vicinae/hop-kill-session" ~/.local/share/vicinae/scripts/
+```
+
+Unlike `hop-move-window-to-session`, this one is safe to invoke from inside Vicinae's launcher: it reads the focused *workspace* (which Vicinae doesn't change — it floats over the user's current workspace), not the focused window.
 
 ### Open visible-output targets from Kitty
 

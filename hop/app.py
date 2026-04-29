@@ -321,7 +321,6 @@ def execute_command(
             kill_session(
                 current_directory,
                 sway=services.sway,
-                kitty=services.kitty,
                 session_backend_for=services.session_backends.for_session,
             )
         case _:
