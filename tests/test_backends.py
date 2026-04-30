@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Sequence
 
 import pytest
+
 from hop.backends import (
     HostBackend,
     SessionBackendError,

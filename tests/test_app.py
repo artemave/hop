@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 import pytest
+
 from hop.app import HopServices, execute_command
 from hop.backends import CommandBackend, HostBackend
 from hop.commands import (

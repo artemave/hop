@@ -6,6 +6,7 @@ from subprocess import CompletedProcess
 from typing import Sequence
 
 import pytest
+
 from hop.browser import (
     BrowserCommandError,
     BrowserLaunchSpec,

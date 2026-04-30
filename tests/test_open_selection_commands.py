@@ -2,6 +2,7 @@ import logging
 from pathlib import Path
 
 import pytest
+
 from hop.commands.open_selection import open_selection_in_window
 from hop.kitty import session_socket_address
 from hop.session import ProjectSession

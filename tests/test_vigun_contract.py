@@ -6,8 +6,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
-import hop.cli
 import pytest
+
+import hop.cli
 from hop.app import HopServices
 from hop.kitty import KittyWindow, KittyWindowContext, KittyWindowState
 from hop.session import ProjectSession

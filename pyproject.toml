@@ -30,9 +30,17 @@ pythonVersion = "3.12"
 
 [tool.ruff]
 line-length = 120
+# Pin first-party explicitly and disable filesystem auto-detection. Without
+# this, a stray `<thirdparty>/__pycache__/` directory at the project root
+# (e.g. accidentally created by `python -m something <name>`) would make ruff
+# classify that name as first-party and silently disagree with CI.
+src = []
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["hop", "kittens"]
 
 [tool.uv]
 default-groups = ["dev"]

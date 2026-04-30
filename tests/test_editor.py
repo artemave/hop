@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence, cast
 
 import pytest
+
 from hop.editor import SharedNeovimEditorAdapter, build_remote_open_expr
 from hop.session import ProjectSession
 from hop.sway import SwayWindow

@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import pytest
+
 from hop.commands.tail import TailTimeoutError, UnknownRunError, tail_command
 from hop.kitty import KittyWindowState
 

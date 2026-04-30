@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import pytest
+
 from hop.session import ProjectSession
 from hop.state import (
     CommandBackendRecord,

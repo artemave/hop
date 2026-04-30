@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import pytest
+
 from hop.commands.run import DEFAULT_RUN_ROLE, default_runs_dir, run_command
 from hop.session import ProjectSession
 
