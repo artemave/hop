@@ -45,11 +45,11 @@ def test_record_session_persists_backend_base(tmp_path: Path) -> None:
         session,
         backend=CommandBackendRecord(
             name="devcontainer",
-            shell=("podman-compose", "exec", "devcontainer", "/usr/bin/zsh"),
-            editor=("podman-compose", "exec", "devcontainer", "nvim"),
-            prepare=("podman-compose", "up", "-d", "devcontainer"),
-            teardown=("podman-compose", "down"),
-            workspace_command=("podman-compose", "exec", "devcontainer", "pwd"),
+            shell="podman-compose exec devcontainer /usr/bin/zsh",
+            editor="podman-compose exec devcontainer nvim",
+            prepare="podman-compose up -d devcontainer",
+            teardown="podman-compose down",
+            workspace_command="podman-compose exec devcontainer pwd",
             workspace_path="/workspace",
         ),
         sessions_dir=sessions_dir,
@@ -59,11 +59,11 @@ def test_record_session_persists_backend_base(tmp_path: Path) -> None:
     assert payload["backend"] == {
         "type": "command",
         "name": "devcontainer",
-        "shell": ["podman-compose", "exec", "devcontainer", "/usr/bin/zsh"],
-        "editor": ["podman-compose", "exec", "devcontainer", "nvim"],
-        "prepare": ["podman-compose", "up", "-d", "devcontainer"],
-        "teardown": ["podman-compose", "down"],
-        "workspace_command": ["podman-compose", "exec", "devcontainer", "pwd"],
+        "shell": "podman-compose exec devcontainer /usr/bin/zsh",
+        "editor": "podman-compose exec devcontainer nvim",
+        "prepare": "podman-compose up -d devcontainer",
+        "teardown": "podman-compose down",
+        "workspace_command": "podman-compose exec devcontainer pwd",
         "workspace_path": "/workspace",
     }
 
@@ -76,8 +76,8 @@ def test_record_session_omits_optional_backend_fields(tmp_path: Path) -> None:
         session,
         backend=CommandBackendRecord(
             name="ssh",
-            shell=("ssh", "host", "zsh"),
-            editor=("ssh", "host", "nvim"),
+            shell="ssh host zsh",
+            editor="ssh host nvim",
         ),
         sessions_dir=sessions_dir,
     )
@@ -86,8 +86,8 @@ def test_record_session_omits_optional_backend_fields(tmp_path: Path) -> None:
     assert payload["backend"] == {
         "type": "command",
         "name": "ssh",
-        "shell": ["ssh", "host", "zsh"],
-        "editor": ["ssh", "host", "nvim"],
+        "shell": "ssh host zsh",
+        "editor": "ssh host nvim",
     }
 
 
@@ -151,11 +151,11 @@ def test_load_sessions_decodes_backend_base(tmp_path: Path) -> None:
                 "backend": {
                     "type": "command",
                     "name": "devcontainer",
-                    "shell": ["compose", "exec", "devcontainer", "zsh"],
-                    "editor": ["compose", "exec", "devcontainer", "nvim"],
-                    "prepare": ["compose", "up", "-d", "devcontainer"],
-                    "teardown": ["compose", "down"],
-                    "workspace_command": ["compose", "exec", "devcontainer", "pwd"],
+                    "shell": "compose exec devcontainer zsh",
+                    "editor": "compose exec devcontainer nvim",
+                    "prepare": "compose up -d devcontainer",
+                    "teardown": "compose down",
+                    "workspace_command": "compose exec devcontainer pwd",
                     "workspace_path": "/workspace",
                 },
             }
@@ -166,11 +166,11 @@ def test_load_sessions_decodes_backend_base(tmp_path: Path) -> None:
 
     assert sessions["alpha"].backend == CommandBackendRecord(
         name="devcontainer",
-        shell=("compose", "exec", "devcontainer", "zsh"),
-        editor=("compose", "exec", "devcontainer", "nvim"),
-        prepare=("compose", "up", "-d", "devcontainer"),
-        teardown=("compose", "down"),
-        workspace_command=("compose", "exec", "devcontainer", "pwd"),
+        shell="compose exec devcontainer zsh",
+        editor="compose exec devcontainer nvim",
+        prepare="compose up -d devcontainer",
+        teardown="compose down",
+        workspace_command="compose exec devcontainer pwd",
         workspace_path="/workspace",
     )
 
@@ -205,7 +205,7 @@ def test_load_sessions_decodes_explicit_host_backend_record(tmp_path: Path) -> N
 
 def test_load_sessions_falls_back_to_host_for_malformed_command_record(tmp_path: Path) -> None:
     """A `type=command` record missing shell/editor (or with wrong types) is
-    discarded — hop won't have valid command lists to invoke, so persisting a
+    discarded — hop won't have valid command strings to invoke, so persisting a
     HostBackendRecord lets the next entry resolve fresh."""
     sessions_dir = tmp_path / "sessions"
     sessions_dir.mkdir()
@@ -217,8 +217,8 @@ def test_load_sessions_falls_back_to_host_for_malformed_command_record(tmp_path:
                 "backend": {
                     "type": "command",
                     "name": "devcontainer",
-                    "shell": "not-a-list",
-                    "editor": ["nvim"],
+                    "shell": ["legacy", "list", "form"],
+                    "editor": "nvim",
                 },
             }
         )
@@ -229,9 +229,9 @@ def test_load_sessions_falls_back_to_host_for_malformed_command_record(tmp_path:
     assert sessions["alpha"].backend == HostBackendRecord()
 
 
-def test_load_sessions_drops_optional_command_fields_when_not_lists(tmp_path: Path) -> None:
+def test_load_sessions_drops_optional_command_fields_when_not_strings(tmp_path: Path) -> None:
     """Persisted records may pre-date a field or carry malformed values; treat
-    optional command fields that aren't lists as missing rather than crashing."""
+    optional command fields that aren't strings as missing rather than crashing."""
     sessions_dir = tmp_path / "sessions"
     sessions_dir.mkdir()
     (sessions_dir / "alpha.json").write_text(
@@ -242,9 +242,9 @@ def test_load_sessions_drops_optional_command_fields_when_not_lists(tmp_path: Pa
                 "backend": {
                     "type": "command",
                     "name": "devcontainer",
-                    "shell": ["zsh"],
-                    "editor": ["nvim"],
-                    "prepare": "not-a-list",
+                    "shell": "zsh",
+                    "editor": "nvim",
+                    "prepare": ["legacy", "list"],
                     "teardown": None,
                     "workspace_command": 42,
                 },
@@ -256,8 +256,8 @@ def test_load_sessions_drops_optional_command_fields_when_not_lists(tmp_path: Pa
 
     assert sessions["alpha"].backend == CommandBackendRecord(
         name="devcontainer",
-        shell=("zsh",),
-        editor=("nvim",),
+        shell="zsh",
+        editor="nvim",
         prepare=None,
         teardown=None,
         workspace_command=None,
@@ -272,17 +272,17 @@ def test_record_session_persists_translate_commands(tmp_path: Path) -> None:
         session,
         backend=CommandBackendRecord(
             name="devcontainer",
-            shell=("zsh",),
-            editor=("nvim",),
-            port_translate_command=("compose", "port", "devcontainer", "{port}"),
-            host_translate_command=("echo", "myserver"),
+            shell="zsh",
+            editor="nvim",
+            port_translate_command="compose port devcontainer {port}",
+            host_translate_command="echo myserver",
         ),
         sessions_dir=sessions_dir,
     )
 
     payload = json.loads((sessions_dir / "demo.json").read_text())
-    assert payload["backend"]["port_translate_command"] == ["compose", "port", "devcontainer", "{port}"]
-    assert payload["backend"]["host_translate_command"] == ["echo", "myserver"]
+    assert payload["backend"]["port_translate_command"] == "compose port devcontainer {port}"
+    assert payload["backend"]["host_translate_command"] == "echo myserver"
 
 
 def test_load_sessions_decodes_translate_commands(tmp_path: Path) -> None:
@@ -296,10 +296,10 @@ def test_load_sessions_decodes_translate_commands(tmp_path: Path) -> None:
                 "backend": {
                     "type": "command",
                     "name": "devcontainer",
-                    "shell": ["zsh"],
-                    "editor": ["nvim"],
-                    "port_translate_command": ["compose", "port", "{port}"],
-                    "host_translate_command": ["echo", "myserver"],
+                    "shell": "zsh",
+                    "editor": "nvim",
+                    "port_translate_command": "compose port {port}",
+                    "host_translate_command": "echo myserver",
                 },
             }
         )
@@ -309,10 +309,10 @@ def test_load_sessions_decodes_translate_commands(tmp_path: Path) -> None:
 
     assert sessions["alpha"].backend == CommandBackendRecord(
         name="devcontainer",
-        shell=("zsh",),
-        editor=("nvim",),
-        port_translate_command=("compose", "port", "{port}"),
-        host_translate_command=("echo", "myserver"),
+        shell="zsh",
+        editor="nvim",
+        port_translate_command="compose port {port}",
+        host_translate_command="echo myserver",
     )
 
 

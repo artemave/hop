@@ -78,17 +78,17 @@ Each session has exactly one Neovim instance.
 
 ### Session backend
 
-Each session has a **backend** that decides *where* its shells and editor run. The default is **host** (shells spawned by kitty as the user's default shell, neovim running on the host). Non-host backends are user-defined in `~/.config/hop/config.toml` and/or a project's `.hop.toml` — both files use the same `[backends.<name>]` schema and are merged at session entry. Each backend is a set of command-list templates hop runs at the appropriate lifecycle points:
+Each session has a **backend** that decides *where* its shells and editor run. The default is **host** (shells spawned by kitty as the user's default shell, neovim running on the host). Non-host backends are user-defined in `~/.config/hop/config.toml` and/or a project's `.hop.toml` — both files use the same `[backends.<name>]` schema and are merged at session entry. Each backend's command fields are shell command strings hop runs through `sh -c` after substituting placeholders:
 
-- `prepare` (optional) — argv hop runs once before bootstrapping kitty. Idempotent.
-- `shell` (required) — argv kitty uses to spawn each role terminal.
-- `editor` (required) — argv kitty uses to launch the shared neovim. Hop substitutes `{listen_addr}` with a host-visible socket path the host's `nvim --server <socket> --remote-…` calls can reach.
-- `teardown` (optional) — argv hop runs at `hop kill` after closing windows. Closing kitty windows first sends SIGHUP to in-backend shells so they exit cleanly before any teardown command runs.
-- `workspace` (optional) — argv whose stripped stdout is the in-backend path that maps to the host project root. Captured once at session creation and used for cwd translation in the kitten dispatch.
-- `port_translate` (optional) — argv hop runs lazily when the kitten dispatch resolves a URL whose host is `localhost`, `127.0.0.1`, or `0.0.0.0`. Stripped stdout is the host-reachable port number that should replace the URL's port. Hop substitutes `{port}` with the URL's original port (or empty string when the URL has no port).
-- `host_translate` (optional) — argv hop runs lazily for the same set of localhost URLs. Stripped stdout is the hostname that should replace `localhost` / `127.0.0.1` / `0.0.0.0` in the URL. Both `port_translate` and `host_translate` are independently optional; either or both may be configured.
+- `prepare` (optional) — command hop runs once before bootstrapping kitty. Idempotent.
+- `shell` (required) — command kitty uses to spawn each role terminal.
+- `editor` (required) — command kitty uses to launch the shared neovim. Hop substitutes `{listen_addr}` with a host-visible socket path the host's `nvim --server <socket> --remote-…` calls can reach.
+- `teardown` (optional) — command hop runs at `hop kill` after closing windows. Closing kitty windows first sends SIGHUP to in-backend shells so they exit cleanly before any teardown command runs.
+- `workspace` (optional) — command whose stripped stdout is the in-backend path that maps to the host project root. Captured once at session creation and used for cwd translation in the kitten dispatch.
+- `port_translate` (optional) — command hop runs lazily when the kitten dispatch resolves a URL whose host is `localhost`, `127.0.0.1`, or `0.0.0.0`. Stripped stdout is the host-reachable port number that should replace the URL's port. Hop substitutes `{port}` with the URL's original port (or empty string when the URL has no port).
+- `host_translate` (optional) — command hop runs lazily for the same set of localhost URLs. Stripped stdout is the hostname that should replace `localhost` / `127.0.0.1` / `0.0.0.0` in the URL. Both `port_translate` and `host_translate` are independently optional; either or both may be configured.
 
-Substitution placeholders supported inside any command list: `{listen_addr}` (only meaningful in `editor`), `{project_root}`. `{port}` is additionally available inside `port_translate` and `host_translate` (the URL's original port, or empty string when absent).
+All commands are run via `sh -c <substituted-string>`, so pipes, redirects, and `$(...)` are part of the contract. Substitution placeholders supported inside any command: `{listen_addr}` (only meaningful in `editor`), `{project_root}`. `{port}` is additionally available inside `port_translate` and `host_translate` (the URL's original port, or empty string when absent). Substituted values are shell-quoted before insertion so paths with spaces or shell metacharacters round-trip safely.
 
 Backend selection at session creation:
 
@@ -98,7 +98,7 @@ Backend selection at session creation:
 
 Project config at `<project_root>/.hop.toml` uses the **same `[backends.<name>]` schema** as the global file. Hop merges both files when resolving the session backend: project entries come first in auto-detect order; same-named entries are field-merged with project fields winning; the merged entry takes the project's slot in the order. A backend whose merged fields lack `shell` or `editor` is unusable and dropped silently. The reserved name `"host"` cannot be defined in either file.
 
-Overriding `default` in a project file changes which backend wins auto-detect: a `["true"]` override forces this backend to match; a `["false"]` override skips it. There is no separate "pin a backend" knob in the project file — `default` overrides cover both selection and exclusion.
+Overriding `default` in a project file changes which backend wins auto-detect: a `"true"` override forces this backend to match; a `"false"` override skips it. There is no separate "pin a backend" knob in the project file — `default` overrides cover both selection and exclusion.
 
 The name `"host"` is reserved for the implicit fallback. An explicit `[backends.host]` table in either config file is ignored.
 

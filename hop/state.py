@@ -21,42 +21,42 @@ class HostBackendRecord:
 class CommandBackendRecord:
     """Persisted command-template backend chosen at session creation.
 
-    Stores the name and the resolved (post-merge, post-substitution-template)
-    command lists, plus the workspace path discovered at bootstrap. Subsequent
-    commands instantiate a CommandBackend directly from this record without
-    re-reading the global config.
+    Each command field is a shell snippet (run via ``sh -c`` after
+    placeholder substitution). Subsequent commands instantiate a
+    CommandBackend directly from this record without re-reading the global
+    config.
     """
 
     name: str
-    shell: tuple[str, ...]
-    editor: tuple[str, ...]
-    prepare: tuple[str, ...] | None = None
-    teardown: tuple[str, ...] | None = None
-    workspace_command: tuple[str, ...] | None = None
+    shell: str
+    editor: str
+    prepare: str | None = None
+    teardown: str | None = None
+    workspace_command: str | None = None
     workspace_path: str | None = None
-    port_translate_command: tuple[str, ...] | None = None
-    host_translate_command: tuple[str, ...] | None = None
+    port_translate_command: str | None = None
+    host_translate_command: str | None = None
     type: str = "command"
 
     def to_json(self) -> dict[str, object]:
         payload: dict[str, object] = {
             "type": "command",
             "name": self.name,
-            "shell": list(self.shell),
-            "editor": list(self.editor),
+            "shell": self.shell,
+            "editor": self.editor,
         }
         if self.prepare is not None:
-            payload["prepare"] = list(self.prepare)
+            payload["prepare"] = self.prepare
         if self.teardown is not None:
-            payload["teardown"] = list(self.teardown)
+            payload["teardown"] = self.teardown
         if self.workspace_command is not None:
-            payload["workspace_command"] = list(self.workspace_command)
+            payload["workspace_command"] = self.workspace_command
         if self.workspace_path is not None:
             payload["workspace_path"] = self.workspace_path
         if self.port_translate_command is not None:
-            payload["port_translate_command"] = list(self.port_translate_command)
+            payload["port_translate_command"] = self.port_translate_command
         if self.host_translate_command is not None:
-            payload["host_translate_command"] = list(self.host_translate_command)
+            payload["host_translate_command"] = self.host_translate_command
         return payload
 
 
@@ -136,28 +136,24 @@ def _decode_backend_record(raw: object) -> BackendRecord:
             backend_name = record.get("name")
             shell = record.get("shell")
             editor = record.get("editor")
-            if isinstance(backend_name, str) and isinstance(shell, list) and isinstance(editor, list):
+            if isinstance(backend_name, str) and isinstance(shell, str) and isinstance(editor, str):
                 return CommandBackendRecord(
                     name=backend_name,
-                    shell=_str_tuple(cast(list[Any], shell)),
-                    editor=_str_tuple(cast(list[Any], editor)),
-                    prepare=_optional_str_tuple(record.get("prepare")),
-                    teardown=_optional_str_tuple(record.get("teardown")),
-                    workspace_command=_optional_str_tuple(record.get("workspace_command")),
+                    shell=shell,
+                    editor=editor,
+                    prepare=_optional_str(record.get("prepare")),
+                    teardown=_optional_str(record.get("teardown")),
+                    workspace_command=_optional_str(record.get("workspace_command")),
                     workspace_path=(
                         str(record["workspace_path"]) if isinstance(record.get("workspace_path"), str) else None
                     ),
-                    port_translate_command=_optional_str_tuple(record.get("port_translate_command")),
-                    host_translate_command=_optional_str_tuple(record.get("host_translate_command")),
+                    port_translate_command=_optional_str(record.get("port_translate_command")),
+                    host_translate_command=_optional_str(record.get("host_translate_command")),
                 )
     return HostBackendRecord()
 
 
-def _str_tuple(value: list[Any]) -> tuple[str, ...]:
-    return tuple(str(part) for part in value)
-
-
-def _optional_str_tuple(value: object) -> tuple[str, ...] | None:
-    if not isinstance(value, list):
-        return None
-    return _str_tuple(cast(list[Any], value))
+def _optional_str(value: object) -> str | None:
+    if isinstance(value, str):
+        return value
+    return None

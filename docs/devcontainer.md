@@ -53,23 +53,30 @@ Create `${XDG_CONFIG_HOME:-~/.config}/hop/config.toml`:
 
 ```toml
 [backends.devcontainer]
-default   = ["test", "-f", "docker-compose.dev.yml"]
-prepare   = ["podman-compose", "-f", "docker-compose.dev.yml", "up", "-d", "devcontainer"]
-shell     = ["podman-compose", "-f", "docker-compose.dev.yml", "exec", "devcontainer", "/usr/bin/zsh"]
-editor    = ["podman-compose", "-f", "docker-compose.dev.yml", "exec",
-             "devcontainer", "nvim", "--listen", "{listen_addr}"]
-teardown  = ["podman-compose", "-f", "docker-compose.dev.yml", "down"]
-workspace = ["podman-compose", "-f", "docker-compose.dev.yml", "exec", "devcontainer", "pwd"]
-port_translate = ["sh", "-c",
-  "podman ps -q --filter label=io.podman.compose.project=$(basename {project_root}) --filter label=io.podman.compose.service=devcontainer | head -1 | xargs -r -I@ podman port @ {port} | cut -d: -f2"]
+default   = "test -f docker-compose.dev.yml"
+prepare   = "podman-compose -f docker-compose.dev.yml up -d devcontainer"
+shell     = "podman-compose -f docker-compose.dev.yml exec devcontainer /usr/bin/zsh"
+editor    = "podman-compose -f docker-compose.dev.yml exec devcontainer nvim --listen {listen_addr}"
+teardown  = "podman-compose -f docker-compose.dev.yml down"
+workspace = "podman-compose -f docker-compose.dev.yml exec devcontainer pwd"
+port_translate = """
+  podman ps -q \\
+    --filter label=io.podman.compose.project=$(basename {project_root}) \\
+    --filter label=io.podman.compose.service=devcontainer \\
+    | head -1 \\
+    | xargs -r -I@ podman port @ {port} \\
+    | cut -d: -f2
+"""
 ```
+
+Each command is a single string. Hop runs it through `sh -c` after substituting placeholders, so pipes, redirects, and `$(...)` work — write the value the way you'd type it at a terminal. Triple-quoted strings (`"""…"""`) let you spread a longer pipeline across lines for readability. Placeholder values (`{project_root}`, `{listen_addr}`, `{port}`) are shell-quoted before insertion, so paths with spaces substitute safely.
 
 `port_translate` is invoked lazily when the kitten dispatch encounters a URL like `http://localhost:3000` printed inside the container — the recipe above resolves the running container by compose label (so it works whether the container was brought up by `podman-compose up` or by `podman-compose run …` with their different naming conventions) and asks `podman port` for the host-side port the container's port is published on. Stripped stdout (e.g. `35231`) replaces the URL's port; the host (`localhost`) is left untouched. The companion `host_translate` field exists for backends that swap the hostname instead — not needed for a same-host devcontainer.
 
-If you use a different compose tool, swap the leading argv:
+If you use a different compose tool, swap the prefix:
 
 ```toml
-prepare = ["docker", "compose", "-f", "docker-compose.dev.yml", "up", "-d", "devcontainer"]
+prepare = "docker compose -f docker-compose.dev.yml up -d devcontainer"
 # ... etc.
 ```
 
@@ -110,22 +117,22 @@ A single project file can override fields, force/skip a backend via its `default
 ```toml
 # Override one field of a global backend (this project's compose service is named "app").
 [backends.devcontainer]
-shell = ["docker", "compose", "-f", "compose.dev.yml", "exec", "app", "/usr/bin/zsh"]
+shell = "docker compose -f compose.dev.yml exec app /usr/bin/zsh"
 
 # Force a backend to win auto-detect in this project.
 # [backends.devcontainer]
-# default = ["true"]
+# default = "true"
 
 # Or skip a backend by overriding its default to fail.
 # [backends.other]
-# default = ["false"]
+# default = "false"
 
 # Define a project-specific backend that doesn't exist globally.
 [backends.my-vm]
-default   = ["test", "-f", ".my-vm-marker"]
-shell     = ["lima", "shell", "default", "--", "/usr/bin/zsh"]
-editor    = ["lima", "shell", "default", "--", "nvim", "--listen", "{listen_addr}"]
-workspace = ["lima", "shell", "default", "--", "pwd"]
+default   = "test -f .my-vm-marker"
+shell     = "lima shell default -- /usr/bin/zsh"
+editor    = "lima shell default -- nvim --listen {listen_addr}"
+workspace = "lima shell default -- pwd"
 ```
 
 To force the host backend for a project, pass `hop --backend host` once at session creation (persisted), or override every configured backend's `default` to a failing command.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shlex
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -12,6 +13,7 @@ from urllib.parse import urlsplit, urlunsplit
 from hop.config import (
     HOST_BACKEND_NAME,
     PLACEHOLDER_LISTEN_ADDR,
+    PLACEHOLDER_PORT,
     PLACEHOLDER_PROJECT_ROOT,
     BackendConfig,
 )
@@ -24,8 +26,6 @@ NVIM_COMMAND = "nvim"
 # refer to "this session's local interface" — i.e. the value the kitten dispatch
 # may need to translate before handing the URL to the host's browser.
 LOCALHOST_HOSTS = frozenset({"localhost", "127.0.0.1", "0.0.0.0"})
-
-PLACEHOLDER_PORT = "{port}"
 
 
 class SessionBackendError(HopError):
@@ -92,39 +92,46 @@ def _default_runner(args: Sequence[str], cwd: Path) -> subprocess.CompletedProce
 
 @dataclass(frozen=True, slots=True)
 class CommandBackend:
-    """A SessionBackend whose lifecycle is described by command lists in the global config.
+    """A SessionBackend whose lifecycle is described by shell command strings.
 
-    ``workspace_path`` is captured at session creation by running the backend's
-    ``workspace`` command and is used to translate terminal cwds back to host
-    paths in the open_selection kitten dispatch. When ``workspace_path`` is
-    ``None`` (no ``workspace`` command configured), translation is identity.
+    Every command field is a shell snippet hop runs via ``sh -c``, after
+    substituting placeholders. The values come straight from the config
+    file: whatever you would type at a terminal, including pipes and
+    ``$(...)``. Placeholder values are shell-quoted before insertion, so
+    paths with spaces or special characters substitute safely.
+
+    ``workspace_path`` is captured at session creation by running the
+    backend's ``workspace`` command and is used to translate terminal cwds
+    back to host paths in the open_selection kitten dispatch. When
+    ``workspace_path`` is ``None`` (no ``workspace`` command configured),
+    translation is identity.
     """
 
     name: str
-    shell: tuple[str, ...]
-    editor: tuple[str, ...]
-    prepare_command: tuple[str, ...] | None = None
-    teardown_command: tuple[str, ...] | None = None
-    workspace_command: tuple[str, ...] | None = None
+    shell: str
+    editor: str
+    prepare_command: str | None = None
+    teardown_command: str | None = None
+    workspace_command: str | None = None
     workspace_path: str | None = None
-    port_translate_command: tuple[str, ...] | None = None
-    host_translate_command: tuple[str, ...] | None = None
+    port_translate_command: str | None = None
+    host_translate_command: str | None = None
     runner: CommandRunner = field(default=_default_runner)
 
     def prepare(self, session: ProjectSession) -> None:
         if self.prepare_command is None:
             return
-        result = self.runner(_flock_wrap(self.prepare_command, session), session.project_root)
+        result = self.runner(_flock_sh(self.prepare_command, session=session), session.project_root)
         if result.returncode != 0:
             stderr = (result.stderr or result.stdout).strip()
             msg = f"backend {self.name!r} prepare failed for {session.session_name!r}: {stderr}"
             raise SessionBackendError(msg)
 
     def shell_args(self, session: ProjectSession) -> Sequence[str]:
-        return _substitute(self.shell, session=session, listen_addr=None)
+        return _sh_c(_substitute(self.shell, session=session, listen_addr=None))
 
     def editor_args(self, session: ProjectSession, listen_addr: Path) -> Sequence[str]:
-        return _substitute(self.editor, session=session, listen_addr=listen_addr)
+        return _sh_c(_substitute(self.editor, session=session, listen_addr=listen_addr))
 
     def editor_remote_address(self, session: ProjectSession) -> Path:
         return _editor_remote_address(session)
@@ -191,14 +198,14 @@ class CommandBackend:
 
     def _run_translate(
         self,
-        command: tuple[str, ...],
+        command: str,
         *,
         session: ProjectSession,
         port: int | None,
         kind: str,
     ) -> str:
-        args = _substitute_translate(command, session=session, port=port)
-        result = self.runner(args, session.project_root)
+        substituted = _substitute_translate(command, session=session, port=port)
+        result = self.runner(_sh_c(substituted), session.project_root)
         if result.returncode != 0:
             stderr = (result.stderr or result.stdout).strip()
             msg = f"backend {self.name!r} {kind} failed for {session.session_name!r}: {stderr}"
@@ -212,7 +219,7 @@ class CommandBackend:
     def teardown(self, session: ProjectSession) -> None:
         if self.teardown_command is None:
             return
-        result = self.runner(_flock_wrap(self.teardown_command, session), session.project_root)
+        result = self.runner(_flock_sh(self.teardown_command, session=session), session.project_root)
         if result.returncode != 0:
             stderr = (result.stderr or result.stdout).strip()
             msg = f"backend {self.name!r} teardown failed for {session.session_name!r}: {stderr}"
@@ -243,7 +250,8 @@ class CommandBackend:
 
         if self.workspace_command is None:
             return None
-        result = self.runner(self.workspace_command, session.project_root)
+        substituted = _substitute(self.workspace_command, session=session, listen_addr=None)
+        result = self.runner(_sh_c(substituted), session.project_root)
         if result.returncode != 0:
             stderr = (result.stderr or result.stdout).strip()
             msg = f"backend {self.name!r} workspace discovery failed for {session.session_name!r}: {stderr}"
@@ -295,7 +303,8 @@ def select_backend(
     for candidate in runnable:
         if candidate.default is None:
             continue
-        result = runner(candidate.default, session.project_root)
+        substituted = _substitute(candidate.default, session=session, listen_addr=None)
+        result = runner(_sh_c(substituted), session.project_root)
         if result.returncode == 0:
             return candidate
     return None
@@ -325,31 +334,30 @@ def backend_from_config(
 
 
 def _substitute(
-    template: tuple[str, ...],
+    template: str,
     *,
     session: ProjectSession,
     listen_addr: Path | None,
-) -> tuple[str, ...]:
+) -> str:
     replacements: dict[str, str] = {
-        PLACEHOLDER_PROJECT_ROOT: str(session.project_root),
+        PLACEHOLDER_PROJECT_ROOT: shlex.quote(str(session.project_root)),
     }
     if listen_addr is not None:
-        replacements[PLACEHOLDER_LISTEN_ADDR] = str(listen_addr)
-
-    return tuple(_apply(part, replacements) for part in template)
+        replacements[PLACEHOLDER_LISTEN_ADDR] = shlex.quote(str(listen_addr))
+    return _apply(template, replacements)
 
 
 def _substitute_translate(
-    template: tuple[str, ...],
+    template: str,
     *,
     session: ProjectSession,
     port: int | None,
-) -> tuple[str, ...]:
+) -> str:
     replacements: dict[str, str] = {
-        PLACEHOLDER_PROJECT_ROOT: str(session.project_root),
-        PLACEHOLDER_PORT: "" if port is None else str(port),
+        PLACEHOLDER_PROJECT_ROOT: shlex.quote(str(session.project_root)),
+        PLACEHOLDER_PORT: "" if port is None else shlex.quote(str(port)),
     }
-    return tuple(_apply(part, replacements) for part in template)
+    return _apply(template, replacements)
 
 
 def _rebuild_netloc(parts: object, *, host: str, port: int | None) -> str:
@@ -366,10 +374,15 @@ def _rebuild_netloc(parts: object, *, host: str, port: int | None) -> str:
     return f"{userinfo}{host}:{port}"
 
 
-def _apply(part: str, replacements: dict[str, str]) -> str:
+def _apply(template: str, replacements: dict[str, str]) -> str:
+    result = template
     for placeholder, value in replacements.items():
-        part = part.replace(placeholder, value)
-    return part
+        result = result.replace(placeholder, value)
+    return result
+
+
+def _sh_c(command: str) -> tuple[str, ...]:
+    return ("sh", "-c", command)
 
 
 def _editor_remote_address(session: ProjectSession) -> Path:
@@ -387,11 +400,12 @@ def _backend_lock_path(session: ProjectSession) -> Path:
     return runtime_dir / f"backend-{session.session_name}.lock"
 
 
-def _flock_wrap(command: tuple[str, ...], session: ProjectSession) -> tuple[str, ...]:
+def _flock_sh(command: str, *, session: ProjectSession) -> tuple[str, ...]:
     # Serialize prepare and teardown for the same session: when `hop kill`
     # detaches its teardown via setsid -f (so it survives vicinae's SIGTERM),
     # a subsequent `hop` would otherwise race the still-running teardown and
     # leave podman-compose in an inconsistent state. flock(1) holds the lock
     # for the lifetime of the wrapped command, so even if our parent dies the
     # lock is held by the subprocess and the next caller blocks on it.
-    return ("flock", str(_backend_lock_path(session))) + command
+    substituted = _substitute(command, session=session, listen_addr=None)
+    return ("flock", str(_backend_lock_path(session)), "sh", "-c", substituted)

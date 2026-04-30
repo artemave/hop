@@ -453,12 +453,12 @@ def test_execute_command_kills_every_window_on_session_workspace(tmp_path: Path)
 def _devcontainer_config() -> BackendConfig:
     return BackendConfig(
         name="devcontainer",
-        default=("test", "-f", "docker-compose.dev.yml"),
-        prepare=("compose", "up", "-d", "devcontainer"),
-        shell=("compose", "exec", "devcontainer", "/usr/bin/zsh"),
-        editor=("compose", "exec", "devcontainer", "nvim", "--listen", "{listen_addr}"),
-        teardown=("compose", "down"),
-        workspace=("compose", "exec", "devcontainer", "pwd"),
+        default="test -f docker-compose.dev.yml",
+        prepare="compose up -d devcontainer",
+        shell="compose exec devcontainer /usr/bin/zsh",
+        editor="compose exec devcontainer nvim --listen {listen_addr}",
+        teardown="compose down",
+        workspace="compose exec devcontainer pwd",
     )
 
 
@@ -523,7 +523,8 @@ def test_session_base_registry_runs_default_then_prepare_and_discovers_workspace
 
     def runner(args: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
         calls.append(tuple(args))
-        if "pwd" in args:
+        # Discriminate by the inner shell command: workspace probe runs `pwd`.
+        if any("pwd" in part for part in args):
             return subprocess.CompletedProcess(args=list(args), returncode=0, stdout="/workspace\n", stderr="")
         return subprocess.CompletedProcess(args=list(args), returncode=0, stdout="", stderr="")
 
@@ -542,9 +543,9 @@ def test_session_base_registry_runs_default_then_prepare_and_discovers_workspace
     assert flock_args[0] == "flock"
     assert flock_args[1].endswith(f"backend-{session.session_name}.lock")
     assert calls == [
-        ("test", "-f", "docker-compose.dev.yml"),  # default probe
-        flock_args + ("compose", "up", "-d", "devcontainer"),
-        ("compose", "exec", "devcontainer", "pwd"),
+        ("sh", "-c", "test -f docker-compose.dev.yml"),  # default probe
+        flock_args + ("sh", "-c", "compose up -d devcontainer"),
+        ("sh", "-c", "compose exec devcontainer pwd"),
     ]
 
 
@@ -561,15 +562,15 @@ def test_session_base_registry_project_override_can_flip_autodetect(tmp_path: Pa
         backends=(
             BackendConfig(
                 name="primary",
-                default=("test", "-e", "."),  # would normally win
-                shell=("primary-shell",),
-                editor=("primary-editor",),
+                default="test -e .",  # would normally win
+                shell="primary-shell",
+                editor="primary-editor",
             ),
             BackendConfig(
                 name="secondary",
-                default=("test", "-e", "."),
-                shell=("secondary-shell",),
-                editor=("secondary-editor",),
+                default="test -e .",
+                shell="secondary-shell",
+                editor="secondary-editor",
             ),
         )
     )
@@ -578,13 +579,15 @@ def test_session_base_registry_project_override_can_flip_autodetect(tmp_path: Pa
     (tmp_path / ".hop.toml").write_text(
         """
 [backends.primary]
-default = ["false"]
+default = "false"
 """,
     )
 
     def runner(args: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
-        # Default probes: ["false"] → returncode 1; ["test", "-e", "."] → 0.
-        if args[:1] == ("false",):
+        # Default probes go through `sh -c <command>`. Match on the substituted
+        # command string: project-overridden "false" → returncode 1; everything
+        # else (the secondary backend's "test -e .") succeeds.
+        if args == ("sh", "-c", "false"):
             return subprocess.CompletedProcess(args=list(args), returncode=1, stdout="", stderr="")
         return subprocess.CompletedProcess(args=list(args), returncode=0, stdout="", stderr="")
 
@@ -611,9 +614,9 @@ def test_session_backend_registry_uses_project_only_backend_definition(tmp_path:
     (tmp_path / ".hop.toml").write_text(
         """
 [backends.project-only]
-shell = ["my-shell"]
-editor = ["my-editor", "--listen", "{listen_addr}"]
-default = ["true"]
+shell = "my-shell"
+editor = "my-editor --listen {listen_addr}"
+default = "true"
 """,
     )
 
@@ -630,7 +633,7 @@ default = ["true"]
 
     assert isinstance(backend, CommandBackend)
     assert backend.name == "project-only"
-    assert backend.shell == ("my-shell",)
+    assert backend.shell == "my-shell"
 
 
 def test_session_backend_registry_project_only_backend_wins_autodetect(tmp_path: Path) -> None:
@@ -644,14 +647,14 @@ def test_session_backend_registry_project_only_backend_wins_autodetect(tmp_path:
     (tmp_path / ".hop.toml").write_text(
         """
 [backends.project-only]
-shell = ["my-shell"]
-editor = ["my-editor", "--listen", "{listen_addr}"]
-default = ["true"]
+shell = "my-shell"
+editor = "my-editor --listen {listen_addr}"
+default = "true"
 """,
     )
 
     def runner(args: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
-        if args == ("true",):
+        if args == ("sh", "-c", "true"):
             return subprocess.CompletedProcess(args=list(args), returncode=0, stdout="", stderr="")
         return subprocess.CompletedProcess(args=list(args), returncode=1, stdout="", stderr="")
 
@@ -677,8 +680,8 @@ def test_session_backend_registry_for_session_returns_override(tmp_path: Path) -
     session = _make_session(tmp_path)
     override = CommandBackend(
         name="overridden",
-        shell=("override-shell",),
-        editor=("override-editor",),
+        shell="override-shell",
+        editor="override-editor",
     )
     registry.set_override(session.session_name, override)
 
@@ -700,11 +703,11 @@ def test_session_backend_registry_for_session_returns_persisted_command_backend(
             project_root=tmp_path,
             backend=CommandBackendRecord(
                 name="legacy",
-                shell=("legacy-shell",),
-                editor=("legacy-editor",),
-                prepare=("legacy-prepare",),
-                teardown=("legacy-teardown",),
-                workspace_command=("legacy-workspace",),
+                shell="legacy-shell",
+                editor="legacy-editor",
+                prepare="legacy-prepare",
+                teardown="legacy-teardown",
+                workspace_command="legacy-workspace",
                 workspace_path="/legacy",
             ),
         )
@@ -748,22 +751,22 @@ def test_record_for_backend_round_trips_command_and_host_backends(tmp_path: Path
 
     command = CommandBackend(
         name="devcontainer",
-        shell=("compose", "exec", "devcontainer", "zsh"),
-        editor=("compose", "exec", "devcontainer", "nvim"),
-        prepare_command=("compose", "up", "-d"),
-        teardown_command=("compose", "down"),
-        workspace_command=("compose", "exec", "devcontainer", "pwd"),
+        shell="compose exec devcontainer zsh",
+        editor="compose exec devcontainer nvim",
+        prepare_command="compose up -d",
+        teardown_command="compose down",
+        workspace_command="compose exec devcontainer pwd",
         workspace_path="/workspace",
     )
     record = _record_for_backend(command)
 
     assert record == CommandBackendRecord(
         name="devcontainer",
-        shell=("compose", "exec", "devcontainer", "zsh"),
-        editor=("compose", "exec", "devcontainer", "nvim"),
-        prepare=("compose", "up", "-d"),
-        teardown=("compose", "down"),
-        workspace_command=("compose", "exec", "devcontainer", "pwd"),
+        shell="compose exec devcontainer zsh",
+        editor="compose exec devcontainer nvim",
+        prepare="compose up -d",
+        teardown="compose down",
+        workspace_command="compose exec devcontainer pwd",
         workspace_path="/workspace",
     )
 
@@ -783,8 +786,8 @@ def test_persist_bootstrap_record_writes_session_state(tmp_path: Path, monkeypat
     )
     backend = CommandBackend(
         name="devcontainer",
-        shell=("compose", "exec", "devcontainer", "zsh"),
-        editor=("compose", "exec", "devcontainer", "nvim"),
+        shell="compose exec devcontainer zsh",
+        editor="compose exec devcontainer nvim",
     )
 
     _persist_bootstrap_record(session, backend)
@@ -820,8 +823,8 @@ def test_session_base_registry_persisted_state_wins_over_autodetect(tmp_path: Pa
             project_root=tmp_path,
             backend=CommandBackendRecord(
                 name="legacy",
-                shell=("legacy-shell",),
-                editor=("legacy-editor",),
+                shell="legacy-shell",
+                editor="legacy-editor",
                 workspace_path="/legacy",
             ),
         )

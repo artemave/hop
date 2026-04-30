@@ -14,8 +14,6 @@ from hop.config import (
     merge_backends,
 )
 
-COMPOSE_PREFIX = ("podman-compose", "-f", "docker-compose.dev.yml")
-
 
 def write(path: Path, content: str) -> Path:
     path.write_text(content)
@@ -40,39 +38,64 @@ def test_load_global_config_parses_full_backend(tmp_path: Path) -> None:
         tmp_path / "config.toml",
         """
 [backends.devcontainer]
-default  = ["test", "-f", "docker-compose.dev.yml"]
-prepare  = ["podman-compose", "-f", "docker-compose.dev.yml", "up", "-d", "devcontainer"]
-shell    = ["podman-compose", "-f", "docker-compose.dev.yml", "exec", "devcontainer", "/usr/bin/zsh"]
-editor   = ["podman-compose", "-f", "docker-compose.dev.yml", "exec",
-            "devcontainer", "nvim", "--listen", "{listen_addr}"]
-teardown = ["podman-compose", "-f", "docker-compose.dev.yml", "down"]
-workspace = ["podman-compose", "-f", "docker-compose.dev.yml", "exec", "devcontainer", "pwd"]
+default  = "test -f docker-compose.dev.yml"
+prepare  = "podman-compose -f docker-compose.dev.yml up -d devcontainer"
+shell    = "podman-compose -f docker-compose.dev.yml exec devcontainer /usr/bin/zsh"
+editor   = "podman-compose -f docker-compose.dev.yml exec devcontainer nvim --listen {listen_addr}"
+teardown = "podman-compose -f docker-compose.dev.yml down"
+workspace = "podman-compose -f docker-compose.dev.yml exec devcontainer pwd"
 """,
     )
 
     assert load_global_config(config_file).backends == (
         BackendConfig(
             name="devcontainer",
-            default=("test", "-f", "docker-compose.dev.yml"),
-            prepare=COMPOSE_PREFIX + ("up", "-d", "devcontainer"),
-            shell=COMPOSE_PREFIX + ("exec", "devcontainer", "/usr/bin/zsh"),
-            editor=COMPOSE_PREFIX + ("exec", "devcontainer", "nvim", "--listen", "{listen_addr}"),
-            teardown=COMPOSE_PREFIX + ("down",),
-            workspace=COMPOSE_PREFIX + ("exec", "devcontainer", "pwd"),
+            default="test -f docker-compose.dev.yml",
+            prepare="podman-compose -f docker-compose.dev.yml up -d devcontainer",
+            shell="podman-compose -f docker-compose.dev.yml exec devcontainer /usr/bin/zsh",
+            editor="podman-compose -f docker-compose.dev.yml exec devcontainer nvim --listen {listen_addr}",
+            teardown="podman-compose -f docker-compose.dev.yml down",
+            workspace="podman-compose -f docker-compose.dev.yml exec devcontainer pwd",
         ),
     )
+
+
+def test_load_global_config_parses_triple_quoted_multiline_command(tmp_path: Path) -> None:
+    """Triple-quoted strings preserve newlines verbatim — sh handles them as
+    line-continuation-style scripts when the user wants to spread a pipeline
+    across lines for readability."""
+    config_file = write(
+        tmp_path / "config.toml",
+        '''
+[backends.devcontainer]
+shell = "zsh"
+editor = "nvim"
+port_translate = """
+podman ps -q \\
+  --filter label=service=devcontainer \\
+  | head -1 \\
+  | xargs -r -I@ podman port @ {port} \\
+  | cut -d: -f2
+"""
+''',
+    )
+
+    backends = load_global_config(config_file).backends
+    assert backends[0].port_translate is not None
+    assert "podman ps" in backends[0].port_translate
+    assert "{port}" in backends[0].port_translate
 
 
 def test_load_global_config_accepts_partial_entries(tmp_path: Path) -> None:
     """A backend without shell/editor parses fine — validation lives at use time."""
     config_file = write(
         tmp_path / "config.toml",
-        "[backends.partial]\ndefault = ['true']\n",
+        '[backends.partial]\ndefault = "true"\n',
     )
 
     config = load_global_config(config_file)
 
-    assert config.backends == (BackendConfig(name="partial", default=("true",)),)
+    assert config.backends == (BackendConfig(name="partial", default="true"),)
     assert config.backends[0].is_runnable is False
 
 
@@ -81,12 +104,12 @@ def test_load_global_config_preserves_declaration_order(tmp_path: Path) -> None:
         tmp_path / "config.toml",
         """
 [backends.alpha]
-shell = ["a"]
-editor = ["a"]
+shell = "a"
+editor = "a"
 
 [backends.beta]
-shell = ["b"]
-editor = ["b"]
+shell = "b"
+editor = "b"
 """,
     )
 
@@ -100,8 +123,8 @@ def test_load_global_config_rejects_explicit_host_backend(tmp_path: Path) -> Non
         tmp_path / "config.toml",
         """
 [backends.host]
-shell = ["bash"]
-editor = ["nvim"]
+shell = "bash"
+editor = "nvim"
 """,
     )
 
@@ -118,28 +141,28 @@ def test_load_project_config_uses_same_schema_as_global(tmp_path: Path) -> None:
         tmp_path / ".hop.toml",
         """
 [backends.devcontainer]
-default = ["true"]
+default = "true"
 
 [backends.lima]
-shell = ["lima", "shell", "default", "--", "/usr/bin/zsh"]
-editor = ["lima", "shell", "default", "--", "nvim", "--listen", "{listen_addr}"]
+shell = "lima shell default -- /usr/bin/zsh"
+editor = "lima shell default -- nvim --listen {listen_addr}"
 """,
     )
 
     config = load_project_config(tmp_path)
 
     assert config.backends == (
-        BackendConfig(name="devcontainer", default=("true",)),
+        BackendConfig(name="devcontainer", default="true"),
         BackendConfig(
             name="lima",
-            shell=("lima", "shell", "default", "--", "/usr/bin/zsh"),
-            editor=("lima", "shell", "default", "--", "nvim", "--listen", "{listen_addr}"),
+            shell="lima shell default -- /usr/bin/zsh",
+            editor="lima shell default -- nvim --listen {listen_addr}",
         ),
     )
 
 
 def test_load_project_config_rejects_explicit_host_backend(tmp_path: Path) -> None:
-    write(tmp_path / ".hop.toml", "[backends.host]\nshell = ['bash']\neditor = ['nvim']\n")
+    write(tmp_path / ".hop.toml", '[backends.host]\nshell = "bash"\neditor = "nvim"\n')
 
     with pytest.raises(HopConfigError, match="reserved"):
         load_project_config(tmp_path)
@@ -154,7 +177,7 @@ def _backend(name: str, **fields: object) -> BackendConfig:
 
 def test_merge_appends_global_only_entries_after_project() -> None:
     project = HopConfig()
-    global_ = HopConfig(backends=(_backend("alpha", shell=("a",), editor=("a",)),))
+    global_ = HopConfig(backends=(_backend("alpha", shell="a", editor="a"),))
 
     merged = merge_backends(project, global_)
 
@@ -162,8 +185,8 @@ def test_merge_appends_global_only_entries_after_project() -> None:
 
 
 def test_merge_project_only_entries_appear_first() -> None:
-    project = HopConfig(backends=(_backend("project-only", shell=("p",), editor=("p",)),))
-    global_ = HopConfig(backends=(_backend("alpha", shell=("a",), editor=("a",)),))
+    project = HopConfig(backends=(_backend("project-only", shell="p", editor="p"),))
+    global_ = HopConfig(backends=(_backend("alpha", shell="a", editor="a"),))
 
     merged = merge_backends(project, global_)
 
@@ -171,15 +194,15 @@ def test_merge_project_only_entries_appear_first() -> None:
 
 
 def test_merge_field_merges_same_name_with_project_winning() -> None:
-    project = HopConfig(backends=(_backend("alpha", default=("true",)),))
+    project = HopConfig(backends=(_backend("alpha", default="true"),))
     global_ = HopConfig(
         backends=(
             _backend(
                 "alpha",
-                shell=("a-shell",),
-                editor=("a-editor",),
-                default=("test", "-f", "marker"),
-                prepare=("a-prepare",),
+                shell="a-shell",
+                editor="a-editor",
+                default="test -f marker",
+                prepare="a-prepare",
             ),
         )
     )
@@ -189,10 +212,10 @@ def test_merge_field_merges_same_name_with_project_winning() -> None:
     assert merged == (
         _backend(
             "alpha",
-            shell=("a-shell",),  # inherited from global
-            editor=("a-editor",),  # inherited from global
-            default=("true",),  # overridden by project
-            prepare=("a-prepare",),  # inherited from global
+            shell="a-shell",  # inherited from global
+            editor="a-editor",  # inherited from global
+            default="true",  # overridden by project
+            prepare="a-prepare",  # inherited from global
         ),
     )
 
@@ -200,11 +223,11 @@ def test_merge_field_merges_same_name_with_project_winning() -> None:
 def test_merge_project_mention_moves_backend_to_project_slot() -> None:
     """A backend the project file mentions — even just as a partial override —
     moves to the project's slot in the auto-detect order."""
-    project = HopConfig(backends=(_backend("beta", default=("true",)),))
+    project = HopConfig(backends=(_backend("beta", default="true"),))
     global_ = HopConfig(
         backends=(
-            _backend("alpha", shell=("a",), editor=("a",)),
-            _backend("beta", shell=("b",), editor=("b",), default=("test", "-f", ".beta")),
+            _backend("alpha", shell="a", editor="a"),
+            _backend("beta", shell="b", editor="b", default="test -f .beta"),
         )
     )
 
@@ -226,7 +249,7 @@ def test_default_global_config_path_falls_back_to_home_config(monkeypatch: pytes
 
 
 def test_load_global_config_rejects_unknown_top_level_key(tmp_path: Path) -> None:
-    config_file = write(tmp_path / "config.toml", "[bakends.devcontainer]\nshell = ['zsh']\n")
+    config_file = write(tmp_path / "config.toml", '[bakends.devcontainer]\nshell = "zsh"\n')
 
     with pytest.raises(HopConfigError, match="unknown top-level key 'bakends'"):
         load_global_config(config_file)
@@ -257,8 +280,8 @@ def test_load_global_config_rejects_unknown_backend_field(tmp_path: Path) -> Non
         tmp_path / "config.toml",
         """
 [backends.devcontainer]
-shell = ["zsh"]
-shel = ["typo"]
+shell = "zsh"
+shel = "typo"
 """,
     )
 
@@ -266,42 +289,43 @@ shel = ["typo"]
         load_global_config(config_file)
 
 
-def test_load_global_config_rejects_non_list_field(tmp_path: Path) -> None:
+def test_load_global_config_rejects_legacy_list_form(tmp_path: Path) -> None:
+    """Lists were the old format — error with a helpful message instead of silently misbehaving."""
     config_file = write(
         tmp_path / "config.toml",
         """
 [backends.devcontainer]
-shell = "zsh"
+shell = ["zsh"]
 """,
     )
 
-    with pytest.raises(HopConfigError, match="field 'shell' must be a list of strings"):
+    with pytest.raises(HopConfigError, match="commands are now strings"):
         load_global_config(config_file)
 
 
-def test_load_global_config_rejects_empty_command_list(tmp_path: Path) -> None:
+def test_load_global_config_rejects_non_string_field(tmp_path: Path) -> None:
     config_file = write(
         tmp_path / "config.toml",
         """
 [backends.devcontainer]
-shell = []
+shell = 42
+""",
+    )
+
+    with pytest.raises(HopConfigError, match="field 'shell' must be a string"):
+        load_global_config(config_file)
+
+
+def test_load_global_config_rejects_empty_command_string(tmp_path: Path) -> None:
+    config_file = write(
+        tmp_path / "config.toml",
+        """
+[backends.devcontainer]
+shell = "   "
 """,
     )
 
     with pytest.raises(HopConfigError, match="field 'shell' must not be empty"):
-        load_global_config(config_file)
-
-
-def test_load_global_config_rejects_non_string_list_entries(tmp_path: Path) -> None:
-    config_file = write(
-        tmp_path / "config.toml",
-        """
-[backends.devcontainer]
-shell = ["zsh", 42]
-""",
-    )
-
-    with pytest.raises(HopConfigError, match="field 'shell' entries must be strings"):
         load_global_config(config_file)
 
 
@@ -310,10 +334,10 @@ def test_load_global_config_parses_translate_fields(tmp_path: Path) -> None:
         tmp_path / "config.toml",
         """
 [backends.devcontainer]
-shell = ["zsh"]
-editor = ["nvim"]
-port_translate = ["compose", "port", "devcontainer", "{port}"]
-host_translate = ["echo", "myserver"]
+shell = "zsh"
+editor = "nvim"
+port_translate = "compose port devcontainer {port}"
+host_translate = "echo myserver"
 """,
     )
 
@@ -322,41 +346,26 @@ host_translate = ["echo", "myserver"]
     assert backends == (
         BackendConfig(
             name="devcontainer",
-            shell=("zsh",),
-            editor=("nvim",),
-            port_translate=("compose", "port", "devcontainer", "{port}"),
-            host_translate=("echo", "myserver"),
+            shell="zsh",
+            editor="nvim",
+            port_translate="compose port devcontainer {port}",
+            host_translate="echo myserver",
         ),
     )
 
 
-def test_load_global_config_rejects_non_list_translate_field(tmp_path: Path) -> None:
-    config_file = write(
-        tmp_path / "config.toml",
-        """
-[backends.devcontainer]
-shell = ["zsh"]
-editor = ["nvim"]
-port_translate = "echo"
-""",
-    )
-
-    with pytest.raises(HopConfigError, match="field 'port_translate' must be a list of strings"):
-        load_global_config(config_file)
-
-
 def test_merge_translate_fields_independently_with_project_winning() -> None:
     project = HopConfig(
-        backends=(_backend("alpha", port_translate=("project-port",)),),
+        backends=(_backend("alpha", port_translate="project-port"),),
     )
     global_ = HopConfig(
         backends=(
             _backend(
                 "alpha",
-                shell=("zsh",),
-                editor=("nvim",),
-                port_translate=("global-port",),
-                host_translate=("global-host",),
+                shell="zsh",
+                editor="nvim",
+                port_translate="global-port",
+                host_translate="global-host",
             ),
         )
     )
@@ -366,10 +375,10 @@ def test_merge_translate_fields_independently_with_project_winning() -> None:
     assert merged == (
         _backend(
             "alpha",
-            shell=("zsh",),
-            editor=("nvim",),
-            port_translate=("project-port",),  # project wins
-            host_translate=("global-host",),  # inherited from global
+            shell="zsh",
+            editor="nvim",
+            port_translate="project-port",  # project wins
+            host_translate="global-host",  # inherited from global
         ),
     )
 
@@ -377,10 +386,10 @@ def test_merge_translate_fields_independently_with_project_winning() -> None:
 def test_merge_preserves_partial_entries_in_result() -> None:
     """Validation lives at use time — merge keeps non-runnable entries so callers
     can decide how to surface them."""
-    project = HopConfig(backends=(_backend("partial", default=("true",)),))
+    project = HopConfig(backends=(_backend("partial", default="true"),))
     global_ = HopConfig()
 
     merged = merge_backends(project, global_)
 
-    assert merged == (_backend("partial", default=("true",)),)
+    assert merged == (_backend("partial", default="true"),)
     assert merged[0].is_runnable is False

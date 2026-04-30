@@ -15,9 +15,10 @@ class HopConfigError(HopError):
     """Raised when a hop config file (global or project) has an invalid shape."""
 
 
-# Substitution placeholders supported in command lists.
+# Substitution placeholders supported in command strings.
 PLACEHOLDER_LISTEN_ADDR = "{listen_addr}"
 PLACEHOLDER_PROJECT_ROOT = "{project_root}"
+PLACEHOLDER_PORT = "{port}"
 
 # Reserved backend name — refers to the implicit host backend, never a
 # configured one. Auto-detect always falls back to host when no configured
@@ -29,13 +30,17 @@ HOST_BACKEND_NAME = "host"
 class BackendConfig:
     """A named backend declared in a hop config file (global or project).
 
-    Every command list is optional. A backend without ``shell`` and ``editor``
-    is not runnable and is dropped at use time — partial entries are normal in
-    project config files where they layer fields onto a same-named global
-    backend.
+    Every command is an optional string. Hop runs each one through ``sh -c``
+    after substituting placeholders, so the value is whatever you would type
+    in your terminal — including pipes, redirects, and ``$(...)``. A backend
+    without ``shell`` and ``editor`` is not runnable and is dropped at use
+    time; partial entries are normal in project config files where they
+    layer fields onto a same-named global backend.
 
     ``editor`` may include the literal placeholder ``{listen_addr}`` which hop
-    substitutes at call time. Any command list may use ``{project_root}``.
+    substitutes at call time. Any command may use ``{project_root}``.
+    ``port_translate`` and ``host_translate`` additionally support ``{port}``
+    (the URL's original port, or empty when absent).
 
     ``default`` is the auto-detect probe. Hop runs it in the project root and
     selects this backend when it exits 0. Backends without ``default`` are not
@@ -47,14 +52,14 @@ class BackendConfig:
     """
 
     name: str
-    shell: tuple[str, ...] | None = None
-    editor: tuple[str, ...] | None = None
-    default: tuple[str, ...] | None = None
-    prepare: tuple[str, ...] | None = None
-    teardown: tuple[str, ...] | None = None
-    workspace: tuple[str, ...] | None = None
-    port_translate: tuple[str, ...] | None = None
-    host_translate: tuple[str, ...] | None = None
+    shell: str | None = None
+    editor: str | None = None
+    default: str | None = None
+    prepare: str | None = None
+    teardown: str | None = None
+    workspace: str | None = None
+    port_translate: str | None = None
+    host_translate: str | None = None
 
     @property
     def is_runnable(self) -> bool:
@@ -174,36 +179,38 @@ def _parse_backend(name: str, table: dict[str, Any], *, source: Path) -> Backend
         raise HopConfigError(msg)
     return BackendConfig(
         name=name,
-        shell=_parse_str_list(table, key="shell", backend=name, source=source),
-        editor=_parse_str_list(table, key="editor", backend=name, source=source),
-        default=_parse_str_list(table, key="default", backend=name, source=source),
-        prepare=_parse_str_list(table, key="prepare", backend=name, source=source),
-        teardown=_parse_str_list(table, key="teardown", backend=name, source=source),
-        workspace=_parse_str_list(table, key="workspace", backend=name, source=source),
-        port_translate=_parse_str_list(table, key="port_translate", backend=name, source=source),
-        host_translate=_parse_str_list(table, key="host_translate", backend=name, source=source),
+        shell=_parse_command(table, key="shell", backend=name, source=source),
+        editor=_parse_command(table, key="editor", backend=name, source=source),
+        default=_parse_command(table, key="default", backend=name, source=source),
+        prepare=_parse_command(table, key="prepare", backend=name, source=source),
+        teardown=_parse_command(table, key="teardown", backend=name, source=source),
+        workspace=_parse_command(table, key="workspace", backend=name, source=source),
+        port_translate=_parse_command(table, key="port_translate", backend=name, source=source),
+        host_translate=_parse_command(table, key="host_translate", backend=name, source=source),
     )
 
 
-def _parse_str_list(
+def _parse_command(
     table: dict[str, Any],
     *,
     key: str,
     backend: str,
     source: Path,
-) -> tuple[str, ...] | None:
+) -> str | None:
     if key not in table:
         return None
     value = table[key]
-    if not isinstance(value, list):
-        msg = f"{source}: backend {backend!r} field {key!r} must be a list of strings, got {type(value).__name__}"
+    if isinstance(value, list):
+        msg = (
+            f"{source}: backend {backend!r} field {key!r} is a list; "
+            "commands are now strings (write the value as a single shell command). "
+            'TOML triple-quoted strings ("""…""") work for multi-line pipelines.'
+        )
         raise HopConfigError(msg)
-    items = cast(list[Any], value)
-    if not items:
+    if not isinstance(value, str):
+        msg = f"{source}: backend {backend!r} field {key!r} must be a string, got {type(value).__name__}"
+        raise HopConfigError(msg)
+    if not value.strip():
         msg = f"{source}: backend {backend!r} field {key!r} must not be empty"
         raise HopConfigError(msg)
-    for item in items:
-        if not isinstance(item, str):
-            msg = f"{source}: backend {backend!r} field {key!r} entries must be strings, got {type(item).__name__}"
-            raise HopConfigError(msg)
-    return tuple(items)
+    return value

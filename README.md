@@ -208,27 +208,28 @@ Create `${XDG_CONFIG_HOME:-~/.config}/hop/config.toml`:
 
 ```toml
 [backends.devcontainer]
-default   = ["test", "-f", "docker-compose.dev.yml"]
-prepare   = ["podman-compose", "-f", "docker-compose.dev.yml", "up", "-d", "devcontainer"]
-shell     = ["podman-compose", "-f", "docker-compose.dev.yml", "exec", "devcontainer", "/usr/bin/zsh"]
-editor    = ["podman-compose", "-f", "docker-compose.dev.yml", "exec",
-             "devcontainer", "nvim", "--listen", "{listen_addr}"]
-teardown  = ["podman-compose", "-f", "docker-compose.dev.yml", "down"]
-workspace = ["podman-compose", "-f", "docker-compose.dev.yml", "exec", "devcontainer", "pwd"]
+default   = "test -f docker-compose.dev.yml"
+prepare   = "podman-compose -f docker-compose.dev.yml up -d devcontainer"
+shell     = "podman-compose -f docker-compose.dev.yml exec devcontainer /usr/bin/zsh"
+editor    = "podman-compose -f docker-compose.dev.yml exec devcontainer nvim --listen {listen_addr}"
+teardown  = "podman-compose -f docker-compose.dev.yml down"
+workspace = "podman-compose -f docker-compose.dev.yml exec devcontainer pwd"
 ```
+
+Each command is a single string. Hop runs it through `sh -c` after substituting placeholders, so pipes, redirects, and `$(...)` all work — write the value the way you'd type it at a terminal. Use TOML triple-quoted strings (`"""…"""`) for multi-line pipelines. Placeholder values are shell-quoted before insertion, so paths with spaces substitute safely.
 
 Fields per backend:
 
-- `shell` (required) - argv to spawn one shell per role terminal.
-- `editor` (required) - argv to launch the shared nvim. `{listen_addr}` is substituted with the host-visible nvim socket path.
+- `shell` (required) - command that spawns one shell per role terminal.
+- `editor` (required) - command that launches the shared nvim. `{listen_addr}` is substituted with the host-visible nvim socket path.
 - `default` (optional) - auto-detect probe. Backends without `default` can only be picked by name.
-- `prepare` (optional) - argv run once at session creation, before launching kitty. Should be idempotent.
-- `teardown` (optional) - argv run at `hop kill` after closing windows.
-- `workspace` (optional) - argv whose stdout maps the backend's path back to the host project root. Used by the open_selection kitten.
-- `port_translate` (optional) - argv run lazily by the open_selection kitten when it dispatches a `localhost` / `127.0.0.1` / `0.0.0.0` URL. Stdout is the host-reachable port that should replace the URL's port. `{port}` is substituted with the URL's original port.
-- `host_translate` (optional) - argv run lazily for the same set of localhost URLs. Stdout is the hostname that should replace `localhost` / `127.0.0.1` / `0.0.0.0` in the URL. `port_translate` and `host_translate` are independent — configure either, both, or neither.
+- `prepare` (optional) - command run once at session creation, before launching kitty. Should be idempotent.
+- `teardown` (optional) - command run at `hop kill` after closing windows.
+- `workspace` (optional) - command whose stdout maps the backend's path back to the host project root. Used by the open_selection kitten.
+- `port_translate` (optional) - command run lazily by the open_selection kitten when it dispatches a `localhost` / `127.0.0.1` / `0.0.0.0` URL. Stdout is the host-reachable port that should replace the URL's port. `{port}` is substituted with the URL's original port.
+- `host_translate` (optional) - command run lazily for the same set of localhost URLs. Stdout is the hostname that should replace `localhost` / `127.0.0.1` / `0.0.0.0` in the URL. `port_translate` and `host_translate` are independent — configure either, both, or neither.
 
-Supported placeholders inside command lists: `{listen_addr}` (in `editor`), `{project_root}` (anywhere), and `{port}` (in `port_translate` / `host_translate` only).
+Supported placeholders: `{listen_addr}` (in `editor`), `{project_root}` (anywhere), and `{port}` (in `port_translate` / `host_translate` only).
 
 The name `host` is reserved for the implicit fallback.
 
@@ -239,14 +240,14 @@ The name `host` is reserved for the implicit fallback.
 ```toml
 # Override the global devcontainer service name
 [backends.devcontainer]
-shell = ["docker", "compose", "-f", "compose.dev.yml", "exec", "app", "zsh"]
+shell = "docker compose -f compose.dev.yml exec app zsh"
 
 # Define a project-specific backend
 [backends.my-vm]
-default   = ["test", "-f", ".my-vm-marker"]
-shell     = ["lima", "shell", "default", "--", "/usr/bin/zsh"]
-editor    = ["lima", "shell", "default", "--", "nvim", "--listen", "{listen_addr}"]
-workspace = ["lima", "shell", "default", "--", "pwd"]
+default   = "test -f .my-vm-marker"
+shell     = "lima shell default -- /usr/bin/zsh"
+editor    = "lima shell default -- nvim --listen {listen_addr}"
+workspace = "lima shell default -- pwd"
 ```
 
 ### Per-invocation override
