@@ -6,7 +6,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
+from hop.errors import HopError
+
 PROJECT_CONFIG_FILE = ".hop.toml"
+
+
+class HopConfigError(HopError):
+    """Raised when a hop config file (global or project) has an invalid shape."""
+
 
 # Substitution placeholders supported in command lists.
 PLACEHOLDER_LISTEN_ADDR = "{listen_addr}"
@@ -110,45 +117,78 @@ def _merge_pair(project: BackendConfig, global_: BackendConfig) -> BackendConfig
     )
 
 
+_BACKEND_FIELDS = ("shell", "editor", "default", "prepare", "teardown", "workspace")
+_TOP_LEVEL_KEYS = ("backends",)
+
+
 def _load_config_file(path: Path) -> HopConfig:
     if not path.is_file():
         return HopConfig()
     with path.open("rb") as handle:
         data = tomllib.load(handle)
-    return HopConfig(backends=_parse_backends(data))
+    return HopConfig(backends=_parse_backends(data, source=path))
 
 
-def _parse_backends(data: dict[str, Any]) -> tuple[BackendConfig, ...]:
-    backends_table = data.get("backends")
-    if not isinstance(backends_table, dict):
+def _parse_backends(data: dict[str, Any], *, source: Path) -> tuple[BackendConfig, ...]:
+    unknown_top = sorted(set(data) - set(_TOP_LEVEL_KEYS))
+    if unknown_top:
+        msg = f"{source}: unknown top-level key {unknown_top[0]!r}"
+        raise HopConfigError(msg)
+
+    if "backends" not in data:
         return ()
+    backends_table = data["backends"]
+    if not isinstance(backends_table, dict):
+        msg = f"{source}: 'backends' must be a table, got {type(backends_table).__name__}"
+        raise HopConfigError(msg)
+
     parsed: list[BackendConfig] = []
     for name, raw in cast(dict[str, Any], backends_table).items():
         if name == HOST_BACKEND_NAME:
-            # `host` is reserved for the implicit fallback; ignore explicit entries.
-            continue
+            msg = f"{source}: backend name {HOST_BACKEND_NAME!r} is reserved for the implicit host backend"
+            raise HopConfigError(msg)
         if not isinstance(raw, dict):
-            continue
-        parsed.append(_parse_backend(name, cast(dict[str, Any], raw)))
+            msg = f"{source}: backend {name!r} must be a table, got {type(raw).__name__}"
+            raise HopConfigError(msg)
+        parsed.append(_parse_backend(name, cast(dict[str, Any], raw), source=source))
     return tuple(parsed)
 
 
-def _parse_backend(name: str, table: dict[str, Any]) -> BackendConfig:
+def _parse_backend(name: str, table: dict[str, Any], *, source: Path) -> BackendConfig:
+    unknown = sorted(set(table) - set(_BACKEND_FIELDS))
+    if unknown:
+        msg = f"{source}: backend {name!r} has unknown field {unknown[0]!r}"
+        raise HopConfigError(msg)
     return BackendConfig(
         name=name,
-        shell=_coerce_str_tuple(table.get("shell")),
-        editor=_coerce_str_tuple(table.get("editor")),
-        default=_coerce_str_tuple(table.get("default")),
-        prepare=_coerce_str_tuple(table.get("prepare")),
-        teardown=_coerce_str_tuple(table.get("teardown")),
-        workspace=_coerce_str_tuple(table.get("workspace")),
+        shell=_parse_str_list(table, key="shell", backend=name, source=source),
+        editor=_parse_str_list(table, key="editor", backend=name, source=source),
+        default=_parse_str_list(table, key="default", backend=name, source=source),
+        prepare=_parse_str_list(table, key="prepare", backend=name, source=source),
+        teardown=_parse_str_list(table, key="teardown", backend=name, source=source),
+        workspace=_parse_str_list(table, key="workspace", backend=name, source=source),
     )
 
 
-def _coerce_str_tuple(value: object) -> tuple[str, ...] | None:
-    if not isinstance(value, list):
+def _parse_str_list(
+    table: dict[str, Any],
+    *,
+    key: str,
+    backend: str,
+    source: Path,
+) -> tuple[str, ...] | None:
+    if key not in table:
         return None
+    value = table[key]
+    if not isinstance(value, list):
+        msg = f"{source}: backend {backend!r} field {key!r} must be a list of strings, got {type(value).__name__}"
+        raise HopConfigError(msg)
     items = cast(list[Any], value)
     if not items:
-        return None
-    return tuple(str(part) for part in items)
+        msg = f"{source}: backend {backend!r} field {key!r} must not be empty"
+        raise HopConfigError(msg)
+    for item in items:
+        if not isinstance(item, str):
+            msg = f"{source}: backend {backend!r} field {key!r} entries must be strings, got {type(item).__name__}"
+            raise HopConfigError(msg)
+    return tuple(items)

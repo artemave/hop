@@ -7,6 +7,7 @@ import pytest
 from hop.config import (
     BackendConfig,
     HopConfig,
+    HopConfigError,
     default_global_config_path,
     load_global_config,
     load_project_config,
@@ -29,7 +30,7 @@ def test_load_global_config_returns_empty_when_file_missing(tmp_path: Path) -> N
 
 
 def test_load_global_config_returns_empty_when_backends_table_missing(tmp_path: Path) -> None:
-    config_file = write(tmp_path / "config.toml", "[other]\nkey = 'value'\n")
+    config_file = write(tmp_path / "config.toml", "# no backends declared\n")
 
     assert load_global_config(config_file) == HopConfig()
 
@@ -94,7 +95,7 @@ editor = ["b"]
     assert tuple(b.name for b in config.backends) == ("alpha", "beta")
 
 
-def test_load_global_config_ignores_explicit_host_backend(tmp_path: Path) -> None:
+def test_load_global_config_rejects_explicit_host_backend(tmp_path: Path) -> None:
     config_file = write(
         tmp_path / "config.toml",
         """
@@ -104,7 +105,8 @@ editor = ["nvim"]
 """,
     )
 
-    assert load_global_config(config_file) == HopConfig()
+    with pytest.raises(HopConfigError, match="reserved"):
+        load_global_config(config_file)
 
 
 def test_load_project_config_returns_empty_when_no_file(tmp_path: Path) -> None:
@@ -136,10 +138,11 @@ editor = ["lima", "shell", "default", "--", "nvim", "--listen", "{listen_addr}"]
     )
 
 
-def test_load_project_config_ignores_explicit_host_backend(tmp_path: Path) -> None:
+def test_load_project_config_rejects_explicit_host_backend(tmp_path: Path) -> None:
     write(tmp_path / ".hop.toml", "[backends.host]\nshell = ['bash']\neditor = ['nvim']\n")
 
-    assert load_project_config(tmp_path) == HopConfig()
+    with pytest.raises(HopConfigError, match="reserved"):
+        load_project_config(tmp_path)
 
 
 # --- merge ---------------------------------------------------------------
@@ -222,39 +225,84 @@ def test_default_global_config_path_falls_back_to_home_config(monkeypatch: pytes
     assert default_global_config_path() == Path("/home/tester/.config/hop/config.toml")
 
 
-def test_load_global_config_skips_non_table_backend_entries(tmp_path: Path) -> None:
-    """A backend declared with a scalar (e.g. `backends.bogus = "true"`) is
-    silently ignored; only table entries become BackendConfig instances."""
+def test_load_global_config_rejects_unknown_top_level_key(tmp_path: Path) -> None:
+    config_file = write(tmp_path / "config.toml", "[bakends.devcontainer]\nshell = ['zsh']\n")
+
+    with pytest.raises(HopConfigError, match="unknown top-level key 'bakends'"):
+        load_global_config(config_file)
+
+
+def test_load_global_config_rejects_non_table_backends_value(tmp_path: Path) -> None:
+    config_file = write(tmp_path / "config.toml", "backends = 'oops'\n")
+
+    with pytest.raises(HopConfigError, match="'backends' must be a table"):
+        load_global_config(config_file)
+
+
+def test_load_global_config_rejects_non_table_backend_entry(tmp_path: Path) -> None:
     config_file = write(
         tmp_path / "config.toml",
         """
 [backends]
 bogus = "not-a-table"
-
-[backends.real]
-shell = ["sh"]
-editor = ["nvim"]
 """,
     )
 
-    assert load_global_config(config_file).backends == (BackendConfig(name="real", shell=("sh",), editor=("nvim",)),)
+    with pytest.raises(HopConfigError, match="backend 'bogus' must be a table"):
+        load_global_config(config_file)
 
 
-def test_load_global_config_treats_empty_command_lists_as_unset(tmp_path: Path) -> None:
-    """An empty list in TOML is indistinguishable from "no value" — coerce to None
-    so partial-merge logic treats it as missing rather than as an empty command."""
+def test_load_global_config_rejects_unknown_backend_field(tmp_path: Path) -> None:
+    config_file = write(
+        tmp_path / "config.toml",
+        """
+[backends.devcontainer]
+shell = ["zsh"]
+shel = ["typo"]
+""",
+    )
+
+    with pytest.raises(HopConfigError, match="backend 'devcontainer' has unknown field 'shel'"):
+        load_global_config(config_file)
+
+
+def test_load_global_config_rejects_non_list_field(tmp_path: Path) -> None:
+    config_file = write(
+        tmp_path / "config.toml",
+        """
+[backends.devcontainer]
+shell = "zsh"
+""",
+    )
+
+    with pytest.raises(HopConfigError, match="field 'shell' must be a list of strings"):
+        load_global_config(config_file)
+
+
+def test_load_global_config_rejects_empty_command_list(tmp_path: Path) -> None:
     config_file = write(
         tmp_path / "config.toml",
         """
 [backends.devcontainer]
 shell = []
-editor = ["nvim"]
 """,
     )
 
-    config = load_global_config(config_file)
+    with pytest.raises(HopConfigError, match="field 'shell' must not be empty"):
+        load_global_config(config_file)
 
-    assert config.backends == (BackendConfig(name="devcontainer", shell=None, editor=("nvim",)),)
+
+def test_load_global_config_rejects_non_string_list_entries(tmp_path: Path) -> None:
+    config_file = write(
+        tmp_path / "config.toml",
+        """
+[backends.devcontainer]
+shell = ["zsh", 42]
+""",
+    )
+
+    with pytest.raises(HopConfigError, match="field 'shell' entries must be strings"):
+        load_global_config(config_file)
 
 
 def test_merge_preserves_partial_entries_in_result() -> None:

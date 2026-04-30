@@ -113,12 +113,11 @@ def test_load_sessions_returns_empty_when_dir_missing(tmp_path: Path) -> None:
     assert load_sessions(sessions_dir=tmp_path / "missing") == {}
 
 
-def test_load_sessions_skips_non_json_and_malformed_files(tmp_path: Path) -> None:
+def test_load_sessions_skips_non_json_and_wrong_shape_files(tmp_path: Path) -> None:
     sessions_dir = tmp_path / "sessions"
     sessions_dir.mkdir()
     (sessions_dir / "alpha.json").write_text(json.dumps({"name": "alpha", "project_root": "/projects/alpha"}))
     (sessions_dir / "beta.txt").write_text("not json")
-    (sessions_dir / "broken.json").write_text("{not valid json")
     (sessions_dir / "wrong-shape.json").write_text(json.dumps({"name": 1, "project_root": "/x"}))
 
     sessions = load_sessions(sessions_dir=sessions_dir)
@@ -130,6 +129,15 @@ def test_load_sessions_skips_non_json_and_malformed_files(tmp_path: Path) -> Non
             backend=HostBackendRecord(),
         )
     }
+
+
+def test_load_sessions_raises_on_malformed_json(tmp_path: Path) -> None:
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir()
+    (sessions_dir / "broken.json").write_text("{not valid json")
+
+    with pytest.raises(json.JSONDecodeError):
+        load_sessions(sessions_dir=sessions_dir)
 
 
 def test_load_sessions_decodes_backend_base(tmp_path: Path) -> None:

@@ -108,10 +108,7 @@ def load_sessions(*, sessions_dir: Path | None = None) -> dict[str, SessionState
     for path in target.iterdir():
         if path.suffix != ".json":
             continue
-        try:
-            payload = json.loads(path.read_text())
-        except (OSError, json.JSONDecodeError):
-            continue
+        payload = json.loads(path.read_text())
         name = payload.get("name")
         project_root = payload.get("project_root")
         if not isinstance(name, str) or not isinstance(project_root, str):
