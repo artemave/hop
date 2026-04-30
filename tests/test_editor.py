@@ -189,9 +189,7 @@ def test_focus_recreates_editor_after_neovim_exits(tmp_path: Path, monkeypatch: 
     assert sway.focused == [101]
 
 
-def test_focus_relaunches_when_server_is_orphan_with_no_window(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_focus_relaunches_when_server_is_orphan_with_no_window(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Server alive but no Sway editor window — orphaned by a manual `swaymsg
     kill` or kitty crash where compose-exec didn't forward SIGHUP. Hop should
     relaunch instead of leaving the user with an unreachable editor."""
@@ -230,9 +228,7 @@ def test_focus_relaunches_when_server_is_orphan_with_no_window(
     assert sway.focused == [202]
 
 
-def test_open_target_focuses_editor_and_routes_path_with_line(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_open_target_focuses_editor_and_routes_path_with_line(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
     runner = StubProcessRunner()
     project_root = build_session().project_root
@@ -264,10 +260,7 @@ def test_open_target_focuses_editor_and_routes_path_with_line(
 
 
 def test_build_remote_open_expr_preserves_plain_paths() -> None:
-    assert (
-        build_remote_open_expr("app/models/user.rb")
-        == "execute('drop ' . fnameescape('app/models/user.rb'))"
-    )
+    assert build_remote_open_expr("app/models/user.rb") == "execute('drop ' . fnameescape('app/models/user.rb'))"
 
 
 def test_build_remote_open_expr_chains_line_jump() -> None:
@@ -277,9 +270,7 @@ def test_build_remote_open_expr_chains_line_jump() -> None:
     )
 
 
-def test_open_target_translates_host_path_via_backend(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_open_target_translates_host_path_via_backend(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """For backends whose nvim runs in a different filesystem (e.g. devcontainer),
     `:drop <host_path>` would fail. The editor adapter must rewrite the path via
     the backend's translate_host_path before sending the remote keys."""
@@ -293,9 +284,7 @@ def test_open_target_translates_host_path_via_backend(
     sway = StubSwayAdapter([build_marked_editor_window(31)])
 
     class FakeBackend:
-        def translate_host_path(
-            self, _session: ProjectSession, host_path: Path
-        ) -> Path:
+        def translate_host_path(self, _session: ProjectSession, host_path: Path) -> Path:
             try:
                 relative = host_path.relative_to(project_root)
             except ValueError:
@@ -315,10 +304,7 @@ def test_open_target_translates_host_path_via_backend(
     adapter.open_target(build_session(), target=str(project_root / "lib/foo.py:42"))
 
     # The expr-eval must reference the in-backend path, not the host one.
-    open_expr_calls = [
-        c for c in runner.commands
-        if "--remote-expr" in c and "execute" in c[-1]
-    ]
+    open_expr_calls = [c for c in runner.commands if "--remote-expr" in c and "execute" in c[-1]]
     assert len(open_expr_calls) == 1
     expr = open_expr_calls[0][-1]
     assert "/workspace/lib/foo.py" in expr

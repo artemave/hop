@@ -176,9 +176,7 @@ class KittyRemoteControlAdapter:
             return str(cast(Any, response).get("data", ""))
         return str(response)
 
-    def inspect_window(
-        self, window_id: int, *, listen_on: str | None = None
-    ) -> KittyWindowContext | None:
+    def inspect_window(self, window_id: int, *, listen_on: str | None = None) -> KittyWindowContext | None:
         # Used by the open_selection kitten. Callers in kitty's boss process should
         # pass `boss.listening_on` because os.environ["KITTY_LISTEN_ON"] inside the
         # boss may have been inherited from a different kitty instance.

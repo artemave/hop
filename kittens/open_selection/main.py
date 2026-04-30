@@ -59,11 +59,14 @@ def mark(text: Any, args: Any, Mark: Any, extra_cli_args: Any, *unused_args: Any
         else:
             continue
         selected_text = group_value.replace("\0", "").replace("\n", "")
-        if resolve_visible_output_target(
-            selected_text,
-            terminal_cwd=base_cwd,
-            project_root=base_cwd,
-        ) is None:
+        if (
+            resolve_visible_output_target(
+                selected_text,
+                terminal_cwd=base_cwd,
+                project_root=base_cwd,
+            )
+            is None
+        ):
             continue
         yield Mark(index, start, end, selected_text, {})
         index += 1

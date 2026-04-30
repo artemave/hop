@@ -1,28 +1,35 @@
 # hop
 
-hop is a project session manager for Sway — each session is a workspace that bundles all of a project's windows, with single commands to enter, switch between, and tear them down.
+hop is a project session manager - each session is a workspace that bundles all of a project's windows, with single commands to enter, switch between, and tear them down.
 
-Conceptually similar to tmux sessions, but session/window management is delegated to an actual window manager (Sway). That means:
+Conceptually similar to tmux sessions, but session/window management is delegated to an actual system window manager. That means:
 
-- **Single window manager** — sway's normal shortcuts apply directly, no second layered keymap, no prefix key.
-- **GUI apps are part of the session** — browser, etc., not just terminals.
-- **No multiplexer in the way** — native terminal features (true color, kitty graphics, ligatures, mouse, OSC 52/8/133) work without lossy passthrough; system clipboard and scrollback are the real ones, not a copy-mode buffer.
+- **Single window manager** - sway's normal shortcuts apply directly, no second layered keymap, no prefix key.
+- **GUI apps are part of the session** - browser, etc., not just terminals.
+- **No multiplexer in the way** - native terminal features (true color, kitty graphics, ligatures, mouse, OSC 52/8/133) work without lossy passthrough; system clipboard and scrollback are the real ones, not a copy-mode buffer.
+
+hop is built on top of [Sway](https://swaywm.org/) window manager, [Kitty](https://sw.kovidgoyal.net/kitty/) terminal emulator and [Neovim](https://neovim.io/) as an editor. Those might become swappable building blocks in the future (potentially opening up OSX support).
 
 ## Features
 
 - **Terminals start in the project directory.** Spawn a shell anywhere in a session and it's already `cd`-ed into the project root.
 - **Open from terminal output.** A bundled Kitty kitten picks file paths and URLs from visible output and dispatches them to the session's editor or browser.
-- **Shared Neovim per session** — all file links open there.
-- **Shared browser per session** — all browser links open there.
-- **Pluggable backends.** Shells and editor can run on the host, inside a devcontainer, over ssh, or anywhere describable as a chain of commands — without changing how you drive the session.
+- **Shared Neovim per session** - all file links open there.
+- **Shared browser per session** - all browser links open there.
+- **Pluggable backends.** Shells and editor can run on the host, inside a devcontainer, over ssh, or anywhere describable as a chain of commands - without changing how you drive the session.
 - **Sway and Vicinae integration.** Helper scripts for one-key session switch, kill, and moving windows in.
 
 ## Requirements
 
+- Linux
 - Python 3.12+
 - [Sway](https://swaywm.org/)
 - [Kitty](https://sw.kovidgoyal.net/kitty/) with remote control enabled (`allow_remote_control yes` in `kitty.conf`)
 - [Neovim](https://neovim.io/)
+
+Optionally:
+
+- [Vicinae](https://www.vicinae.com/) launcher
 
 ## Installation
 
@@ -49,7 +56,7 @@ A session is the resolved current working directory. Every session-scoped comman
 hop
 ```
 
-Run from a terminal with your shell `cd`-ed into the project directory. Creates the session — a Sway workspace named `p:<dirname>` with a `shell` terminal — or attaches to it if one already exists for that directory.
+Run from a terminal with your shell `cd`-ed into the project directory. Creates the session - a Sway workspace named `p:<dirname>` with a `shell` terminal - or attaches to it if one already exists for that directory.
 
 ### Add another shell to the session
 
@@ -103,7 +110,7 @@ hop run --role test "python3 -m pytest -q"
 hop run --role server "bin/dev"
 ```
 
-The command must be a single CLI argument. The default role is `shell`. `hop run` dispatches the command, prints an opaque run id, and returns immediately — it does not wait for completion.
+The command must be a single CLI argument. The default role is `shell`. `hop run` dispatches the command, prints an opaque run id, and returns immediately - it does not wait for completion.
 
 ### Stream the output of a previous `hop run`
 
@@ -189,7 +196,7 @@ File-shaped tokens that don't resolve to a real file under the source window's c
 
 ## Session backends
 
-A session has a **backend** that decides where its shells and editor run. The default is **host**. Other backends — devcontainer, ssh, anything else describable as a chain of commands — are configured as named entries in `~/.config/hop/config.toml` or a project's `.hop.toml`. Both files use the same `[backends.<name>]` schema and are merged at session entry.
+A session has a **backend** that decides where its shells and editor run. The default is **host**. Other backends - devcontainer, ssh, anything else describable as a chain of commands - are configured as named entries in `~/.config/hop/config.toml` or a project's `.hop.toml`. Both files use the same `[backends.<name>]` schema and are merged at session entry.
 
 ### Auto-detection
 
@@ -212,12 +219,12 @@ workspace = ["podman-compose", "-f", "docker-compose.dev.yml", "exec", "devconta
 
 Fields per backend:
 
-- `shell` (required) — argv to spawn one shell per role terminal.
-- `editor` (required) — argv to launch the shared nvim. `{listen_addr}` is substituted with the host-visible nvim socket path.
-- `default` (optional) — auto-detect probe. Backends without `default` can only be picked by name.
-- `prepare` (optional) — argv run once at session creation, before launching kitty. Should be idempotent.
-- `teardown` (optional) — argv run at `hop kill` after closing windows.
-- `workspace` (optional) — argv whose stdout maps the backend's path back to the host project root. Used by the open_selection kitten.
+- `shell` (required) - argv to spawn one shell per role terminal.
+- `editor` (required) - argv to launch the shared nvim. `{listen_addr}` is substituted with the host-visible nvim socket path.
+- `default` (optional) - auto-detect probe. Backends without `default` can only be picked by name.
+- `prepare` (optional) - argv run once at session creation, before launching kitty. Should be idempotent.
+- `teardown` (optional) - argv run at `hop kill` after closing windows.
+- `workspace` (optional) - argv whose stdout maps the backend's path back to the host project root. Used by the open_selection kitten.
 
 Supported placeholders inside command lists: `{listen_addr}` (in `editor`) and `{project_root}` (anywhere).
 

@@ -38,6 +38,7 @@ class StubSwayAdapter:
         self.windows = windows
         self.switched_workspaces: list[str] = []
         self.closed_windows: list[int] = []
+        self.removed_workspaces: list[str] = []
 
     def switch_to_workspace(self, workspace_name: str) -> None:
         self.switched_workspaces.append(workspace_name)
@@ -50,6 +51,10 @@ class StubSwayAdapter:
 
     def close_window(self, window_id: int) -> None:
         self.closed_windows.append(window_id)
+        self.windows = tuple(window for window in self.windows if window.id != window_id)
+
+    def remove_workspace(self, workspace_name: str) -> None:
+        self.removed_workspaces.append(workspace_name)
 
     def get_focused_workspace(self) -> str:
         return self.focused_workspace
@@ -659,6 +664,148 @@ default = ["true"]
 
     assert isinstance(backend, CommandBackend)
     assert backend.name == "project-only"
+
+
+def test_session_backend_registry_for_session_returns_override(tmp_path: Path) -> None:
+    from hop.app import SessionBackendRegistry
+
+    registry = SessionBackendRegistry(
+        global_config_loader=lambda: HopConfig(),
+        sessions_loader=lambda: {},
+    )
+    session = _make_session(tmp_path)
+    override = CommandBackend(
+        name="overridden",
+        shell=("override-shell",),
+        editor=("override-editor",),
+    )
+    registry.set_override(session.session_name, override)
+
+    assert registry.for_session(session) is override
+
+    registry.clear_override(session.session_name)
+    assert isinstance(registry.for_session(session), HostBackend)
+
+
+def test_session_backend_registry_for_session_returns_persisted_command_backend(
+    tmp_path: Path,
+) -> None:
+    from hop.app import SessionBackendRegistry
+    from hop.state import CommandBackendRecord, SessionState
+
+    persisted = {
+        tmp_path.name: SessionState(
+            name=tmp_path.name,
+            project_root=tmp_path,
+            backend=CommandBackendRecord(
+                name="legacy",
+                shell=("legacy-shell",),
+                editor=("legacy-editor",),
+                prepare=("legacy-prepare",),
+                teardown=("legacy-teardown",),
+                workspace_command=("legacy-workspace",),
+                workspace_path="/legacy",
+            ),
+        )
+    }
+    registry = SessionBackendRegistry(
+        global_config_loader=lambda: HopConfig(),
+        sessions_loader=lambda: persisted,
+    )
+
+    backend = registry.for_session(_make_session(tmp_path))
+
+    assert isinstance(backend, CommandBackend)
+    assert backend.name == "legacy"
+    assert backend.workspace_path == "/legacy"
+
+
+def test_session_backend_registry_for_session_returns_host_for_persisted_host_record(
+    tmp_path: Path,
+) -> None:
+    from hop.app import SessionBackendRegistry
+    from hop.state import HostBackendRecord, SessionState
+
+    persisted = {
+        tmp_path.name: SessionState(
+            name=tmp_path.name,
+            project_root=tmp_path,
+            backend=HostBackendRecord(),
+        )
+    }
+    registry = SessionBackendRegistry(
+        global_config_loader=lambda: HopConfig(),
+        sessions_loader=lambda: persisted,
+    )
+
+    assert isinstance(registry.for_session(_make_session(tmp_path)), HostBackend)
+
+
+def test_record_for_backend_round_trips_command_and_host_backends(tmp_path: Path) -> None:
+    from hop.app import _backend_from_record, _record_for_backend  # pyright: ignore[reportPrivateUsage]
+    from hop.state import CommandBackendRecord, HostBackendRecord
+
+    command = CommandBackend(
+        name="devcontainer",
+        shell=("compose", "exec", "devcontainer", "zsh"),
+        editor=("compose", "exec", "devcontainer", "nvim"),
+        prepare_command=("compose", "up", "-d"),
+        teardown_command=("compose", "down"),
+        workspace_command=("compose", "exec", "devcontainer", "pwd"),
+        workspace_path="/workspace",
+    )
+    record = _record_for_backend(command)
+
+    assert record == CommandBackendRecord(
+        name="devcontainer",
+        shell=("compose", "exec", "devcontainer", "zsh"),
+        editor=("compose", "exec", "devcontainer", "nvim"),
+        prepare=("compose", "up", "-d"),
+        teardown=("compose", "down"),
+        workspace_command=("compose", "exec", "devcontainer", "pwd"),
+        workspace_path="/workspace",
+    )
+
+    host_record = _record_for_backend(HostBackend())
+    assert host_record == HostBackendRecord()
+    assert isinstance(_backend_from_record(host_record), HostBackend)
+
+
+def test_persist_bootstrap_record_writes_session_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from hop.app import _persist_bootstrap_record  # pyright: ignore[reportPrivateUsage]
+
+    monkeypatch.setenv("HOP_SESSIONS_DIR", str(tmp_path / "sessions"))
+    session = ProjectSession(
+        project_root=tmp_path,
+        session_name="bootstrap",
+        workspace_name="p:bootstrap",
+    )
+    backend = CommandBackend(
+        name="devcontainer",
+        shell=("compose", "exec", "devcontainer", "zsh"),
+        editor=("compose", "exec", "devcontainer", "nvim"),
+    )
+
+    _persist_bootstrap_record(session, backend)
+
+    payload = json.loads((tmp_path / "sessions" / "bootstrap.json").read_text())
+    assert payload["backend"]["type"] == "command"
+    assert payload["backend"]["name"] == "devcontainer"
+
+
+def test_build_default_services_returns_real_adapters(monkeypatch: pytest.MonkeyPatch) -> None:
+    from hop.app import build_default_services
+    from hop.browser import SessionBrowserAdapter
+    from hop.editor import SharedNeovimEditorAdapter
+    from hop.sway import SwayIpcAdapter
+
+    monkeypatch.setenv("HOP_SESSIONS_DIR", "/tmp/hop-test-sessions")
+    services = build_default_services()
+
+    assert isinstance(services.sway, SwayIpcAdapter)
+    assert isinstance(services.kitty, KittyRemoteControlAdapter)
+    assert isinstance(services.neovim, SharedNeovimEditorAdapter)
+    assert isinstance(services.browser, SessionBrowserAdapter)
 
 
 def test_session_base_registry_persisted_state_wins_over_autodetect(tmp_path: Path) -> None:

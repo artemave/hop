@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from hop.config import (
     BackendConfig,
     HopConfig,
+    default_global_config_path,
     load_global_config,
     load_project_config,
     merge_backends,
@@ -68,9 +70,7 @@ def test_load_global_config_accepts_partial_entries(tmp_path: Path) -> None:
 
     config = load_global_config(config_file)
 
-    assert config.backends == (
-        BackendConfig(name="partial", default=("true",)),
-    )
+    assert config.backends == (BackendConfig(name="partial", default=("true",)),)
     assert config.backends[0].is_runnable is False
 
 
@@ -158,12 +158,8 @@ def test_merge_appends_global_only_entries_after_project() -> None:
 
 
 def test_merge_project_only_entries_appear_first() -> None:
-    project = HopConfig(
-        backends=(_backend("project-only", shell=("p",), editor=("p",)),)
-    )
-    global_ = HopConfig(
-        backends=(_backend("alpha", shell=("a",), editor=("a",)),)
-    )
+    project = HopConfig(backends=(_backend("project-only", shell=("p",), editor=("p",)),))
+    global_ = HopConfig(backends=(_backend("alpha", shell=("a",), editor=("a",)),))
 
     merged = merge_backends(project, global_)
 
@@ -171,9 +167,7 @@ def test_merge_project_only_entries_appear_first() -> None:
 
 
 def test_merge_field_merges_same_name_with_project_winning() -> None:
-    project = HopConfig(
-        backends=(_backend("alpha", default=("true",)),)
-    )
+    project = HopConfig(backends=(_backend("alpha", default=("true",)),))
     global_ = HopConfig(
         backends=(
             _backend(
@@ -191,10 +185,10 @@ def test_merge_field_merges_same_name_with_project_winning() -> None:
     assert merged == (
         _backend(
             "alpha",
-            shell=("a-shell",),       # inherited from global
-            editor=("a-editor",),     # inherited from global
-            default=("true",),         # overridden by project
-            prepare=("a-prepare",),   # inherited from global
+            shell=("a-shell",),  # inherited from global
+            editor=("a-editor",),  # inherited from global
+            default=("true",),  # overridden by project
+            prepare=("a-prepare",),  # inherited from global
         ),
     )
 
@@ -202,9 +196,7 @@ def test_merge_field_merges_same_name_with_project_winning() -> None:
 def test_merge_project_mention_moves_backend_to_project_slot() -> None:
     """A backend the project file mentions — even just as a partial override —
     moves to the project's slot in the auto-detect order."""
-    project = HopConfig(
-        backends=(_backend("beta", default=("true",)),)
-    )
+    project = HopConfig(backends=(_backend("beta", default=("true",)),))
     global_ = HopConfig(
         backends=(
             _backend("alpha", shell=("a",), editor=("a",)),
@@ -216,6 +208,52 @@ def test_merge_project_mention_moves_backend_to_project_slot() -> None:
 
     # beta moves to position 0 because the project mentioned it; alpha follows.
     assert tuple(b.name for b in merged) == ("beta", "alpha")
+
+
+def test_default_global_config_path_uses_xdg_config_home(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", "/etc/xdg")
+    assert default_global_config_path() == Path("/etc/xdg/hop/config.toml")
+
+
+def test_default_global_config_path_falls_back_to_home_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    monkeypatch.setenv("HOME", "/home/tester")
+    assert default_global_config_path() == Path("/home/tester/.config/hop/config.toml")
+
+
+def test_load_global_config_skips_non_table_backend_entries(tmp_path: Path) -> None:
+    """A backend declared with a scalar (e.g. `backends.bogus = "true"`) is
+    silently ignored; only table entries become BackendConfig instances."""
+    config_file = write(
+        tmp_path / "config.toml",
+        """
+[backends]
+bogus = "not-a-table"
+
+[backends.real]
+shell = ["sh"]
+editor = ["nvim"]
+""",
+    )
+
+    assert load_global_config(config_file).backends == (BackendConfig(name="real", shell=("sh",), editor=("nvim",)),)
+
+
+def test_load_global_config_treats_empty_command_lists_as_unset(tmp_path: Path) -> None:
+    """An empty list in TOML is indistinguishable from "no value" — coerce to None
+    so partial-merge logic treats it as missing rather than as an empty command."""
+    config_file = write(
+        tmp_path / "config.toml",
+        """
+[backends.devcontainer]
+shell = []
+editor = ["nvim"]
+""",
+    )
+
+    config = load_global_config(config_file)
+
+    assert config.backends == (BackendConfig(name="devcontainer", shell=None, editor=("nvim",)),)
 
 
 def test_merge_preserves_partial_entries_in_result() -> None:

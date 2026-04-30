@@ -84,9 +84,7 @@ class KittyAdapter(Protocol):
         command: str,
     ) -> int: ...
 
-    def inspect_window(
-        self, window_id: int, *, listen_on: str | None = None
-    ) -> KittyWindowContext | None: ...
+    def inspect_window(self, window_id: int, *, listen_on: str | None = None) -> KittyWindowContext | None: ...
 
     def list_session_windows(self, session: ProjectSession) -> Sequence[KittyWindow]: ...
 
@@ -151,9 +149,7 @@ class SessionBackendRegistry:
         # hop run from a workspace created by hand). Fall back to host.
         return HostBackend()
 
-    def resolve_for_entry(
-        self, session: ProjectSession, *, backend_name: str | None
-    ) -> SessionBackend:
+    def resolve_for_entry(self, session: ProjectSession, *, backend_name: str | None) -> SessionBackend:
         # Persisted state still wins so we don't change a live session's
         # backend mid-flight; backend_name only matters for first entry.
         persisted = self._sessions_loader().get(session.session_name)
@@ -259,9 +255,7 @@ def execute_command(
                     terminals=services.kitty,
                 )
             else:
-                backend = services.session_backends.resolve_for_entry(
-                    session, backend_name=backend_name
-                )
+                backend = services.session_backends.resolve_for_entry(session, backend_name=backend_name)
                 services.session_backends.set_override(session.session_name, backend)
                 try:
                     enter_project_session(
@@ -330,16 +324,16 @@ def execute_command(
     return 0
 
 
+def _persist_bootstrap_record(session: ProjectSession, backend: SessionBackend) -> None:
+    record_session(session, backend=_record_for_backend(backend))
+
+
 def build_default_services() -> HopServices:
     sway = SwayIpcAdapter()
     registry = SessionBackendRegistry()
-
-    def on_bootstrap(session: ProjectSession, backend: SessionBackend) -> None:
-        record_session(session, backend=_record_for_backend(backend))
-
     kitty = KittyRemoteControlAdapter(
         session_backend_for=registry.for_session,
-        on_session_bootstrap=on_bootstrap,
+        on_session_bootstrap=_persist_bootstrap_record,
     )
     neovim = SharedNeovimEditorAdapter(
         sway=sway,

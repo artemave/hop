@@ -350,3 +350,28 @@ def test_default_launcher_invokes_subprocess_popen(monkeypatch: pytest.MonkeyPat
     assert captured_args == [["kitty", "--listen-on", "unix:@hop-demo"]]
     assert captured_kwargs[0]["env"] == {"HOP_SESSION": "demo"}
     assert captured_kwargs[0]["start_new_session"] is True
+
+
+def test_session_name_from_listen_on_returns_none_for_non_unix_prefix() -> None:
+    from hop.kitty import session_name_from_listen_on
+
+    assert session_name_from_listen_on("tcp:127.0.0.1:1234") is None
+
+
+def test_session_name_from_listen_on_returns_none_for_abstract_socket() -> None:
+    from hop.kitty import session_name_from_listen_on
+
+    assert session_name_from_listen_on("unix:@hop-demo") is None
+
+
+def test_session_name_from_listen_on_returns_none_when_filename_does_not_match_prefix() -> None:
+    from hop.kitty import session_name_from_listen_on
+
+    assert session_name_from_listen_on("unix:/run/user/1000/other-demo.sock") is None
+
+
+def test_session_name_from_listen_on_extracts_session_name_from_socket_filename() -> None:
+    from hop.kitty import session_name_from_listen_on, session_socket_path
+
+    socket_path = session_socket_path("demo")
+    assert session_name_from_listen_on(f"unix:{socket_path}") == "demo"

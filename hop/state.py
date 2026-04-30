@@ -133,11 +133,7 @@ def _decode_backend_record(raw: object) -> BackendRecord:
             backend_name = record.get("name")
             shell = record.get("shell")
             editor = record.get("editor")
-            if (
-                isinstance(backend_name, str)
-                and isinstance(shell, list)
-                and isinstance(editor, list)
-            ):
+            if isinstance(backend_name, str) and isinstance(shell, list) and isinstance(editor, list):
                 return CommandBackendRecord(
                     name=backend_name,
                     shell=_str_tuple(cast(list[Any], shell)),
@@ -146,9 +142,7 @@ def _decode_backend_record(raw: object) -> BackendRecord:
                     teardown=_optional_str_tuple(record.get("teardown")),
                     workspace_command=_optional_str_tuple(record.get("workspace_command")),
                     workspace_path=(
-                        str(record["workspace_path"])
-                        if isinstance(record.get("workspace_path"), str)
-                        else None
+                        str(record["workspace_path"]) if isinstance(record.get("workspace_path"), str) else None
                     ),
                 )
     return HostBackendRecord()

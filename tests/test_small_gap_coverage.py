@@ -53,11 +53,14 @@ def test_open_selection_ignores_invocation_outside_a_hop_session_kitty(tmp_path:
 
 
 def test_open_selection_ignores_session_without_recorded_state(tmp_path: Path) -> None:
+    from hop.kitty import session_socket_path
+
+    listen_on = f"unix:{session_socket_path('demo')}"
     assert (
         open_selection_in_window(
             "README.md",
             source_cwd=tmp_path,
-            listen_on="unix:@hop-demo",
+            listen_on=listen_on,
             neovim=StubNeovimAdapter(),
             browser=StubBrowserAdapter(),
             sessions_loader=lambda: {},

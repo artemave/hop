@@ -72,9 +72,7 @@ class SharedNeovimEditorAdapter:
     def open_target(self, session: ProjectSession, *, target: str) -> None:
         self._ensure_editor(session)
         self._focus_editor_window(session)
-        self._send_remote_expr(
-            session, build_remote_open_expr(self._translate_target(session, target))
-        )
+        self._send_remote_expr(session, build_remote_open_expr(self._translate_target(session, target)))
 
     def _translate_target(self, session: ProjectSession, target: str) -> str:
         # `target` is a host path (optionally with `:line`). For backends whose
@@ -227,9 +225,7 @@ class SharedNeovimEditorAdapter:
         raise NeovimCommandError(msg)
 
     def _send_expr_once(self, address: Path, expr: str) -> subprocess.CompletedProcess[str]:
-        return self._process_runner.run(
-            [NVIM_COMMAND, "--server", str(address), "--remote-expr", expr]
-        )
+        return self._process_runner.run([NVIM_COMMAND, "--server", str(address), "--remote-expr", expr])
 
     def _remote_address(self, session: ProjectSession) -> Path:
         return self._session_backend_for(session).editor_remote_address(session)

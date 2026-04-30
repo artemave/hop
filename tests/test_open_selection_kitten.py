@@ -4,9 +4,7 @@ import pytest
 from kittens.open_selection import main
 
 
-def test_mark_finds_supported_visible_output_targets(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_mark_finds_supported_visible_output_targets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "app" / "models").mkdir(parents=True)
     (tmp_path / "app" / "models" / "user.rb").write_text("")
     (tmp_path / "app" / "controllers").mkdir(parents=True)
@@ -23,9 +21,7 @@ def test_mark_finds_supported_visible_output_targets(
     ]
 
 
-def test_mark_skips_file_shaped_tokens_that_do_not_exist(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_mark_skips_file_shaped_tokens_that_do_not_exist(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "bun.lock").write_text("")
     (tmp_path / "package.json").write_text("{}")
     monkeypatch.chdir(tmp_path)
@@ -41,9 +37,7 @@ def test_mark_skips_file_shaped_tokens_that_do_not_exist(
     assert [match["index"] for match in matches] == [0, 1, 2]
 
 
-def test_mark_finds_bare_directories_and_extensionless_files(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_mark_finds_bare_directories_and_extensionless_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "app").mkdir()
     (tmp_path / "Gemfile").write_text("")
     (tmp_path / ".gitignore").write_text("")
@@ -56,9 +50,7 @@ def test_mark_finds_bare_directories_and_extensionless_files(
     assert [match["text"] for match in matches] == ["app", "Gemfile", ".gitignore"]
 
 
-def test_mark_unwraps_function_call_around_file_path(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_mark_unwraps_function_call_around_file_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "foo.js").write_text("")
     monkeypatch.chdir(tmp_path)
 

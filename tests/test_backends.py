@@ -355,6 +355,32 @@ def test_select_backend_pinned_unknown_name_raises(tmp_path: Path) -> None:
         select_backend(build_session(tmp_path), backends, pinned_name="nonexistent")
 
 
+def test_command_backend_teardown_is_noop_without_command(tmp_path: Path) -> None:
+    runner = RecordingRunner()
+    backend = backend_from_config(make_backend(teardown=None), runner=runner)
+
+    backend.teardown(build_session(tmp_path))
+
+    assert runner.calls == []
+
+
+def test_backend_from_config_raises_for_partial_backend(tmp_path: Path) -> None:
+    from hop.backends import UnknownBackendError
+
+    partial = BackendConfig(name="lima", shell=("lima",))  # editor missing
+
+    with pytest.raises(UnknownBackendError, match="missing shell or editor"):
+        backend_from_config(partial)
+
+
+def test_default_runner_invokes_subprocess_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Smoke-test the default runner by running a real `true` (no runner override)."""
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    backend = backend_from_config(make_backend(prepare=("true",)))
+
+    backend.prepare(build_session(tmp_path))
+
+
 def test_editor_remote_address_is_identical_for_both_bases(tmp_path: Path) -> None:
     session = build_session(tmp_path)
 

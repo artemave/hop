@@ -46,9 +46,7 @@ def test_run_defaults_to_shell_role() -> None:
 
 
 def test_backend_flag_on_bare_hop() -> None:
-    assert parse_command(["--backend", "devcontainer"]) == EnterSessionCommand(
-        backend="devcontainer"
-    )
+    assert parse_command(["--backend", "devcontainer"]) == EnterSessionCommand(backend="devcontainer")
 
 
 def test_backend_host_on_bare_hop() -> None:
@@ -56,9 +54,7 @@ def test_backend_host_on_bare_hop() -> None:
 
 
 def test_backend_flag_on_bare_term_alias() -> None:
-    assert parse_command(["--backend", "devcontainer", "term"]) == EnterSessionCommand(
-        backend="devcontainer"
-    )
+    assert parse_command(["--backend", "devcontainer", "term"]) == EnterSessionCommand(backend="devcontainer")
 
 
 def test_backend_flag_rejected_on_term_with_role() -> None:

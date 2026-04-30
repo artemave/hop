@@ -116,9 +116,7 @@ def test_open_selection_in_window_logs_when_listen_on_is_not_a_hop_socket(
     assert any("not a hop session socket" in record.message for record in caplog.records)
 
 
-def test_open_selection_in_window_logs_when_listen_on_is_none(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_open_selection_in_window_logs_when_listen_on_is_none(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.INFO, logger="hop.open_selection"):
         result = open_selection_in_window(
             "app/models/user.rb",
@@ -188,9 +186,7 @@ def test_open_selection_in_window_translates_terminal_cwd_via_base(tmp_path: Pat
     browser = StubBrowserAdapter()
 
     class FakeBackend:
-        def translate_terminal_cwd(
-            self, _session: ProjectSession, cwd: Path
-        ) -> Path:
+        def translate_terminal_cwd(self, _session: ProjectSession, cwd: Path) -> Path:
             # Container path /workspace/src maps to <project_root>/src.
             return project_root.resolve() / "src"
 
@@ -210,9 +206,7 @@ def test_open_selection_in_window_translates_terminal_cwd_via_base(tmp_path: Pat
     assert neovim.opened_targets == [("demo", str(selected_file.resolve()))]
 
 
-def test_open_selection_in_window_logs_dispatch_on_success(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_open_selection_in_window_logs_dispatch_on_success(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     project_root = tmp_path / "demo"
     terminal_cwd = project_root / "src"
     selected_file = terminal_cwd / "app/models/user.rb"

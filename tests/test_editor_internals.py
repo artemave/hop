@@ -230,9 +230,7 @@ def test_wait_for_server_times_out_when_neovim_never_becomes_ready(tmp_path: Pat
         monkeypatch.undo()
 
 
-def test_open_target_raises_stderr_when_remote_send_fails(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_open_target_raises_stderr_when_remote_send_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
     runner = StubProcessRunner(
         [
@@ -251,9 +249,7 @@ def test_open_target_raises_stderr_when_remote_send_fails(
         adapter.open_target(build_session(), target="README.md")
 
 
-def test_open_target_retries_remote_expr_on_connection_refused(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_open_target_retries_remote_expr_on_connection_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Right after launch, the in-backend nvim's listener can briefly flap
     (compose-exec startup race, UI attach init); the first --remote-expr
     lands in the gap with `connection refused`. Adapter should wait for the
@@ -287,6 +283,73 @@ def test_open_target_retries_remote_expr_on_connection_refused(
     assert len(runner.commands) == 4
     assert all("--remote-expr" in cmd for cmd in runner.commands)
     assert not any("--remote-send" in cmd for cmd in runner.commands)
+
+
+def test_open_target_raises_when_retry_after_recovery_still_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If the recovery wait succeeds but the retry still fails (for a different
+    reason), the second failure is what surfaces to the caller."""
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    runner = StubProcessRunner(
+        [
+            subprocess.CompletedProcess(("nvim",), 0, "", ""),
+            subprocess.CompletedProcess(
+                ("nvim",),
+                1,
+                "",
+                "E247: Failed to connect: connection refused. Send failed.\n",
+            ),
+            subprocess.CompletedProcess(("nvim",), 0, "1", ""),
+            subprocess.CompletedProcess(("nvim",), 1, "", "permission denied\n"),
+        ]
+    )
+    transport = StubKittyTransport([])
+    adapter = SharedNeovimEditorAdapter(
+        sway=StubSwayAdapter([_marked_editor(31)]),
+        kitty_transport=transport,
+        process_runner=runner,
+    )
+
+    with pytest.raises(NeovimCommandError, match="permission denied"):
+        adapter.open_target(build_session(), target="README.md")
+
+
+def test_open_target_raises_original_error_when_recovery_wait_times_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the post-launch listener flap (`connection refused`) does not
+    recover before `_wait_for_server` times out, the recovery is abandoned and
+    the original send error is surfaced to the caller."""
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    runner = StubProcessRunner(
+        [
+            # _ensure_editor → _server_is_running gate: alive.
+            subprocess.CompletedProcess(("nvim",), 0, "", ""),
+            # First open-expr: connection refused.
+            subprocess.CompletedProcess(
+                ("nvim",),
+                1,
+                "",
+                "E247: Failed to connect: connection refused. Send failed.\n",
+            ),
+            # Recovery readiness poll: never ready.
+            subprocess.CompletedProcess(("nvim",), 1, "", ""),
+        ]
+    )
+    transport = StubKittyTransport([])
+    adapter = SharedNeovimEditorAdapter(
+        sway=StubSwayAdapter([_marked_editor(31)]),
+        kitty_transport=transport,
+        process_runner=runner,
+        ready_timeout_seconds=0.001,
+        ready_poll_interval_seconds=0.0,
+    )
+    monotonic_values = iter([0.0, 0.0, 1.0])
+    monkeypatch.setattr("hop.editor.time.monotonic", lambda: next(monotonic_values))
+
+    with pytest.raises(NeovimCommandError, match="connection refused"):
+        adapter.open_target(build_session(), target="README.md")
 
 
 def test_remove_stale_socket_ignores_missing_paths(tmp_path: Path) -> None:
