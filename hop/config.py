@@ -53,6 +53,8 @@ class BackendConfig:
     prepare: tuple[str, ...] | None = None
     teardown: tuple[str, ...] | None = None
     workspace: tuple[str, ...] | None = None
+    port_translate: tuple[str, ...] | None = None
+    host_translate: tuple[str, ...] | None = None
 
     @property
     def is_runnable(self) -> bool:
@@ -114,10 +116,21 @@ def _merge_pair(project: BackendConfig, global_: BackendConfig) -> BackendConfig
         prepare=project.prepare if project.prepare is not None else global_.prepare,
         teardown=project.teardown if project.teardown is not None else global_.teardown,
         workspace=project.workspace if project.workspace is not None else global_.workspace,
+        port_translate=(project.port_translate if project.port_translate is not None else global_.port_translate),
+        host_translate=(project.host_translate if project.host_translate is not None else global_.host_translate),
     )
 
 
-_BACKEND_FIELDS = ("shell", "editor", "default", "prepare", "teardown", "workspace")
+_BACKEND_FIELDS = (
+    "shell",
+    "editor",
+    "default",
+    "prepare",
+    "teardown",
+    "workspace",
+    "port_translate",
+    "host_translate",
+)
 _TOP_LEVEL_KEYS = ("backends",)
 
 
@@ -167,6 +180,8 @@ def _parse_backend(name: str, table: dict[str, Any], *, source: Path) -> Backend
         prepare=_parse_str_list(table, key="prepare", backend=name, source=source),
         teardown=_parse_str_list(table, key="teardown", backend=name, source=source),
         workspace=_parse_str_list(table, key="workspace", backend=name, source=source),
+        port_translate=_parse_str_list(table, key="port_translate", backend=name, source=source),
+        host_translate=_parse_str_list(table, key="host_translate", backend=name, source=source),
     )
 
 

@@ -60,7 +60,11 @@ editor    = ["podman-compose", "-f", "docker-compose.dev.yml", "exec",
              "devcontainer", "nvim", "--listen", "{listen_addr}"]
 teardown  = ["podman-compose", "-f", "docker-compose.dev.yml", "down"]
 workspace = ["podman-compose", "-f", "docker-compose.dev.yml", "exec", "devcontainer", "pwd"]
+port_translate = ["sh", "-c",
+  "podman ps -q --filter label=io.podman.compose.project=$(basename {project_root}) --filter label=io.podman.compose.service=devcontainer | head -1 | xargs -r -I@ podman port @ {port} | cut -d: -f2"]
 ```
+
+`port_translate` is invoked lazily when the kitten dispatch encounters a URL like `http://localhost:3000` printed inside the container — the recipe above resolves the running container by compose label (so it works whether the container was brought up by `podman-compose up` or by `podman-compose run …` with their different naming conventions) and asks `podman port` for the host-side port the container's port is published on. Stripped stdout (e.g. `35231`) replaces the URL's port; the host (`localhost`) is left untouched. The companion `host_translate` field exists for backends that swap the hostname instead — not needed for a same-host devcontainer.
 
 If you use a different compose tool, swap the leading argv:
 
@@ -190,6 +194,12 @@ The `hop-<hash>.sock` path the host computes must match the path nvim binds to i
 Path translation requires the backend's `workspace` command to return a path that the host fs can find. If the kitten dispatches `lib/foo.py` and nothing happens, check `$XDG_RUNTIME_DIR/hop/open-selection.log` and confirm the persisted `backend.workspace_path` matches the prefix you'd expect to see in the container's cwd.
 
 If `workspace` is omitted, hop skips translation entirely — file targets resolve against the raw container cwd, which won't exist on the host. Either add a `workspace` command to the backend or accept that hint-pick won't work for that backend.
+
+### Open-selection kitten opens the wrong URL (or hits a dead port)
+
+When the kitten dispatches `http://localhost:3000` from inside a container, hop runs the backend's `port_translate` (and/or `host_translate`) command to rewrite the URL into something the host browser can reach. If the browser opens an unexpected page, an empty error, or hits the host's port instead of the container's, check `$XDG_RUNTIME_DIR/hop/open-selection.log` for the dispatch line — it shows the URL hop actually handed to the browser, after translation. Common causes: the recipe's container filter matches zero containers (so `podman port` is invoked with an empty argument and fails), the requested port isn't published on the container, or the recipe matches the wrong container when more than one is running for the same service.
+
+If `port_translate` and `host_translate` are both omitted, hop leaves localhost URLs unchanged — the host browser will then talk to whatever is bound on the host's side of those ports, which is unrelated to the container's services.
 
 ### Auto-detect picked the wrong backend
 

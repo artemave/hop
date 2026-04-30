@@ -34,6 +34,8 @@ class CommandBackendRecord:
     teardown: tuple[str, ...] | None = None
     workspace_command: tuple[str, ...] | None = None
     workspace_path: str | None = None
+    port_translate_command: tuple[str, ...] | None = None
+    host_translate_command: tuple[str, ...] | None = None
     type: str = "command"
 
     def to_json(self) -> dict[str, object]:
@@ -51,6 +53,10 @@ class CommandBackendRecord:
             payload["workspace_command"] = list(self.workspace_command)
         if self.workspace_path is not None:
             payload["workspace_path"] = self.workspace_path
+        if self.port_translate_command is not None:
+            payload["port_translate_command"] = list(self.port_translate_command)
+        if self.host_translate_command is not None:
+            payload["host_translate_command"] = list(self.host_translate_command)
         return payload
 
 
@@ -141,6 +147,8 @@ def _decode_backend_record(raw: object) -> BackendRecord:
                     workspace_path=(
                         str(record["workspace_path"]) if isinstance(record.get("workspace_path"), str) else None
                     ),
+                    port_translate_command=_optional_str_tuple(record.get("port_translate_command")),
+                    host_translate_command=_optional_str_tuple(record.get("host_translate_command")),
                 )
     return HostBackendRecord()
 

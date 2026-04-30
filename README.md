@@ -225,8 +225,10 @@ Fields per backend:
 - `prepare` (optional) - argv run once at session creation, before launching kitty. Should be idempotent.
 - `teardown` (optional) - argv run at `hop kill` after closing windows.
 - `workspace` (optional) - argv whose stdout maps the backend's path back to the host project root. Used by the open_selection kitten.
+- `port_translate` (optional) - argv run lazily by the open_selection kitten when it dispatches a `localhost` / `127.0.0.1` / `0.0.0.0` URL. Stdout is the host-reachable port that should replace the URL's port. `{port}` is substituted with the URL's original port.
+- `host_translate` (optional) - argv run lazily for the same set of localhost URLs. Stdout is the hostname that should replace `localhost` / `127.0.0.1` / `0.0.0.0` in the URL. `port_translate` and `host_translate` are independent — configure either, both, or neither.
 
-Supported placeholders inside command lists: `{listen_addr}` (in `editor`) and `{project_root}` (anywhere).
+Supported placeholders inside command lists: `{listen_addr}` (in `editor`), `{project_root}` (anywhere), and `{port}` (in `port_translate` / `host_translate` only).
 
 The name `host` is reserved for the implicit fallback.
 

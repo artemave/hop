@@ -259,6 +259,196 @@ def test_command_backend_with_workspace_path_returns_new_instance(tmp_path: Path
     assert backend.workspace_path is None  # original is unchanged
 
 
+def test_command_backend_with_workspace_path_preserves_translate_commands(tmp_path: Path) -> None:
+    backend = backend_from_config(
+        make_backend(
+            port_translate=("echo", "1234"),
+            host_translate=("echo", "myhost"),
+        )
+    )
+
+    bound = backend.with_workspace_path("/workspace")
+
+    assert bound.port_translate_command == ("echo", "1234")
+    assert bound.host_translate_command == ("echo", "myhost")
+
+
+def test_host_backend_translate_localhost_url_is_identity(tmp_path: Path) -> None:
+    session = build_session(tmp_path)
+    assert HostBackend().translate_localhost_url(session, "http://localhost:3000/foo") == "http://localhost:3000/foo"
+
+
+def test_command_backend_translate_localhost_url_is_identity_when_no_commands(tmp_path: Path) -> None:
+    runner = RecordingRunner()
+    backend = backend_from_config(make_backend(port_translate=None, host_translate=None), runner=runner)
+
+    assert (
+        backend.translate_localhost_url(build_session(tmp_path), "http://localhost:3000/foo")
+        == "http://localhost:3000/foo"
+    )
+    assert runner.calls == []
+
+
+def test_command_backend_translate_localhost_url_skips_non_localhost(tmp_path: Path) -> None:
+    runner = RecordingRunner(stdout="9999\n")
+    backend = backend_from_config(
+        make_backend(port_translate=("echo", "9999")),
+        runner=runner,
+    )
+
+    assert (
+        backend.translate_localhost_url(build_session(tmp_path), "https://example.com:3000/foo")
+        == "https://example.com:3000/foo"
+    )
+    assert runner.calls == []
+
+
+def test_command_backend_translate_localhost_url_replaces_port(tmp_path: Path) -> None:
+    runner = RecordingRunner(stdout="35231\n")
+    backend = backend_from_config(
+        make_backend(port_translate=("compose", "port", "devcontainer", "{port}")),
+        runner=runner,
+    )
+
+    translated = backend.translate_localhost_url(
+        build_session(tmp_path),
+        "http://localhost:3000/path?q=1#frag",
+    )
+
+    assert translated == "http://localhost:35231/path?q=1#frag"
+    assert runner.calls == [(("compose", "port", "devcontainer", "3000"), tmp_path)]
+
+
+def test_command_backend_translate_localhost_url_treats_127_0_0_1_as_localhost(tmp_path: Path) -> None:
+    runner = RecordingRunner(stdout="35231")
+    backend = backend_from_config(make_backend(port_translate=("compose", "port", "{port}")), runner=runner)
+
+    assert (
+        backend.translate_localhost_url(build_session(tmp_path), "http://127.0.0.1:3000/") == "http://127.0.0.1:35231/"
+    )
+
+
+def test_command_backend_translate_localhost_url_treats_0_0_0_0_as_localhost(tmp_path: Path) -> None:
+    runner = RecordingRunner(stdout="35231")
+    backend = backend_from_config(make_backend(port_translate=("compose", "port", "{port}")), runner=runner)
+
+    assert backend.translate_localhost_url(build_session(tmp_path), "http://0.0.0.0:3000/") == "http://0.0.0.0:35231/"
+
+
+def test_command_backend_translate_localhost_url_replaces_host(tmp_path: Path) -> None:
+    runner = RecordingRunner(stdout="myserver.example.com\n")
+    backend = backend_from_config(
+        make_backend(host_translate=("echo", "myserver.example.com")),
+        runner=runner,
+    )
+
+    translated = backend.translate_localhost_url(
+        build_session(tmp_path),
+        "http://localhost:3000/foo",
+    )
+
+    assert translated == "http://myserver.example.com:3000/foo"
+    assert runner.calls == [(("echo", "myserver.example.com"), tmp_path)]
+
+
+def test_command_backend_translate_localhost_url_runs_both_when_both_set(tmp_path: Path) -> None:
+    host_runner_calls: list[tuple[tuple[str, ...], Path]] = []
+    port_runner_calls: list[tuple[tuple[str, ...], Path]] = []
+
+    def runner(args: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+        if args[0] == "host-cmd":
+            host_runner_calls.append((tuple(args), cwd))
+            return subprocess.CompletedProcess(list(args), 0, "myserver\n", "")
+        port_runner_calls.append((tuple(args), cwd))
+        return subprocess.CompletedProcess(list(args), 0, "35231\n", "")
+
+    backend = backend_from_config(
+        make_backend(
+            host_translate=("host-cmd",),
+            port_translate=("port-cmd", "{port}"),
+        ),
+        runner=runner,
+    )
+
+    translated = backend.translate_localhost_url(
+        build_session(tmp_path),
+        "http://localhost:3000/",
+    )
+
+    assert translated == "http://myserver:35231/"
+    assert host_runner_calls == [(("host-cmd",), tmp_path)]
+    assert port_runner_calls == [(("port-cmd", "3000"), tmp_path)]
+
+
+def test_command_backend_translate_localhost_url_runs_with_empty_port_when_url_has_none(tmp_path: Path) -> None:
+    runner = RecordingRunner(stdout="myserver")
+    backend = backend_from_config(
+        make_backend(host_translate=("host-cmd", "{port}")),
+        runner=runner,
+    )
+
+    translated = backend.translate_localhost_url(build_session(tmp_path), "http://localhost/")
+
+    assert translated == "http://myserver/"
+    assert runner.calls == [(("host-cmd", ""), tmp_path)]
+
+
+def test_command_backend_translate_localhost_url_substitutes_project_root(tmp_path: Path) -> None:
+    runner = RecordingRunner(stdout="35231")
+    backend = backend_from_config(
+        make_backend(port_translate=("lookup", "{project_root}", "{port}")),
+        runner=runner,
+    )
+
+    backend.translate_localhost_url(build_session(tmp_path), "http://localhost:3000/")
+
+    assert runner.calls == [(("lookup", str(tmp_path), "3000"), tmp_path)]
+
+
+def test_command_backend_translate_localhost_url_preserves_userinfo(tmp_path: Path) -> None:
+    runner = RecordingRunner(stdout="35231")
+    backend = backend_from_config(make_backend(port_translate=("p", "{port}")), runner=runner)
+
+    translated = backend.translate_localhost_url(
+        build_session(tmp_path),
+        "http://user:pw@localhost:3000/foo",
+    )
+
+    assert translated == "http://user:pw@localhost:35231/foo"
+
+
+def test_command_backend_translate_localhost_url_raises_on_nonzero_exit(tmp_path: Path) -> None:
+    runner = RecordingRunner(returncode=1, stderr="container is gone")
+    backend = backend_from_config(make_backend(port_translate=("p", "{port}")), runner=runner)
+
+    with pytest.raises(SessionBackendError, match="port_translate failed"):
+        backend.translate_localhost_url(build_session(tmp_path), "http://localhost:3000/")
+
+
+def test_command_backend_translate_localhost_url_raises_on_empty_stdout(tmp_path: Path) -> None:
+    runner = RecordingRunner(stdout="   \n")
+    backend = backend_from_config(make_backend(port_translate=("p", "{port}")), runner=runner)
+
+    with pytest.raises(SessionBackendError, match="port_translate returned empty output"):
+        backend.translate_localhost_url(build_session(tmp_path), "http://localhost:3000/")
+
+
+def test_command_backend_translate_localhost_url_raises_when_port_translate_returns_non_numeric(tmp_path: Path) -> None:
+    runner = RecordingRunner(stdout="not-a-port\n")
+    backend = backend_from_config(make_backend(port_translate=("p", "{port}")), runner=runner)
+
+    with pytest.raises(SessionBackendError, match="non-numeric"):
+        backend.translate_localhost_url(build_session(tmp_path), "http://localhost:3000/")
+
+
+def test_command_backend_translate_localhost_url_host_translate_failure(tmp_path: Path) -> None:
+    runner = RecordingRunner(returncode=2, stderr="dns failed")
+    backend = backend_from_config(make_backend(host_translate=("h",)), runner=runner)
+
+    with pytest.raises(SessionBackendError, match="host_translate failed"):
+        backend.translate_localhost_url(build_session(tmp_path), "http://localhost:3000/")
+
+
 def test_select_backend_returns_none_when_no_backends() -> None:
     project_root = Path("/tmp/demo")
 

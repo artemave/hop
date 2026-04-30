@@ -264,6 +264,58 @@ def test_load_sessions_drops_optional_command_fields_when_not_lists(tmp_path: Pa
     )
 
 
+def test_record_session_persists_translate_commands(tmp_path: Path) -> None:
+    sessions_dir = tmp_path / "sessions"
+    session = make_session(name="demo", project_root=tmp_path / "demo")
+
+    record_session(
+        session,
+        backend=CommandBackendRecord(
+            name="devcontainer",
+            shell=("zsh",),
+            editor=("nvim",),
+            port_translate_command=("compose", "port", "devcontainer", "{port}"),
+            host_translate_command=("echo", "myserver"),
+        ),
+        sessions_dir=sessions_dir,
+    )
+
+    payload = json.loads((sessions_dir / "demo.json").read_text())
+    assert payload["backend"]["port_translate_command"] == ["compose", "port", "devcontainer", "{port}"]
+    assert payload["backend"]["host_translate_command"] == ["echo", "myserver"]
+
+
+def test_load_sessions_decodes_translate_commands(tmp_path: Path) -> None:
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir()
+    (sessions_dir / "alpha.json").write_text(
+        json.dumps(
+            {
+                "name": "alpha",
+                "project_root": "/projects/alpha",
+                "backend": {
+                    "type": "command",
+                    "name": "devcontainer",
+                    "shell": ["zsh"],
+                    "editor": ["nvim"],
+                    "port_translate_command": ["compose", "port", "{port}"],
+                    "host_translate_command": ["echo", "myserver"],
+                },
+            }
+        )
+    )
+
+    sessions = load_sessions(sessions_dir=sessions_dir)
+
+    assert sessions["alpha"].backend == CommandBackendRecord(
+        name="devcontainer",
+        shell=("zsh",),
+        editor=("nvim",),
+        port_translate_command=("compose", "port", "{port}"),
+        host_translate_command=("echo", "myserver"),
+    )
+
+
 def test_default_sessions_dir_honors_explicit_override(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HOP_SESSIONS_DIR", "/custom/sessions")
     assert default_sessions_dir() == Path("/custom/sessions")

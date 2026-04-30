@@ -64,8 +64,9 @@ def open_selection_in_window(
         return None
 
     if isinstance(resolved_target, ResolvedUrlTarget):
-        logger.info("dispatching url %r to session %r", resolved_target.url, session_name)
-        browser.ensure_browser(session, url=resolved_target.url)
+        translated_url = backend.translate_localhost_url(session, resolved_target.url)
+        logger.info("dispatching url %r to session %r", translated_url, session_name)
+        browser.ensure_browser(session, url=translated_url)
     else:
         logger.info(
             "dispatching file %r to session %r",

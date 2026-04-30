@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import gettempdir
 from typing import Callable, Protocol, Sequence
+from urllib.parse import urlsplit, urlunsplit
 
 from hop.config import (
     HOST_BACKEND_NAME,
@@ -18,6 +19,13 @@ from hop.errors import HopError
 from hop.session import ProjectSession
 
 NVIM_COMMAND = "nvim"
+
+# Sentinel hostnames that, inside a non-host backend's network namespace, all
+# refer to "this session's local interface" — i.e. the value the kitten dispatch
+# may need to translate before handing the URL to the host's browser.
+LOCALHOST_HOSTS = frozenset({"localhost", "127.0.0.1", "0.0.0.0"})
+
+PLACEHOLDER_PORT = "{port}"
 
 
 class SessionBackendError(HopError):
@@ -36,6 +44,8 @@ class SessionBackend(Protocol):
     def translate_terminal_cwd(self, session: ProjectSession, cwd: Path) -> Path: ...
 
     def translate_host_path(self, session: ProjectSession, host_path: Path) -> Path: ...
+
+    def translate_localhost_url(self, session: ProjectSession, url: str) -> str: ...
 
     def teardown(self, session: ProjectSession) -> None: ...
 
@@ -59,6 +69,9 @@ class HostBackend:
 
     def translate_host_path(self, session: ProjectSession, host_path: Path) -> Path:
         return host_path
+
+    def translate_localhost_url(self, session: ProjectSession, url: str) -> str:
+        return url
 
     def teardown(self, session: ProjectSession) -> None:
         return None
@@ -94,6 +107,8 @@ class CommandBackend:
     teardown_command: tuple[str, ...] | None = None
     workspace_command: tuple[str, ...] | None = None
     workspace_path: str | None = None
+    port_translate_command: tuple[str, ...] | None = None
+    host_translate_command: tuple[str, ...] | None = None
     runner: CommandRunner = field(default=_default_runner)
 
     def prepare(self, session: ProjectSession) -> None:
@@ -136,6 +151,64 @@ class CommandBackend:
             return host_path
         return Path(self.workspace_path) / relative
 
+    def translate_localhost_url(self, session: ProjectSession, url: str) -> str:
+        if self.host_translate_command is None and self.port_translate_command is None:
+            return url
+
+        parts = urlsplit(url)
+        if (parts.hostname or "") not in LOCALHOST_HOSTS:
+            return url
+
+        new_host = parts.hostname or ""
+        new_port: int | None = parts.port
+
+        if self.host_translate_command is not None:
+            new_host = self._run_translate(
+                self.host_translate_command,
+                session=session,
+                port=parts.port,
+                kind="host_translate",
+            )
+
+        if self.port_translate_command is not None:
+            translated_port = self._run_translate(
+                self.port_translate_command,
+                session=session,
+                port=parts.port,
+                kind="port_translate",
+            )
+            try:
+                new_port = int(translated_port)
+            except ValueError as exc:
+                msg = (
+                    f"backend {self.name!r} port_translate returned non-numeric output "
+                    f"{translated_port!r} for {session.session_name!r}"
+                )
+                raise SessionBackendError(msg) from exc
+
+        netloc = _rebuild_netloc(parts, host=new_host, port=new_port)
+        return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
+
+    def _run_translate(
+        self,
+        command: tuple[str, ...],
+        *,
+        session: ProjectSession,
+        port: int | None,
+        kind: str,
+    ) -> str:
+        args = _substitute_translate(command, session=session, port=port)
+        result = self.runner(args, session.project_root)
+        if result.returncode != 0:
+            stderr = (result.stderr or result.stdout).strip()
+            msg = f"backend {self.name!r} {kind} failed for {session.session_name!r}: {stderr}"
+            raise SessionBackendError(msg)
+        stdout = result.stdout.strip()
+        if not stdout:
+            msg = f"backend {self.name!r} {kind} returned empty output for {session.session_name!r}"
+            raise SessionBackendError(msg)
+        return stdout
+
     def teardown(self, session: ProjectSession) -> None:
         if self.teardown_command is None:
             return
@@ -154,6 +227,8 @@ class CommandBackend:
             teardown_command=self.teardown_command,
             workspace_command=self.workspace_command,
             workspace_path=workspace_path,
+            port_translate_command=self.port_translate_command,
+            host_translate_command=self.host_translate_command,
             runner=self.runner,
         )
 
@@ -243,6 +318,8 @@ def backend_from_config(
         teardown_command=config.teardown,
         workspace_command=config.workspace,
         workspace_path=workspace_path,
+        port_translate_command=config.port_translate,
+        host_translate_command=config.host_translate,
         runner=runner,
     )
 
@@ -260,6 +337,33 @@ def _substitute(
         replacements[PLACEHOLDER_LISTEN_ADDR] = str(listen_addr)
 
     return tuple(_apply(part, replacements) for part in template)
+
+
+def _substitute_translate(
+    template: tuple[str, ...],
+    *,
+    session: ProjectSession,
+    port: int | None,
+) -> tuple[str, ...]:
+    replacements: dict[str, str] = {
+        PLACEHOLDER_PROJECT_ROOT: str(session.project_root),
+        PLACEHOLDER_PORT: "" if port is None else str(port),
+    }
+    return tuple(_apply(part, replacements) for part in template)
+
+
+def _rebuild_netloc(parts: object, *, host: str, port: int | None) -> str:
+    # parts: SplitResult; reconstruct netloc preserving userinfo so URLs like
+    # http://user:pw@localhost:3000/ keep their auth segment after rewrite.
+    userinfo = ""
+    username = getattr(parts, "username", None)
+    if username is not None:
+        password = getattr(parts, "password", None)
+        userinfo = username if password is None else f"{username}:{password}"
+        userinfo += "@"
+    if port is None:
+        return f"{userinfo}{host}"
+    return f"{userinfo}{host}:{port}"
 
 
 def _apply(part: str, replacements: dict[str, str]) -> str:

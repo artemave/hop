@@ -209,6 +209,8 @@ def _backend_from_record(record: BackendRecord) -> SessionBackend:
             teardown_command=record.teardown,
             workspace_command=record.workspace_command,
             workspace_path=record.workspace_path,
+            port_translate_command=record.port_translate_command,
+            host_translate_command=record.host_translate_command,
         )
     return HostBackend()
 
@@ -223,6 +225,8 @@ def _record_for_backend(backend: SessionBackend) -> BackendRecord:
             teardown=backend.teardown_command,
             workspace_command=backend.workspace_command,
             workspace_path=backend.workspace_path,
+            port_translate_command=backend.port_translate_command,
+            host_translate_command=backend.host_translate_command,
         )
     return HostBackendRecord()
 

@@ -305,6 +305,75 @@ shell = ["zsh", 42]
         load_global_config(config_file)
 
 
+def test_load_global_config_parses_translate_fields(tmp_path: Path) -> None:
+    config_file = write(
+        tmp_path / "config.toml",
+        """
+[backends.devcontainer]
+shell = ["zsh"]
+editor = ["nvim"]
+port_translate = ["compose", "port", "devcontainer", "{port}"]
+host_translate = ["echo", "myserver"]
+""",
+    )
+
+    backends = load_global_config(config_file).backends
+
+    assert backends == (
+        BackendConfig(
+            name="devcontainer",
+            shell=("zsh",),
+            editor=("nvim",),
+            port_translate=("compose", "port", "devcontainer", "{port}"),
+            host_translate=("echo", "myserver"),
+        ),
+    )
+
+
+def test_load_global_config_rejects_non_list_translate_field(tmp_path: Path) -> None:
+    config_file = write(
+        tmp_path / "config.toml",
+        """
+[backends.devcontainer]
+shell = ["zsh"]
+editor = ["nvim"]
+port_translate = "echo"
+""",
+    )
+
+    with pytest.raises(HopConfigError, match="field 'port_translate' must be a list of strings"):
+        load_global_config(config_file)
+
+
+def test_merge_translate_fields_independently_with_project_winning() -> None:
+    project = HopConfig(
+        backends=(_backend("alpha", port_translate=("project-port",)),),
+    )
+    global_ = HopConfig(
+        backends=(
+            _backend(
+                "alpha",
+                shell=("zsh",),
+                editor=("nvim",),
+                port_translate=("global-port",),
+                host_translate=("global-host",),
+            ),
+        )
+    )
+
+    merged = merge_backends(project, global_)
+
+    assert merged == (
+        _backend(
+            "alpha",
+            shell=("zsh",),
+            editor=("nvim",),
+            port_translate=("project-port",),  # project wins
+            host_translate=("global-host",),  # inherited from global
+        ),
+    )
+
+
 def test_merge_preserves_partial_entries_in_result() -> None:
     """Validation lives at use time — merge keeps non-runnable entries so callers
     can decide how to surface them."""

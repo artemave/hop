@@ -207,6 +207,67 @@ def test_open_selection_in_window_translates_terminal_cwd_via_base(tmp_path: Pat
     assert neovim.opened_targets == [("demo", str(selected_file.resolve()))]
 
 
+def test_open_selection_in_window_translates_localhost_url_via_backend(tmp_path: Path) -> None:
+    project_root = tmp_path / "demo"
+    project_root.mkdir(parents=True)
+
+    browser = StubBrowserAdapter()
+
+    class FakeBackend:
+        def translate_terminal_cwd(self, _session: ProjectSession, cwd: Path) -> Path:
+            return cwd
+
+        def translate_localhost_url(self, _session: ProjectSession, url: str) -> str:
+            assert url == "http://localhost:3000/foo"
+            return "http://localhost:35231/foo"
+
+    session = open_selection_in_window(
+        "http://localhost:3000/foo",
+        source_cwd=project_root.resolve(),
+        listen_on=session_socket_address("demo"),
+        neovim=StubNeovimAdapter(),
+        browser=browser,
+        sessions_loader=lambda: {
+            "demo": SessionState(name="demo", project_root=project_root.resolve()),
+        },
+        session_backend_for=lambda _session: FakeBackend(),  # type: ignore[arg-type]
+    )
+
+    assert session is not None
+    assert browser.urls == [("demo", "http://localhost:35231/foo")]
+
+
+def test_open_selection_in_window_logs_translated_url_on_dispatch(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    project_root = tmp_path / "demo"
+    project_root.mkdir(parents=True)
+
+    class FakeBackend:
+        def translate_terminal_cwd(self, _session: ProjectSession, cwd: Path) -> Path:
+            return cwd
+
+        def translate_localhost_url(self, _session: ProjectSession, _url: str) -> str:
+            return "http://localhost:35231/"
+
+    with caplog.at_level(logging.INFO, logger="hop.open_selection"):
+        open_selection_in_window(
+            "http://localhost:3000/",
+            source_cwd=project_root.resolve(),
+            listen_on=session_socket_address("demo"),
+            neovim=StubNeovimAdapter(),
+            browser=StubBrowserAdapter(),
+            sessions_loader=lambda: {
+                "demo": SessionState(name="demo", project_root=project_root.resolve()),
+            },
+            session_backend_for=lambda _session: FakeBackend(),  # type: ignore[arg-type]
+        )
+
+    # Dispatch log should report the translated URL (post-backend), not the original.
+    assert any("'http://localhost:35231/'" in record.message for record in caplog.records)
+    assert not any("'http://localhost:3000/'" in record.message for record in caplog.records)
+
+
 def test_open_selection_in_window_logs_dispatch_on_success(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     project_root = tmp_path / "demo"
     terminal_cwd = project_root / "src"
