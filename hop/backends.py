@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import os
 import shlex
 import subprocess
@@ -12,7 +11,6 @@ from urllib.parse import urlsplit, urlunsplit
 
 from hop.config import (
     HOST_BACKEND_NAME,
-    PLACEHOLDER_LISTEN_ADDR,
     PLACEHOLDER_PORT,
     PLACEHOLDER_PROJECT_ROOT,
     BackendConfig,
@@ -37,9 +35,7 @@ class SessionBackend(Protocol):
 
     def shell_args(self, session: ProjectSession) -> Sequence[str]: ...
 
-    def editor_args(self, session: ProjectSession, listen_addr: Path) -> Sequence[str]: ...
-
-    def editor_remote_address(self, session: ProjectSession) -> Path: ...
+    def editor_args(self, session: ProjectSession) -> Sequence[str]: ...
 
     def translate_terminal_cwd(self, session: ProjectSession, cwd: Path) -> Path: ...
 
@@ -58,11 +54,8 @@ class HostBackend:
     def shell_args(self, session: ProjectSession) -> Sequence[str]:
         return ()
 
-    def editor_args(self, session: ProjectSession, listen_addr: Path) -> Sequence[str]:
-        return (NVIM_COMMAND, "--listen", str(listen_addr))
-
-    def editor_remote_address(self, session: ProjectSession) -> Path:
-        return _editor_remote_address(session)
+    def editor_args(self, session: ProjectSession) -> Sequence[str]:
+        return (NVIM_COMMAND,)
 
     def translate_terminal_cwd(self, session: ProjectSession, cwd: Path) -> Path:
         return cwd
@@ -128,13 +121,10 @@ class CommandBackend:
             raise SessionBackendError(msg)
 
     def shell_args(self, session: ProjectSession) -> Sequence[str]:
-        return _sh_c(_substitute(self.shell, session=session, listen_addr=None))
+        return _sh_c(_substitute(self.shell, session=session))
 
-    def editor_args(self, session: ProjectSession, listen_addr: Path) -> Sequence[str]:
-        return _sh_c(_substitute(self.editor, session=session, listen_addr=listen_addr))
-
-    def editor_remote_address(self, session: ProjectSession) -> Path:
-        return _editor_remote_address(session)
+    def editor_args(self, session: ProjectSession) -> Sequence[str]:
+        return _sh_c(_substitute(self.editor, session=session))
 
     def translate_terminal_cwd(self, session: ProjectSession, cwd: Path) -> Path:
         if self.workspace_path is None:
@@ -250,7 +240,7 @@ class CommandBackend:
 
         if self.workspace_command is None:
             return None
-        substituted = _substitute(self.workspace_command, session=session, listen_addr=None)
+        substituted = _substitute(self.workspace_command, session=session)
         result = self.runner(_sh_c(substituted), session.project_root)
         if result.returncode != 0:
             stderr = (result.stderr or result.stdout).strip()
@@ -303,7 +293,7 @@ def select_backend(
     for candidate in runnable:
         if candidate.default is None:
             continue
-        substituted = _substitute(candidate.default, session=session, listen_addr=None)
+        substituted = _substitute(candidate.default, session=session)
         result = runner(_sh_c(substituted), session.project_root)
         if result.returncode == 0:
             return candidate
@@ -333,17 +323,10 @@ def backend_from_config(
     )
 
 
-def _substitute(
-    template: str,
-    *,
-    session: ProjectSession,
-    listen_addr: Path | None,
-) -> str:
+def _substitute(template: str, *, session: ProjectSession) -> str:
     replacements: dict[str, str] = {
         PLACEHOLDER_PROJECT_ROOT: shlex.quote(str(session.project_root)),
     }
-    if listen_addr is not None:
-        replacements[PLACEHOLDER_LISTEN_ADDR] = shlex.quote(str(listen_addr))
     return _apply(template, replacements)
 
 
@@ -385,14 +368,6 @@ def _sh_c(command: str) -> tuple[str, ...]:
     return ("sh", "-c", command)
 
 
-def _editor_remote_address(session: ProjectSession) -> Path:
-    runtime_root = os.environ.get("XDG_RUNTIME_DIR") or gettempdir()
-    runtime_dir = Path(runtime_root).expanduser().resolve() / "hop"
-    runtime_dir.mkdir(parents=True, exist_ok=True)
-    root_hash = hashlib.sha256(str(session.project_root).encode()).hexdigest()[:16]
-    return runtime_dir / f"hop-{root_hash}.sock"
-
-
 def _backend_lock_path(session: ProjectSession) -> Path:
     runtime_root = os.environ.get("XDG_RUNTIME_DIR") or gettempdir()
     runtime_dir = Path(runtime_root).expanduser().resolve() / "hop"
@@ -407,5 +382,5 @@ def _flock_sh(command: str, *, session: ProjectSession) -> tuple[str, ...]:
     # leave podman-compose in an inconsistent state. flock(1) holds the lock
     # for the lifetime of the wrapped command, so even if our parent dies the
     # lock is held by the subprocess and the next caller blocks on it.
-    substituted = _substitute(command, session=session, listen_addr=None)
+    substituted = _substitute(command, session=session)
     return ("flock", str(_backend_lock_path(session)), "sh", "-c", substituted)

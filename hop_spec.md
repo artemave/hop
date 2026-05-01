@@ -82,13 +82,13 @@ Each session has a **backend** that decides *where* its shells and editor run. T
 
 - `prepare` (optional) — command hop runs once before bootstrapping kitty. Idempotent.
 - `shell` (required) — command kitty uses to spawn each role terminal.
-- `editor` (required) — command kitty uses to launch the shared neovim. Hop substitutes `{listen_addr}` with a host-visible socket path the host's `nvim --server <socket> --remote-…` calls can reach.
+- `editor` (required) — command kitty uses to launch the shared neovim. Hop drives this nvim by writing keystrokes into kitty's pty (kitty `send-text`), so the editor command does not need a remote-control socket — `nvim` alone is enough.
 - `teardown` (optional) — command hop runs at `hop kill` after closing windows. Closing kitty windows first sends SIGHUP to in-backend shells so they exit cleanly before any teardown command runs.
 - `workspace` (optional) — command whose stripped stdout is the in-backend path that maps to the host project root. Captured once at session creation and used for cwd translation in the kitten dispatch.
 - `port_translate` (optional) — command hop runs lazily when the kitten dispatch resolves a URL whose host is `localhost`, `127.0.0.1`, or `0.0.0.0`. Stripped stdout is the host-reachable port number that should replace the URL's port. Hop substitutes `{port}` with the URL's original port (or empty string when the URL has no port).
 - `host_translate` (optional) — command hop runs lazily for the same set of localhost URLs. Stripped stdout is the hostname that should replace `localhost` / `127.0.0.1` / `0.0.0.0` in the URL. Both `port_translate` and `host_translate` are independently optional; either or both may be configured.
 
-All commands are run via `sh -c <substituted-string>`, so pipes, redirects, and `$(...)` are part of the contract. Substitution placeholders supported inside any command: `{listen_addr}` (only meaningful in `editor`), `{project_root}`. `{port}` is additionally available inside `port_translate` and `host_translate` (the URL's original port, or empty string when absent). Substituted values are shell-quoted before insertion so paths with spaces or shell metacharacters round-trip safely.
+All commands are run via `sh -c <substituted-string>`, so pipes, redirects, and `$(...)` are part of the contract. Substitution placeholders supported inside any command: `{project_root}`. `{port}` is additionally available inside `port_translate` and `host_translate` (the URL's original port, or empty string when absent). Substituted values are shell-quoted before insertion so paths with spaces or shell metacharacters round-trip safely.
 
 Backend selection at session creation:
 
@@ -443,7 +443,7 @@ Changing vigun is outside of the scope of hop, but we need to have a contract do
 ## Neovim lifecycle
 
 - Neovim is started when needed (e.g. via `hop edit`)
-- the shared editor is addressed through a deterministic per-session remote server address
+- the shared editor is driven by writing keystrokes into kitty's pty via `kitty @ send-text`, matched by the `hop_role=editor` user var on the kitty window — no nvim remote-control socket is involved, so backends with a private filesystem (devcontainer, ssh) work without any cross-namespace socket coordination
 - the editor window is rediscovered through its `_hop_editor:<session>` Sway mark (set on first sighting via `app_id == hop:editor` on `p:<session>`) so repeated `hop edit` calls — and kitten dispatches into the editor — focus the same OS window via Sway and switch to its workspace when needed, even if the user dragged the editor onto a different workspace
 - if Neovim is closed (`:qa`), it can be recreated by:
 

@@ -1,53 +1,66 @@
-import hashlib
-import subprocess
 from pathlib import Path
 from typing import Any, Mapping, Sequence, cast
 
 import pytest
 
-from hop.editor import SharedNeovimEditorAdapter, build_remote_open_expr
+from hop.editor import IpcKittyEditorIO, SharedNeovimEditorAdapter
+from hop.kitty import HOP_ROLE_VAR, session_socket_address
 from hop.session import ProjectSession
 from hop.sway import SwayWindow
 
+NORMAL_MODE = "\x1b"
+CR = "\r"
+
 
 class StubKittyTransport:
-    def __init__(self, responses: list[object], *, on_launch: object = None) -> None:
-        self._responses = list(responses)
+    """Records IPC commands and replays scripted ``ls`` responses.
+
+    ``ls_response`` is the kitty response payload for ``ls`` — a list of OS
+    windows. Other commands return ``{"ok": True}``.
+    """
+
+    def __init__(
+        self,
+        ls_response: object | None = None,
+        on_launch: object = None,
+    ) -> None:
+        self._ls_response = ls_response
         self._on_launch = on_launch
         self.commands: list[tuple[str, Mapping[str, object] | None]] = []
 
     def send_command(self, command_name: str, payload: Mapping[str, object] | None = None) -> object:
         self.commands.append((command_name, payload))
         if command_name == "launch" and callable(self._on_launch) and payload is not None:
-            self._on_launch(payload)
-        if not self._responses:
-            return {"ok": True}
-        return self._responses.pop(0)
+            self._on_launch(dict(payload))
+        if command_name == "ls":
+            return self._ls_response
+        return {"ok": True}
 
 
-class StubProcessRunner:
-    def __init__(self) -> None:
-        self.active_servers: set[str] = set()
-        self.commands: list[list[str]] = []
+class TransportFactory:
+    """Per-session transport factory. Tests assert against the recorded
+    command stream of the per-session transport."""
 
-    def activate(self, address: str) -> None:
-        self.active_servers.add(address)
+    def __init__(
+        self,
+        *,
+        ls_response: object | None = None,
+        on_launch: object = None,
+    ) -> None:
+        self._ls_response = ls_response
+        self._on_launch = on_launch
+        self.transports: dict[str, StubKittyTransport] = {}
 
-    def run(self, args: Sequence[str]) -> subprocess.CompletedProcess[str]:
-        args_list = list(args)
-        self.commands.append(args_list)
+    def __call__(self, listen_on: str) -> StubKittyTransport:
+        if listen_on not in self.transports:
+            self.transports[listen_on] = StubKittyTransport(
+                ls_response=self._ls_response,
+                on_launch=self._on_launch,
+            )
+        return self.transports[listen_on]
 
-        if "--remote-expr" in args_list:
-            address = args_list[args_list.index("--server") + 1]
-            if address not in self.active_servers:
-                return subprocess.CompletedProcess(args_list, 1, "", "")
-            expr = args_list[args_list.index("--remote-expr") + 1]
-            # Active fake servers report "fully initialized" so _wait_for_server's
-            # readiness poll passes.
-            stdout = "1" if expr == "v:vim_did_enter" else ""
-            return subprocess.CompletedProcess(args_list, 0, stdout, "")
-
-        raise AssertionError(f"Unexpected process command: {args}")
+    def for_session(self, session_name: str) -> StubKittyTransport:
+        return self.transports[session_socket_address(session_name)]
 
 
 class StubSwayAdapter:
@@ -55,6 +68,7 @@ class StubSwayAdapter:
         self._windows: list[SwayWindow] = list(windows)
         self.focused: list[int] = []
         self.marked: list[tuple[int, str]] = []
+        self.moved: list[tuple[int, str]] = []
 
     def list_windows(self) -> Sequence[SwayWindow]:
         return tuple(self._windows)
@@ -71,6 +85,22 @@ class StubSwayAdapter:
                 app_id=window.app_id,
                 window_class=window.window_class,
                 marks=window.marks + (mark,),
+                focused=window.focused,
+            )
+            if window.id == window_id
+            else window
+            for window in self._windows
+        ]
+
+    def move_window_to_workspace(self, window_id: int, workspace_name: str) -> None:
+        self.moved.append((window_id, workspace_name))
+        self._windows = [
+            SwayWindow(
+                id=window.id,
+                workspace_name=workspace_name,
+                app_id=window.app_id,
+                window_class=window.window_class,
+                marks=window.marks,
                 focused=window.focused,
             )
             if window.id == window_id
@@ -101,45 +131,53 @@ def build_marked_editor_window(window_id: int, *, mark: str = "_hop_editor:demo"
     )
 
 
-def _session_socket_name(project_root: Path) -> str:
-    root_hash = hashlib.sha256(str(project_root).encode()).hexdigest()[:16]
-    return f"hop-{root_hash}.sock"
+def make_ls_response(*, kitty_window_id: int) -> list[dict[str, object]]:
+    """Synthesize a kitty ``ls`` payload with one editor OS window containing
+    one inner window with the given id."""
+    return [
+        {
+            "wm_class": "hop:editor",
+            "tabs": [
+                {"windows": [{"id": kitty_window_id}]},
+            ],
+        }
+    ]
 
 
-def test_focus_reuses_marked_session_editor_window(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
-    runner = StubProcessRunner()
-    project_root = build_session().project_root
-    socket_name = _session_socket_name(project_root)
-    address = str((tmp_path / "hop" / socket_name).resolve())
-    runner.activate(address)
-    transport = StubKittyTransport([])
-    sway = StubSwayAdapter([build_marked_editor_window(23)])
-    adapter = SharedNeovimEditorAdapter(
+def make_adapter(
+    *,
+    sway: StubSwayAdapter,
+    factory: TransportFactory,
+    session_backend_for: Any = None,
+    ready_timeout_seconds: float = 5.0,
+    ready_poll_interval_seconds: float = 0.05,
+) -> SharedNeovimEditorAdapter:
+    return SharedNeovimEditorAdapter(
         sway=sway,
-        kitty_transport=transport,
-        process_runner=runner,
+        kitty_io=IpcKittyEditorIO(transport_factory=factory),
+        session_backend_for=session_backend_for,
+        ready_timeout_seconds=ready_timeout_seconds,
+        ready_poll_interval_seconds=ready_poll_interval_seconds,
     )
+
+
+def test_focus_reuses_existing_editor_window_without_relaunch() -> None:
+    factory = TransportFactory()
+    sway = StubSwayAdapter([build_marked_editor_window(23)])
+    adapter = make_adapter(sway=sway, factory=factory)
 
     adapter.focus(build_session())
 
-    assert runner.commands == [
-        ["nvim", "--server", address, "--remote-expr", "1"],
-    ]
-    assert transport.commands == []
+    # No launch needed; focus alone via Sway. No kitty IPC at all.
+    assert factory.transports == {}
     assert sway.focused == [23]
     assert sway.marked == []
 
 
-def test_focus_recreates_editor_after_neovim_exits(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
-    runner = StubProcessRunner()
+def test_focus_launches_editor_when_window_missing() -> None:
     sway = StubSwayAdapter()
 
-    def activate_server(payload: dict[str, object]) -> None:
-        args = payload["args"]
-        assert isinstance(args, list)
-        runner.activate(str(cast(list[Any], args)[2]))
+    def on_launch(_payload: dict[str, object]) -> None:
         sway.add_window(
             SwayWindow(
                 id=101,
@@ -149,139 +187,76 @@ def test_focus_recreates_editor_after_neovim_exits(tmp_path: Path, monkeypatch: 
             )
         )
 
-    transport = StubKittyTransport([{"ok": True}], on_launch=activate_server)
-    runtime_dir = tmp_path / "hop"
-    runtime_dir.mkdir()
-    project_root = build_session().project_root
-    socket_name = _session_socket_name(project_root)
-    stale_socket = runtime_dir / socket_name
-    stale_socket.write_text("stale")
-    adapter = SharedNeovimEditorAdapter(
-        sway=sway,
-        kitty_transport=transport,
-        process_runner=runner,
-    )
+    factory = TransportFactory(on_launch=on_launch)
+    adapter = make_adapter(sway=sway, factory=factory)
 
     adapter.focus(build_session())
 
-    assert not stale_socket.exists()
-    assert runner.commands == [
-        # Gate: cheap RPC reachability — stale socket → False, fall through.
-        ["nvim", "--server", str(stale_socket), "--remote-expr", "1"],
-        # Post-launch readiness wait: nvim must have completed VimEnter.
-        ["nvim", "--server", str(stale_socket), "--remote-expr", "v:vim_did_enter"],
-    ]
-    assert transport.commands == [
-        (
-            "launch",
-            {
-                "args": ["nvim", "--listen", str(stale_socket)],
-                "cwd": str(build_session().project_root),
-                "type": "os-window",
-                "keep_focus": False,
-                "allow_remote_control": True,
-                "window_title": "editor",
-                "os_window_title": "editor",
-                "os_window_class": "hop:editor",
-            },
-        ),
-    ]
+    transport = factory.for_session("demo")
+    assert len(transport.commands) == 1
+    name, payload = transport.commands[0]
+    assert name == "launch"
+    assert payload is not None
+    assert payload["args"] == ["nvim"]
+    assert payload["os_window_class"] == "hop:editor"
+    assert payload["var"] == [f"{HOP_ROLE_VAR}=editor"]
+
     assert sway.marked == [(101, "_hop_editor:demo")]
     assert sway.focused == [101]
 
 
-def test_focus_relaunches_when_server_is_orphan_with_no_window(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Server alive but no Sway editor window — orphaned by a manual `swaymsg
-    kill` or kitty crash where compose-exec didn't forward SIGHUP. Hop should
-    relaunch instead of leaving the user with an unreachable editor."""
-    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
-    runner = StubProcessRunner()
-    project_root = build_session().project_root
-    socket_name = _session_socket_name(project_root)
-    address = str((tmp_path / "hop" / socket_name).resolve())
-    # Pre-activate the orphan: the first --remote-expr poll finds it alive.
-    runner.activate(address)
-
-    sway = StubSwayAdapter()  # no editor window
-    relaunched: list[bool] = []
-
-    def on_launch(payload: dict[str, object]) -> None:
-        relaunched.append(True)
-        sway.add_window(
-            SwayWindow(
-                id=202,
-                workspace_name=build_session().workspace_name,
-                app_id="hop:editor",
-                window_class=None,
-            )
-        )
-
-    transport = StubKittyTransport([{"ok": True}], on_launch=on_launch)
-    adapter = SharedNeovimEditorAdapter(
-        sway=sway,
-        kitty_transport=transport,
-        process_runner=runner,
-    )
-
-    adapter.focus(build_session())
-
-    assert relaunched == [True]
-    assert sway.focused == [202]
-
-
-def test_open_target_focuses_editor_and_routes_path_with_line(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
-    runner = StubProcessRunner()
-    project_root = build_session().project_root
-    socket_name = _session_socket_name(project_root)
-    address = str((tmp_path / "hop" / socket_name).resolve())
-    runner.activate(address)
-    transport = StubKittyTransport([])
+def test_open_target_sends_drop_keystrokes_to_editor_window() -> None:
+    factory = TransportFactory(ls_response=make_ls_response(kitty_window_id=77))
     sway = StubSwayAdapter([build_marked_editor_window(31)])
-    adapter = SharedNeovimEditorAdapter(
-        sway=sway,
-        kitty_transport=transport,
-        process_runner=runner,
-    )
+    adapter = make_adapter(sway=sway, factory=factory)
 
-    adapter.open_target(build_session(), target="app/models/user's file.rb:42")
+    adapter.open_target(build_session(), target="app/models/user.rb:42")
 
-    assert runner.commands == [
-        ["nvim", "--server", address, "--remote-expr", "1"],
-        [
-            "nvim",
-            "--server",
-            address,
-            "--remote-expr",
-            "execute(['drop ' . fnameescape('app/models/user''s file.rb'), '42'])",
-        ],
-    ]
-    assert transport.commands == []
+    transport = factory.for_session("demo")
+    # IPC sequence: ls (find editor's kitty window id), then send-text.
+    assert [name for name, _ in transport.commands] == ["ls", "send-text"]
+    _, send_payload = transport.commands[1]
+    assert send_payload is not None
+    # send-text matches by id (the one ls returned), not by var.
+    assert send_payload["match"] == "id:77"
+    assert send_payload["data"] == (f"text:{NORMAL_MODE}:exec 'drop '.fnameescape('app/models/user.rb'){CR}:42{CR}")
     assert sway.focused == [31]
 
 
-def test_build_remote_open_expr_preserves_plain_paths() -> None:
-    assert build_remote_open_expr("app/models/user.rb") == "execute('drop ' . fnameescape('app/models/user.rb'))"
+def test_open_target_doubles_single_quotes_for_vim_string_literal() -> None:
+    factory = TransportFactory(ls_response=make_ls_response(kitty_window_id=77))
+    sway = StubSwayAdapter([build_marked_editor_window(31)])
+    adapter = make_adapter(sway=sway, factory=factory)
+
+    adapter.open_target(build_session(), target="app/models/user's file.rb")
+
+    transport = factory.for_session("demo")
+    _, payload = transport.commands[-1]
+    assert payload is not None
+    # Vim's single-quoted strings escape an embedded `'` by doubling it.
+    assert payload["data"] == (f"text:{NORMAL_MODE}:exec 'drop '.fnameescape('app/models/user''s file.rb'){CR}")
 
 
-def test_build_remote_open_expr_chains_line_jump() -> None:
-    assert (
-        build_remote_open_expr("app/models/user.rb:42")
-        == "execute(['drop ' . fnameescape('app/models/user.rb'), '42'])"
-    )
+def test_open_target_omits_line_jump_when_target_has_no_line_suffix() -> None:
+    factory = TransportFactory(ls_response=make_ls_response(kitty_window_id=77))
+    sway = StubSwayAdapter([build_marked_editor_window(31)])
+    adapter = make_adapter(sway=sway, factory=factory)
+
+    adapter.open_target(build_session(), target="app/models/user.rb")
+
+    transport = factory.for_session("demo")
+    _, payload = transport.commands[-1]
+    assert payload is not None
+    assert payload["data"] == (f"text:{NORMAL_MODE}:exec 'drop '.fnameescape('app/models/user.rb'){CR}")
 
 
-def test_open_target_translates_host_path_via_backend(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_open_target_translates_host_path_via_backend(tmp_path: Path) -> None:
     """For backends whose nvim runs in a different filesystem (e.g. devcontainer),
     `:drop <host_path>` would fail. The editor adapter must rewrite the path via
-    the backend's translate_host_path before sending the remote keys."""
-    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
-    runner = StubProcessRunner()
+    the backend's translate_host_path before sending the keystrokes."""
     project_root = build_session().project_root
-    socket_name = _session_socket_name(project_root)
-    address = str((tmp_path / "hop" / socket_name).resolve())
-    runner.activate(address)
-    transport = StubKittyTransport([])
+
+    factory = TransportFactory(ls_response=make_ls_response(kitty_window_id=77))
     sway = StubSwayAdapter([build_marked_editor_window(31)])
 
     class FakeBackend:
@@ -292,38 +267,31 @@ def test_open_target_translates_host_path_via_backend(tmp_path: Path, monkeypatc
                 return host_path
             return Path("/workspace") / relative
 
-        def editor_remote_address(self, _session: ProjectSession) -> Path:
-            return Path(address)
-
-    adapter = SharedNeovimEditorAdapter(
+    adapter = make_adapter(
         sway=sway,
-        kitty_transport=transport,
-        process_runner=runner,
+        factory=factory,
         session_backend_for=lambda _session: FakeBackend(),  # type: ignore[arg-type]
     )
 
     adapter.open_target(build_session(), target=str(project_root / "lib/foo.py:42"))
 
-    # The expr-eval must reference the in-backend path, not the host one.
-    open_expr_calls = [c for c in runner.commands if "--remote-expr" in c and "execute" in c[-1]]
-    assert len(open_expr_calls) == 1
-    expr = open_expr_calls[0][-1]
-    assert "/workspace/lib/foo.py" in expr
-    assert str(project_root) not in expr
+    transport = factory.for_session("demo")
+    _, payload = transport.commands[-1]
+    assert payload is not None
+    data = payload["data"]
+    assert isinstance(data, str)
+    assert "/workspace/lib/foo.py" in data
+    assert str(project_root) not in data
 
 
-def test_launch_editor_uses_base_editor_args(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
-    runner = StubProcessRunner()
+def test_launch_uses_backend_editor_args() -> None:
     sway = StubSwayAdapter()
-
     captured: list[list[Any]] = []
 
     def on_launch(payload: dict[str, object]) -> None:
         args = payload["args"]
         assert isinstance(args, list)
         captured.append(cast(list[Any], args))
-        runner.activate(str(cast(list[Any], args)[-1]))
         sway.add_window(
             SwayWindow(
                 id=200,
@@ -333,41 +301,66 @@ def test_launch_editor_uses_base_editor_args(tmp_path: Path, monkeypatch: pytest
             )
         )
 
-    transport = StubKittyTransport([{"ok": True}], on_launch=on_launch)
+    factory = TransportFactory(on_launch=on_launch)
 
     class FakeBackend:
-        def editor_args(self, _session: ProjectSession, listen_addr: Path) -> Sequence[str]:
-            return (
-                "podman-compose",
-                "exec",
-                "devcontainer",
-                "nvim",
-                "--listen",
-                str(listen_addr),
-            )
+        def editor_args(self, _session: ProjectSession) -> Sequence[str]:
+            return ("podman-compose", "exec", "devcontainer", "nvim")
 
-        def editor_remote_address(self, _session: ProjectSession) -> Path:
-            return tmp_path / "hop" / "editor.sock"
-
-    adapter = SharedNeovimEditorAdapter(
+    adapter = make_adapter(
         sway=sway,
-        kitty_transport=transport,
-        process_runner=runner,
+        factory=factory,
         session_backend_for=lambda _session: FakeBackend(),  # type: ignore[arg-type]
     )
 
     adapter.focus(build_session())
 
-    assert captured == [
-        ["podman-compose", "exec", "devcontainer", "nvim", "--listen", str(tmp_path / "hop" / "editor.sock")],
-    ]
+    assert captured == [["podman-compose", "exec", "devcontainer", "nvim"]]
 
 
-def test_editor_uses_distinct_sockets_for_same_basename_directories(tmp_path: Path) -> None:
-    project_root_a = Path("/tmp/project_a/myapp").resolve()
-    project_root_b = Path("/tmp/project_b/myapp").resolve()
+def test_focus_relocates_freshly_launched_editor_to_session_workspace() -> None:
+    """When `hop edit` is invoked from outside the session, kitty creates the
+    editor on whatever Sway workspace was focused at launch time. Hop must
+    move it onto the session's workspace before focusing — otherwise the
+    user lands in nvim on the wrong workspace and the kitten dispatch can't
+    find the editor by Sway mark."""
+    sway = StubSwayAdapter()
 
-    socket_a = _session_socket_name(project_root_a)
-    socket_b = _session_socket_name(project_root_b)
+    def on_launch(_payload: dict[str, object]) -> None:
+        sway.add_window(
+            SwayWindow(
+                id=101,
+                workspace_name="p:other",  # caller's workspace, not the session's
+                app_id="hop:editor",
+                window_class=None,
+            )
+        )
 
-    assert socket_a != socket_b
+    factory = TransportFactory(on_launch=on_launch)
+    adapter = make_adapter(sway=sway, factory=factory)
+
+    adapter.focus(build_session())
+
+    assert sway.moved == [(101, build_session().workspace_name)]
+    assert sway.marked == [(101, "_hop_editor:demo")]
+    assert sway.focused == [101]
+
+
+def test_focus_raises_after_launch_when_sway_window_never_appears() -> None:
+    """If kitty's launch returns but Sway never registers the window (e.g.
+    Wayland event lost, kitty failed silently), poll times out and we surface
+    the failure instead of hanging."""
+    sway = StubSwayAdapter()
+    factory = TransportFactory()  # on_launch deliberately does not add a window
+
+    adapter = make_adapter(
+        sway=sway,
+        factory=factory,
+        ready_timeout_seconds=0.05,
+        ready_poll_interval_seconds=0.01,
+    )
+
+    from hop.editor import NeovimCommandError
+
+    with pytest.raises(NeovimCommandError, match="Sway did not register"):
+        adapter.focus(build_session())

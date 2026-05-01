@@ -812,6 +812,22 @@ def test_build_default_services_returns_real_adapters(monkeypatch: pytest.Monkey
     assert isinstance(services.browser, SessionBrowserAdapter)
 
 
+def test_build_kitten_services_wires_boss_kitty_editor_io(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The kitten path must hand the editor adapter a BossKittyEditorIO so
+    file-open dispatches drive nvim through the boss API instead of IPC,
+    which would deadlock kitty's event loop while handle_result is running."""
+    from hop.app import build_kitten_services
+    from hop.editor import BossKittyEditorIO, SharedNeovimEditorAdapter
+
+    monkeypatch.setenv("HOP_SESSIONS_DIR", "/tmp/hop-test-sessions")
+    services = build_kitten_services(boss=object())
+
+    assert isinstance(services.neovim, SharedNeovimEditorAdapter)
+    # Hop's Protocol-typed kitty_io is private to the adapter; reach in by
+    # name to verify the boss-based variant was chosen.
+    assert isinstance(services.neovim._kitty_io, BossKittyEditorIO)  # type: ignore[attr-defined]  # pyright: ignore[reportPrivateUsage]
+
+
 def test_session_base_registry_persisted_state_wins_over_autodetect(tmp_path: Path) -> None:
     from hop.app import SessionBackendRegistry
     from hop.state import CommandBackendRecord, SessionState

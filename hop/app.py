@@ -350,3 +350,31 @@ def build_default_services() -> HopServices:
         browser=SessionBrowserAdapter(sway=sway),
         session_backends=registry,
     )
+
+
+def build_kitten_services(boss: object) -> HopServices:
+    """Same as ``build_default_services`` but wires the editor adapter to
+    talk to kitty through the boss API directly. Use only from inside the
+    kitty boss event loop (handle_result of a kitten) — synchronous IPC
+    against the same kitty would deadlock the loop while the kitten runs.
+    """
+    from hop.editor import BossKittyEditorIO
+
+    sway = SwayIpcAdapter()
+    registry = SessionBackendRegistry()
+    kitty = KittyRemoteControlAdapter(
+        session_backend_for=registry.for_session,
+        on_session_bootstrap=_persist_bootstrap_record,
+    )
+    neovim = SharedNeovimEditorAdapter(
+        sway=sway,
+        kitty_io=BossKittyEditorIO(boss),
+        session_backend_for=registry.for_session,
+    )
+    return HopServices(
+        sway=sway,
+        kitty=kitty,
+        neovim=neovim,
+        browser=SessionBrowserAdapter(sway=sway),
+        session_backends=registry,
+    )

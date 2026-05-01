@@ -12,7 +12,7 @@ For a session whose backend is `devcontainer`, hop will:
 |---|---|
 | First entry into the session (`hop`) | the backend's `prepare` command, then its `workspace` command, then bootstraps kitty |
 | Each role terminal | the backend's `shell` command (one per terminal — same container) |
-| `hop edit` | the backend's `editor` command, with `{listen_addr}` substituted |
+| `hop edit` | the backend's `editor` command (hop drives nvim by writing keystrokes to kitty's pty — no socket setup) |
 | `hop kill` | closes kitty windows, then runs the backend's `teardown` command |
 
 All command lists live in `~/.config/hop/config.toml` under `[backends.<name>]`.
@@ -56,7 +56,7 @@ Create `${XDG_CONFIG_HOME:-~/.config}/hop/config.toml`:
 default   = "test -f docker-compose.dev.yml"
 prepare   = "podman-compose -f docker-compose.dev.yml up -d devcontainer"
 shell     = "podman-compose -f docker-compose.dev.yml exec devcontainer /usr/bin/zsh"
-editor    = "podman-compose -f docker-compose.dev.yml exec devcontainer nvim --listen {listen_addr}"
+editor    = "podman-compose -f docker-compose.dev.yml exec devcontainer nvim"
 teardown  = "podman-compose -f docker-compose.dev.yml down"
 workspace = "podman-compose -f docker-compose.dev.yml exec devcontainer pwd"
 port_translate = """
@@ -69,7 +69,7 @@ port_translate = """
 """
 ```
 
-Each command is a single string. Hop runs it through `sh -c` after substituting placeholders, so pipes, redirects, and `$(...)` work — write the value the way you'd type it at a terminal. Triple-quoted strings (`"""…"""`) let you spread a longer pipeline across lines for readability. Placeholder values (`{project_root}`, `{listen_addr}`, `{port}`) are shell-quoted before insertion, so paths with spaces substitute safely.
+Each command is a single string. Hop runs it through `sh -c` after substituting placeholders, so pipes, redirects, and `$(...)` work — write the value the way you'd type it at a terminal. Triple-quoted strings (`"""…"""`) let you spread a longer pipeline across lines for readability. Placeholder values (`{project_root}`, `{port}`) are shell-quoted before insertion, so paths with spaces substitute safely.
 
 `port_translate` is invoked lazily when the kitten dispatch encounters a URL like `http://localhost:3000` printed inside the container — the recipe above resolves the running container by compose label (so it works whether the container was brought up by `podman-compose up` or by `podman-compose run …` with their different naming conventions) and asks `podman port` for the host-side port the container's port is published on. Stripped stdout (e.g. `35231`) replaces the URL's port; the host (`localhost`) is left untouched. The companion `host_translate` field exists for backends that swap the hostname instead — not needed for a same-host devcontainer.
 
@@ -131,7 +131,7 @@ shell = "docker compose -f compose.dev.yml exec app /usr/bin/zsh"
 [backends.my-vm]
 default   = "test -f .my-vm-marker"
 shell     = "lima shell default -- /usr/bin/zsh"
-editor    = "lima shell default -- nvim --listen {listen_addr}"
+editor    = "lima shell default -- nvim"
 workspace = "lima shell default -- pwd"
 ```
 
@@ -168,25 +168,12 @@ So starting `bin/dev` in `server` and `curl localhost:3000` from `shell` works e
 
 ## Troubleshooting
 
-### `hop edit` opens nvim but `--remote-send` calls fail silently
+### `hop edit` opens nvim but file-open calls do nothing
 
-The shared editor socket lives at `${XDG_RUNTIME_DIR}/hop/hop-<hash>.sock`. The host's nvim client (`nvim --server <socket> --remote-send …`) talks to the in-container nvim through that file, which only works if the runtime dir is bind-mounted into the container at the **same path**. Check your compose overlay has:
+Hop drives the in-container nvim by writing keystrokes (`<C-\><C-n>:exec 'drop '.fnameescape(...)<CR>`) into the kitty window's pty. If the dispatch doesn't open the file, the most common causes are:
 
-```yaml
-volumes:
-  - ${XDG_RUNTIME_DIR}:${XDG_RUNTIME_DIR}:rw
-environment:
-  XDG_RUNTIME_DIR: ${XDG_RUNTIME_DIR}
-```
-
-Then verify from inside the container:
-
-```bash
-echo "$XDG_RUNTIME_DIR"
-ls -l "$XDG_RUNTIME_DIR/hop/"
-```
-
-The `hop-<hash>.sock` path the host computes must match the path nvim binds to inside the container.
+- A startup plugin (dashboard, intro screen, or auto-opened file picker) is intercepting the cmdline before nvim processes hop's keystrokes. Try opening a file via `hop edit <path>` after nvim has fully loaded — if it works then but not at first launch, that's the smoking gun.
+- The session's editor window isn't where hop thinks it is. Check `swaymsg -t get_tree | grep -A2 hop:editor` to confirm the window's `app_id`/`class` and Sway mark match the session.
 
 ### `prepare` failed but the kitty window opened anyway
 

@@ -211,7 +211,7 @@ Create `${XDG_CONFIG_HOME:-~/.config}/hop/config.toml`:
 default   = "test -f docker-compose.dev.yml"
 prepare   = "podman-compose -f docker-compose.dev.yml up -d devcontainer"
 shell     = "podman-compose -f docker-compose.dev.yml exec devcontainer /usr/bin/zsh"
-editor    = "podman-compose -f docker-compose.dev.yml exec devcontainer nvim --listen {listen_addr}"
+editor    = "podman-compose -f docker-compose.dev.yml exec devcontainer nvim"
 teardown  = "podman-compose -f docker-compose.dev.yml down"
 workspace = "podman-compose -f docker-compose.dev.yml exec devcontainer pwd"
 ```
@@ -221,7 +221,7 @@ Each command is a single string. Hop runs it through `sh -c` after substituting 
 Fields per backend:
 
 - `shell` (required) - command that spawns one shell per role terminal.
-- `editor` (required) - command that launches the shared nvim. `{listen_addr}` is substituted with the host-visible nvim socket path.
+- `editor` (required) - command that launches the shared nvim. Hop drives this nvim by sending keystrokes through kitty's pty, so it does not need a remote-control socket.
 - `default` (optional) - auto-detect probe. Backends without `default` can only be picked by name.
 - `prepare` (optional) - command run once at session creation, before launching kitty. Should be idempotent.
 - `teardown` (optional) - command run at `hop kill` after closing windows.
@@ -229,7 +229,7 @@ Fields per backend:
 - `port_translate` (optional) - command run lazily by the open_selection kitten when it dispatches a `localhost` / `127.0.0.1` / `0.0.0.0` URL. Stdout is the host-reachable port that should replace the URL's port. `{port}` is substituted with the URL's original port.
 - `host_translate` (optional) - command run lazily for the same set of localhost URLs. Stdout is the hostname that should replace `localhost` / `127.0.0.1` / `0.0.0.0` in the URL. `port_translate` and `host_translate` are independent — configure either, both, or neither.
 
-Supported placeholders: `{listen_addr}` (in `editor`), `{project_root}` (anywhere), and `{port}` (in `port_translate` / `host_translate` only).
+Supported placeholders: `{project_root}` (anywhere), and `{port}` (in `port_translate` / `host_translate` only).
 
 The name `host` is reserved for the implicit fallback.
 
@@ -246,7 +246,7 @@ shell = "docker compose -f compose.dev.yml exec app zsh"
 [backends.my-vm]
 default   = "test -f .my-vm-marker"
 shell     = "lima shell default -- /usr/bin/zsh"
-editor    = "lima shell default -- nvim --listen {listen_addr}"
+editor    = "lima shell default -- nvim"
 workspace = "lima shell default -- pwd"
 ```
 

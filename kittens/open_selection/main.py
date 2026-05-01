@@ -18,7 +18,7 @@ if "kitty.fast_data_types" in sys.modules:
     for _hop_module in [n for n in list(sys.modules) if n == "hop" or n.startswith("hop.")]:
         sys.modules.pop(_hop_module, None)
 
-from hop.app import build_default_services  # noqa: E402
+from hop.app import build_kitten_services  # noqa: E402
 from hop.commands.open_selection import open_selection_in_window  # noqa: E402
 from hop.targets import VISIBLE_OUTPUT_TARGET_PATTERN, resolve_visible_output_target  # noqa: E402
 
@@ -104,6 +104,7 @@ def handle_result(  # noqa: PLR0913
             matched_text,
             source_cwd=source_cwd,
             listen_on=listen_on,
+            boss=boss,
         )
 
 
@@ -112,9 +113,13 @@ def dispatch_selected_match(
     *,
     source_cwd: str | None,
     listen_on: str | None,
+    boss: Any,
 ) -> None:
     log = _configure_logger()
-    services = build_default_services()
+    # In-kitten path: the editor adapter must drive kitty via the boss
+    # API, not synchronous IPC against the same kitty boss (would deadlock
+    # while handle_result is running).
+    services = build_kitten_services(boss)
     try:
         open_selection_in_window(
             selection,

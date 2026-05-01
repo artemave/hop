@@ -16,7 +16,6 @@ class HopConfigError(HopError):
 
 
 # Substitution placeholders supported in command strings.
-PLACEHOLDER_LISTEN_ADDR = "{listen_addr}"
 PLACEHOLDER_PROJECT_ROOT = "{project_root}"
 PLACEHOLDER_PORT = "{port}"
 
@@ -37,10 +36,9 @@ class BackendConfig:
     time; partial entries are normal in project config files where they
     layer fields onto a same-named global backend.
 
-    ``editor`` may include the literal placeholder ``{listen_addr}`` which hop
-    substitutes at call time. Any command may use ``{project_root}``.
-    ``port_translate`` and ``host_translate`` additionally support ``{port}``
-    (the URL's original port, or empty when absent).
+    Any command may use ``{project_root}``. ``port_translate`` and
+    ``host_translate`` additionally support ``{port}`` (the URL's original
+    port, or empty when absent).
 
     ``default`` is the auto-detect probe. Hop runs it in the project root and
     selects this backend when it exits 0. Backends without ``default`` are not

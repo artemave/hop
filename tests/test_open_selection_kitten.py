@@ -77,7 +77,7 @@ class StubBoss:
 def test_handle_result_dispatches_each_match_with_cwd_and_listen_on_from_boss() -> None:
     dispatched: list[tuple[str, str | None, str | None]] = []
 
-    def stub_dispatch(selection: str, *, source_cwd: str | None, listen_on: str | None) -> None:
+    def stub_dispatch(selection: str, *, source_cwd: str | None, listen_on: str | None, boss: object) -> None:
         dispatched.append((selection, source_cwd, listen_on))
 
     boss = StubBoss(
@@ -108,7 +108,7 @@ def test_handle_result_dispatches_each_match_with_cwd_and_listen_on_from_boss() 
 def test_handle_result_passes_none_cwd_when_target_window_unknown() -> None:
     dispatched: list[tuple[str, str | None, str | None]] = []
 
-    def stub_dispatch(selection: str, *, source_cwd: str | None, listen_on: str | None) -> None:
+    def stub_dispatch(selection: str, *, source_cwd: str | None, listen_on: str | None, boss: object) -> None:
         dispatched.append((selection, source_cwd, listen_on))
 
     boss = StubBoss(listening_on="unix:@hop-demo", windows={})
@@ -133,7 +133,7 @@ def test_handle_result_passes_none_cwd_when_target_window_unknown() -> None:
 def test_handle_result_passes_none_listen_on_when_boss_lacks_socket() -> None:
     dispatched: list[tuple[str, str | None, str | None]] = []
 
-    def stub_dispatch(selection: str, *, source_cwd: str | None, listen_on: str | None) -> None:
+    def stub_dispatch(selection: str, *, source_cwd: str | None, listen_on: str | None, boss: object) -> None:
         dispatched.append((selection, source_cwd, listen_on))
 
     boss = StubBoss(listening_on="", windows={41: StubWindow(cwd_of_child="/work")})

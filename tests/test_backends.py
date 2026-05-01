@@ -48,7 +48,7 @@ def make_backend(**kwargs: object) -> BackendConfig:
         "name": "devcontainer",
         "default": "test -f docker-compose.dev.yml",
         "shell": "compose exec devcontainer /usr/bin/zsh",
-        "editor": "compose exec devcontainer nvim --listen {listen_addr}",
+        "editor": "compose exec devcontainer nvim",
         "prepare": "compose up -d devcontainer",
         "teardown": "compose down",
         "workspace": "compose exec devcontainer pwd",
@@ -61,10 +61,9 @@ def test_host_base_shell_args_is_empty(tmp_path: Path) -> None:
     assert HostBackend().shell_args(build_session(tmp_path)) == ()
 
 
-def test_host_base_editor_args_uses_listen_addr(tmp_path: Path) -> None:
-    addr = tmp_path / "nvim.sock"
-    args = HostBackend().editor_args(build_session(tmp_path), addr)
-    assert args == ("nvim", "--listen", str(addr))
+def test_host_base_editor_args_returns_bare_nvim(tmp_path: Path) -> None:
+    args = HostBackend().editor_args(build_session(tmp_path))
+    assert args == ("nvim",)
 
 
 def test_host_base_translate_terminal_cwd_is_identity(tmp_path: Path) -> None:
@@ -82,17 +81,12 @@ def test_command_backend_shell_substitutes_project_root(tmp_path: Path) -> None:
     assert args == ("sh", "-c", f"ssh host cd {shlex.quote(str(tmp_path))} && exec zsh")
 
 
-def test_command_backend_editor_substitutes_listen_addr(tmp_path: Path) -> None:
+def test_command_backend_editor_args_wraps_in_sh_c(tmp_path: Path) -> None:
     backend = backend_from_config(make_backend())
-    addr = tmp_path / "nvim.sock"
 
-    args = backend.editor_args(build_session(tmp_path), addr)
+    args = backend.editor_args(build_session(tmp_path))
 
-    assert args == (
-        "sh",
-        "-c",
-        f"compose exec devcontainer nvim --listen {shlex.quote(str(addr))}",
-    )
+    assert args == ("sh", "-c", "compose exec devcontainer nvim")
 
 
 def test_command_backend_substitutes_path_with_spaces_safely(tmp_path: Path) -> None:
@@ -591,12 +585,3 @@ def test_default_runner_invokes_subprocess_run(tmp_path: Path, monkeypatch: pyte
     backend = backend_from_config(make_backend(prepare="true"))
 
     backend.prepare(build_session(tmp_path))
-
-
-def test_editor_remote_address_is_identical_for_both_bases(tmp_path: Path) -> None:
-    session = build_session(tmp_path)
-
-    host_addr = HostBackend().editor_remote_address(session)
-    backend_addr = backend_from_config(make_backend()).editor_remote_address(session)
-
-    assert host_addr == backend_addr
