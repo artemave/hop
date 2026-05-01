@@ -65,6 +65,7 @@ class KittyEditorIO(Protocol):
         args: Sequence[str],
         os_window_class: str,
         var: Sequence[str],
+        keep_focus: bool,
     ) -> None: ...
 
     def send_text_to_editor(self, session: ProjectSession, text: str) -> None: ...
@@ -90,6 +91,7 @@ class IpcKittyEditorIO:
         args: Sequence[str],
         os_window_class: str,
         var: Sequence[str],
+        keep_focus: bool,
     ) -> None:
         self._transport(session).send_command(
             "launch",
@@ -97,7 +99,7 @@ class IpcKittyEditorIO:
                 "args": list(args),
                 "cwd": str(session.project_root),
                 "type": "os-window",
-                "keep_focus": False,
+                "keep_focus": keep_focus,
                 "allow_remote_control": True,
                 "window_title": EDITOR_ROLE,
                 "os_window_title": EDITOR_ROLE,
@@ -172,6 +174,7 @@ class BossKittyEditorIO:
         args: Sequence[str],
         os_window_class: str,
         var: Sequence[str],
+        keep_focus: bool,
     ) -> None:
         # Launching a new editor while the boss is busy running a kitten is
         # awkward — kitty's launch helpers want to dispatch into the event
@@ -236,8 +239,25 @@ class SharedNeovimEditorAdapter:
         self._ready_timeout_seconds = ready_timeout_seconds
         self._ready_poll_interval_seconds = ready_poll_interval_seconds
 
+    def ensure(self, session: ProjectSession) -> bool:
+        # Bring up the editor without stealing focus. Used during session
+        # bootstrap and new-shell spawning, where the freshly launched shell
+        # should win focus. Returns True if a new editor window was launched,
+        # False if an existing one was found — callers (spawn_session_terminal)
+        # use this to decide whether `hop` from within a session should also
+        # spawn an extra shell, or whether resurrecting the editor was the
+        # whole job.
+        _, was_launched = self._ensure_editor(session, keep_focus=True)
+        return was_launched
+
     def focus(self, session: ProjectSession) -> None:
-        window = self._ensure_editor(session)
+        # `focus()` re-focuses the editor unconditionally: an explicit
+        # sway.focus_window after the launch handles both the "editor
+        # already existed" and "editor was just launched" cases. Kitty's
+        # keep_focus is irrelevant here because we override sway focus
+        # afterwards anyway, so passing True keeps the launch-time focus
+        # change from briefly flickering through another window.
+        window, _ = self._ensure_editor(session, keep_focus=True)
         # Sway-driven focus (rather than Kitty's `focus-window`) so the focus
         # change escalates to a workspace switch when the editor lives on a
         # different Sway workspace than the caller — e.g. when the kitten
@@ -245,7 +265,7 @@ class SharedNeovimEditorAdapter:
         self._sway.focus_window(window.id)
 
     def open_target(self, session: ProjectSession, *, target: str) -> None:
-        window = self._ensure_editor(session)
+        window, _ = self._ensure_editor(session, keep_focus=True)
         self._sway.focus_window(window.id)
         path_text, line_number = _split_target(self._translate_target(session, target))
         self._kitty_io.send_text_to_editor(session, _build_open_keystrokes(path_text, line_number))
@@ -262,10 +282,10 @@ class SharedNeovimEditorAdapter:
             return str(translated)
         return f"{translated}:{line_number}"
 
-    def _ensure_editor(self, session: ProjectSession) -> SwayWindow:
+    def _ensure_editor(self, session: ProjectSession, *, keep_focus: bool) -> tuple[SwayWindow, bool]:
         existing = self._find_editor_window(session)
         if existing is not None:
-            return existing
+            return existing, False
         # Snapshot pre-launch Sway windows so we can pick out the freshly
         # created one by id, regardless of which workspace it lands on.
         # `hop edit` from a host shell triggers this path: kitty creates the
@@ -279,8 +299,9 @@ class SharedNeovimEditorAdapter:
             args=list(backend.editor_args(session)),
             os_window_class=EDITOR_OS_WINDOW_NAME,
             var=[f"{HOP_ROLE_VAR}={EDITOR_ROLE}"],
+            keep_focus=keep_focus,
         )
-        return self._adopt_new_editor_window(session, known_window_ids=known_window_ids)
+        return self._adopt_new_editor_window(session, known_window_ids=known_window_ids), True
 
     def _find_editor_window(self, session: ProjectSession) -> SwayWindow | None:
         # The session's editor is identified across hop runs by a Sway mark.

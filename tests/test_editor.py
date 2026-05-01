@@ -161,6 +161,58 @@ def make_adapter(
     )
 
 
+def test_ensure_returns_false_when_editor_already_running() -> None:
+    """ensure() reports whether it had to launch a new editor. With a
+    marked window already present, it must return False so callers
+    (spawn_session_terminal) know they can fall through to spawning a
+    shell rather than treating this as a resurrection."""
+    factory = TransportFactory()
+    sway = StubSwayAdapter([build_marked_editor_window(23)])
+    adapter = make_adapter(sway=sway, factory=factory)
+
+    was_launched = adapter.ensure(build_session())
+
+    assert was_launched is False
+    # No focus shift on ensure() — that's the whole point vs focus().
+    assert sway.focused == []
+    # And no kitty IPC: if we already have a window, we don't ping kitty.
+    assert factory.transports == {}
+
+
+def test_ensure_returns_true_when_editor_was_just_launched() -> None:
+    """ensure() returns True when it has to spawn a fresh editor
+    window. spawn_session_terminal short-circuits on True so the user
+    gets exactly one window back — the editor — instead of editor + a
+    new shell."""
+    sway = StubSwayAdapter()
+
+    def on_launch(_payload: dict[str, object]) -> None:
+        sway.add_window(
+            SwayWindow(
+                id=101,
+                workspace_name=build_session().workspace_name,
+                app_id="hop:editor",
+                window_class=None,
+            )
+        )
+
+    factory = TransportFactory(on_launch=on_launch)
+    adapter = make_adapter(sway=sway, factory=factory)
+
+    was_launched = adapter.ensure(build_session())
+
+    assert was_launched is True
+    # ensure() doesn't call sway.focus_window — the freshly spawned shell
+    # alongside should keep focus, kitty's keep_focus=True takes care of it.
+    assert sway.focused == []
+    transport = factory.for_session("demo")
+    assert len(transport.commands) == 1
+    name, payload = transport.commands[0]
+    assert name == "launch"
+    assert payload is not None
+    assert payload["keep_focus"] is True
+
+
 def test_focus_reuses_existing_editor_window_without_relaunch() -> None:
     factory = TransportFactory()
     sway = StubSwayAdapter([build_marked_editor_window(23)])
@@ -197,7 +249,7 @@ def test_focus_launches_editor_when_window_missing() -> None:
     name, payload = transport.commands[0]
     assert name == "launch"
     assert payload is not None
-    assert payload["args"] == ["nvim"]
+    assert payload["args"] == ["sh", "-c", "nvim; ${SHELL:-sh}"]
     assert payload["os_window_class"] == "hop:editor"
     assert payload["var"] == [f"{HOP_ROLE_VAR}=editor"]
 

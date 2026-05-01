@@ -1,8 +1,8 @@
 # hop
 
-hop is a project session manager - each session is a workspace that bundles all of a project's windows, with single commands to enter, switch between, and tear them down.
+hop is a project session manager.
 
-Conceptually similar to tmux sessions, but session/window management is delegated to an actual system window manager. That means:
+Conceptually similar to tmux sessions, except session/window management is delegated to an actual system window manager. That means:
 
 - **Single window manager** - sway's normal shortcuts apply directly, no second layered keymap, no prefix key.
 - **GUI apps are part of the session** - browser, etc., not just terminals.

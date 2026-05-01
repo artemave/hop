@@ -418,4 +418,5 @@ def test_boss_launch_editor_raises_explaining_the_constraint() -> None:
             args=("nvim",),
             os_window_class="hop:editor",
             var=["hop_role=editor"],
+            keep_focus=True,
         )

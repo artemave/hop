@@ -23,6 +23,7 @@ from hop.commands import (
 from hop.config import BackendConfig, HopConfig
 from hop.kitty import KittyRemoteControlAdapter, KittyWindow, KittyWindowContext, KittyWindowState
 from hop.session import ProjectSession
+from hop.state import SessionState
 from hop.sway import SwayWindow
 
 
@@ -94,9 +95,18 @@ class StubKittyAdapter:
 
 
 class StubNeovimAdapter:
-    def __init__(self) -> None:
+    def __init__(self, *, editor_was_closed: bool = False) -> None:
+        self.ensured_sessions: list[tuple[str, Path]] = []
         self.focused_sessions: list[tuple[str, Path]] = []
         self.opened_targets: list[tuple[str, str, Path]] = []
+        # When True, the next ensure() simulates "editor was missing, just
+        # launched a new one" by returning True. Otherwise reports "editor
+        # already running" with False.
+        self._editor_was_closed = editor_was_closed
+
+    def ensure(self, session: ProjectSession) -> bool:
+        self.ensured_sessions.append((session.session_name, session.project_root))
+        return self._editor_was_closed
 
     def focus(self, session: ProjectSession) -> None:
         self.focused_sessions.append((session.session_name, session.project_root))
@@ -119,10 +129,17 @@ class StubHopServices:
     kitty: StubKittyAdapter
     neovim: StubNeovimAdapter
     browser: StubBrowserAdapter
+    persisted_session_names: tuple[str, ...] = ()
 
     def as_services(self) -> HopServices:
         from hop.app import SessionBackendRegistry
 
+        # Treat each name in persisted_session_names as a previously-recorded
+        # session — only the presence of the key matters for the
+        # "first-entry vs re-entry" decision in execute_command.
+        persisted: dict[str, SessionState] = {
+            name: SessionState(name=name, project_root=Path("/tmp") / name) for name in self.persisted_session_names
+        }
         return HopServices(
             sway=self.sway,
             kitty=self.kitty,
@@ -130,7 +147,7 @@ class StubHopServices:
             browser=self.browser,
             session_backends=SessionBackendRegistry(
                 global_config_loader=lambda: HopConfig(),
-                sessions_loader=lambda: {},
+                sessions_loader=lambda: persisted,
             ),
         )
 
@@ -141,6 +158,7 @@ def build_services(
     focused_workspace: str = "",
     last_cmd_output: str = "",
     sway_windows: tuple[SwayWindow, ...] = (),
+    persisted_session_names: tuple[str, ...] = (),
 ) -> StubHopServices:
     return StubHopServices(
         sway=StubSwayAdapter(
@@ -151,6 +169,7 @@ def build_services(
         kitty=StubKittyAdapter(last_cmd_output=last_cmd_output),
         neovim=StubNeovimAdapter(),
         browser=StubBrowserAdapter(),
+        persisted_session_names=persisted_session_names,
     )
 
 
@@ -228,7 +247,9 @@ def test_execute_command_spawns_extra_shell_when_focused_on_session_workspace(tm
     project_root.mkdir()
 
     # Sway reports we're already focused on this session's workspace, so bare
-    # `hop` should spawn another shell rather than re-enter.
+    # `hop` should spawn another shell rather than re-enter. The editor is
+    # also ensured so a previously-closed editor is resurrected on the next
+    # `hop` invocation.
     services = build_services(focused_workspace="p:demo")
 
     assert (
@@ -241,13 +262,16 @@ def test_execute_command_spawns_extra_shell_when_focused_on_session_workspace(tm
     )
     assert services.sway.switched_workspaces == []
     assert services.kitty.ensured_roles == [("demo", "shell-2", project_root.resolve())]
+    assert services.neovim.ensured_sessions == [("demo", project_root.resolve())]
 
 
-def test_execute_command_enters_session_when_focused_on_a_different_workspace(tmp_path: Path) -> None:
+def test_execute_command_first_entry_brings_up_both_editor_and_shell(tmp_path: Path) -> None:
+    """No persisted session state → this is bootstrap. Editor and shell
+    both come up; editor first so the shell wins focus afterwards."""
     project_root = tmp_path / "demo"
     project_root.mkdir()
 
-    services = build_services(focused_workspace="p:other")
+    services = build_services(focused_workspace="p:other", persisted_session_names=())
 
     assert (
         execute_command(
@@ -259,6 +283,32 @@ def test_execute_command_enters_session_when_focused_on_a_different_workspace(tm
     )
     assert services.sway.switched_workspaces == ["p:demo"]
     assert services.kitty.ensured_roles == [("demo", "shell", project_root.resolve())]
+    assert services.neovim.ensured_sessions == [("demo", project_root.resolve())]
+
+
+def test_execute_command_re_entry_does_not_resurrect_a_closed_editor(tmp_path: Path) -> None:
+    """Persisted state exists → user is returning from another workspace.
+    Don't second-guess a deliberately-closed editor; just switch workspace
+    and ensure the shell."""
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+
+    services = build_services(
+        focused_workspace="p:other",
+        persisted_session_names=("demo",),
+    )
+
+    assert (
+        execute_command(
+            EnterSessionCommand(),
+            cwd=project_root,
+            services=services.as_services(),
+        )
+        == 0
+    )
+    assert services.sway.switched_workspaces == ["p:demo"]
+    assert services.kitty.ensured_roles == [("demo", "shell", project_root.resolve())]
+    assert services.neovim.ensured_sessions == []
 
 
 def test_execute_command_switches_to_named_session() -> None:

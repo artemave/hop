@@ -35,15 +35,29 @@ class SpawnTerminalAdapter(SessionTerminalAdapter, Protocol):
     def list_session_windows(self, session: ProjectSession) -> Sequence[KittyWindow]: ...
 
 
+class SessionEditorAdapter(Protocol):
+    def ensure(self, session: ProjectSession) -> bool: ...
+
+
 def enter_project_session(
     cwd: Path | str,
     *,
     sway: SessionSwayAdapter,
     terminals: SessionTerminalAdapter,
+    editor: SessionEditorAdapter | None = None,
 ) -> ProjectSession:
     session = resolve_project_session(cwd)
     sway.switch_to_workspace(session.workspace_name)
+    # Terminal must come first: on first entry the per-session kitty isn't
+    # running yet, and only ensure_terminal knows how to bootstrap it (catch
+    # KittyConnectionError → spawn kitty listening on the session socket).
+    # The editor adapter talks to that socket directly with no fallback, so
+    # ensuring the editor first would fail with "Could not talk to Kitty".
+    # `editor` is only passed on first entry to a session — re-entry from
+    # another workspace must not resurrect a deliberately-closed editor.
     terminals.ensure_terminal(session, role=SHELL_TERMINAL_ROLE)
+    if editor is not None:
+        editor.ensure(session)
     return session
 
 
@@ -51,8 +65,16 @@ def spawn_session_terminal(
     cwd: Path | str,
     *,
     terminals: SpawnTerminalAdapter,
+    editor: SessionEditorAdapter,
 ) -> ProjectSession:
     session = resolve_project_session(cwd)
+    # `hop` from inside a session does at most one thing: if the editor
+    # has been closed, resurrect it; otherwise spawn a numbered shell. The
+    # user expectation is "one keystroke, one new window" — bringing back
+    # the editor and *also* opening another shell would clutter the
+    # workspace whenever the user's intent was just to recover the editor.
+    if editor.ensure(session):
+        return session
     existing_roles = {window.role for window in terminals.list_session_windows(session) if window.role}
     role = _next_adhoc_shell_role(existing_roles)
     terminals.ensure_terminal(session, role=role)

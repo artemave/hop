@@ -61,9 +61,13 @@ def test_host_base_shell_args_is_empty(tmp_path: Path) -> None:
     assert HostBackend().shell_args(build_session(tmp_path)) == ()
 
 
-def test_host_base_editor_args_returns_bare_nvim(tmp_path: Path) -> None:
+def test_host_base_editor_args_drops_into_user_shell_after_nvim(tmp_path: Path) -> None:
+    # The kitty editor window must outlive the nvim process so the user can
+    # `nvim -S` to restore buffers, peek at git, etc. Wrapping in `sh -c
+    # 'nvim; ${SHELL:-sh}'` keeps the window alive as the user's shell when
+    # nvim exits.
     args = HostBackend().editor_args(build_session(tmp_path))
-    assert args == ("nvim",)
+    assert args == ("sh", "-c", "nvim; ${SHELL:-sh}")
 
 
 def test_host_base_translate_terminal_cwd_is_identity(tmp_path: Path) -> None:
@@ -81,12 +85,21 @@ def test_command_backend_shell_substitutes_project_root(tmp_path: Path) -> None:
     assert args == ("sh", "-c", f"ssh host cd {shlex.quote(str(tmp_path))} && exec zsh")
 
 
-def test_command_backend_editor_args_wraps_in_sh_c(tmp_path: Path) -> None:
+def test_command_backend_editor_args_wraps_editor_then_shell(tmp_path: Path) -> None:
+    # CommandBackend's editor_args runs the configured editor and falls
+    # through to the configured shell so the kitty window stays alive
+    # *inside the same backend* (devcontainer/ssh/...) after nvim exits —
+    # otherwise `nvim -S` from the post-exit shell would land on the host
+    # filesystem, not where the editor was running.
     backend = backend_from_config(make_backend())
 
     args = backend.editor_args(build_session(tmp_path))
 
-    assert args == ("sh", "-c", "compose exec devcontainer nvim")
+    assert args == (
+        "sh",
+        "-c",
+        "compose exec devcontainer nvim; compose exec devcontainer /usr/bin/zsh",
+    )
 
 
 def test_command_backend_substitutes_path_with_spaces_safely(tmp_path: Path) -> None:

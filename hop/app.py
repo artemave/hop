@@ -96,6 +96,8 @@ class KittyAdapter(Protocol):
 
 
 class NeovimAdapter(Protocol):
+    def ensure(self, session: ProjectSession) -> bool: ...
+
     def focus(self, session: ProjectSession) -> None: ...
 
     def open_target(self, session: ProjectSession, *, target: str) -> None: ...
@@ -134,6 +136,9 @@ class SessionBackendRegistry:
         self._sessions_loader = sessions_loader
         self._runner = runner
         self._overrides: dict[str, SessionBackend] = {}
+
+    def has_persisted_state(self, session: ProjectSession) -> bool:
+        return self._sessions_loader().get(session.session_name) is not None
 
     def for_session(self, session: ProjectSession) -> SessionBackend:
         override = self._overrides.get(session.session_name)
@@ -254,11 +259,19 @@ def execute_command(
             if services.sway.get_focused_workspace() == session.workspace_name:
                 # Spawning an additional terminal in an already-live session:
                 # the backend is fixed at session creation; --backend is ignored.
+                # An editor is ensured alongside so a closed editor comes back
+                # on the next `hop`.
                 spawn_session_terminal(
                     current_directory,
                     terminals=services.kitty,
+                    editor=services.neovim,
                 )
             else:
+                # First entry creates both shell and editor; re-entry from
+                # another workspace just switches and ensures the shell —
+                # we don't second-guess a deliberately-closed editor on
+                # every `hop`.
+                is_first_entry = not services.session_backends.has_persisted_state(session)
                 backend = services.session_backends.resolve_for_entry(session, backend_name=backend_name)
                 services.session_backends.set_override(session.session_name, backend)
                 try:
@@ -266,6 +279,7 @@ def execute_command(
                         current_directory,
                         sway=services.sway,
                         terminals=services.kitty,
+                        editor=services.neovim if is_first_entry else None,
                     )
                 finally:
                     services.session_backends.clear_override(session.session_name)

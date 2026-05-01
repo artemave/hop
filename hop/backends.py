@@ -55,7 +55,12 @@ class HostBackend:
         return ()
 
     def editor_args(self, session: ProjectSession) -> Sequence[str]:
-        return (NVIM_COMMAND,)
+        # Wrap nvim in an sh that drops into the user's interactive shell
+        # after exit. Without this, kitty closes the editor window the moment
+        # nvim quits — the user can't run `nvim -S` to restore buffers, can't
+        # peek at git state, can't do anything. The post-exit shell uses the
+        # window's $SHELL (with /bin/sh as the fallback).
+        return ("sh", "-c", f"{NVIM_COMMAND}; ${{SHELL:-sh}}")
 
     def translate_terminal_cwd(self, session: ProjectSession, cwd: Path) -> Path:
         return cwd
@@ -124,7 +129,15 @@ class CommandBackend:
         return _sh_c(_substitute(self.shell, session=session))
 
     def editor_args(self, session: ProjectSession) -> Sequence[str]:
-        return _sh_c(_substitute(self.editor, session=session))
+        # Run the configured editor, then fall through to the configured
+        # shell so the kitty window remains usable after the editor exits
+        # (`nvim -S Session.vim` to restore buffers, etc.). Both fragments
+        # are user-supplied shell snippets meant to be valid in `sh -c`, so
+        # `;`-joining is safe; the post-exit shell ends up inside the same
+        # backend (devcontainer, ssh host, ...) as the editor was running in.
+        editor = _substitute(self.editor, session=session)
+        shell = _substitute(self.shell, session=session)
+        return _sh_c(f"{editor}; {shell}")
 
     def translate_terminal_cwd(self, session: ProjectSession, cwd: Path) -> Path:
         if self.workspace_path is None:
