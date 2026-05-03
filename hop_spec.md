@@ -236,6 +236,22 @@ Behavior:
 
 ---
 
+### List declared windows
+
+```bash
+hop windows
+```
+
+Behavior:
+
+- resolve the session from the caller's current working directory
+- run the same window resolver that bootstrap uses (built-in defaults + active layouts + top-level windows), evaluating layout `autostart` probes against the project root
+- print each resolved role on its own line, in resolution order (built-ins, then active-layout windows, then top-level windows)
+
+Intended for launchers (vicinae, rofi) to enumerate the focusable / launchable windows for the focused session workspace and dispatch to `hop edit` (editor), `hop browser` (browser), or `hop term --role <name>` (any other role).
+
+---
+
 ### Open editor
 
 ```bash

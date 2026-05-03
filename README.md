@@ -17,7 +17,7 @@ hop is built on top of [Sway](https://swaywm.org/) window manager, [Kitty](https
 - **Shared Neovim per session** - all file links open there.
 - **Shared browser per session** - all browser links open there.
 - **Pluggable backends.** Shells and editor can run on the host, inside a devcontainer, over ssh, or anywhere describable as a chain of commands - without changing how you drive the session.
-- **Sway and Vicinae integration.** Helper scripts for one-key session switch, kill, and moving windows in.
+- **Sway and Vicinae integration.** Helper scripts for one-key session switch, kill, focusing or creating any declared window, and moving windows in.
 
 ## Requirements
 
@@ -160,18 +160,24 @@ bindsym $mod+Shift+k exec /path/to/hop/sway/hop-kill-session
 
 ```bash
 mkdir -p ~/.local/share/vicinae/scripts
-ln -s "$PWD/vicinae/hop-switch-session"        ~/.local/share/vicinae/scripts/
-ln -s "$PWD/vicinae/hop-move-window-to-session" ~/.local/share/vicinae/scripts/
-ln -s "$PWD/vicinae/hop-kill-session"           ~/.local/share/vicinae/scripts/
+ln -sf "$PWD"/vicinae/hop-* ~/.local/share/vicinae/scripts/
 ```
 
 Reload Vicinae's script directories or restart Vicinae afterwards.
+
+What each script does:
+
+- `hop-switch-session` — pick a live session from the launcher and switch to its workspace.
+- `hop-move-window-to-session` — move the focused window into a session's workspace.
+- `hop-kill-session` — kill the session whose workspace is currently focused. No-op when not on a hop workspace.
+- `hop-window` — focus or create a window in the currently focused session. Lists every declared window (built-ins, active layouts, top-level) via `hop windows` and dispatches to `hop edit` / `hop browser` / `hop term --role <name>`. No-op when not on a hop workspace.
 
 The same scripts can be bound directly in Sway, skipping Vicinae's launcher UI:
 
 ```conf
 bindsym $mod+Shift+s exec /path/to/hop/vicinae/hop-switch-session
 bindsym $mod+Shift+m exec /path/to/hop/vicinae/hop-move-window-to-session
+bindsym $mod+Shift+w exec /path/to/hop/vicinae/hop-window
 ```
 
 `hop-move-window-to-session` only works when triggered via a Sway keybinding, not from inside the Vicinae launcher (the launcher would be the focused window).

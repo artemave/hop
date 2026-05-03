@@ -21,6 +21,11 @@ class ListSessionsCommand:
 
 
 @dataclass(frozen=True, slots=True)
+class ListWindowsCommand:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
 class EditCommand:
     target: str | None = None
 
@@ -55,6 +60,7 @@ Command = (
     EnterSessionCommand
     | SwitchSessionCommand
     | ListSessionsCommand
+    | ListWindowsCommand
     | EditCommand
     | TermCommand
     | RunCommand

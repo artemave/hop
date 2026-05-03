@@ -428,6 +428,54 @@ def test_execute_command_lists_sessions_as_json_with_project_roots(
     ]
 
 
+def test_execute_command_lists_windows_for_current_session(tmp_path: Path) -> None:
+    """`hop windows` prints the resolved windows for the session whose
+    project root is the caller's cwd. Used by the vicinae launcher to
+    enumerate options for the focused session workspace."""
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+
+    services = StubHopServices(
+        sway=StubSwayAdapter(),
+        kitty=StubKittyAdapter(),
+        neovim=StubNeovimAdapter(),
+        browser=StubBrowserAdapter(),
+    )
+
+    from hop.app import SessionBackendRegistry
+    from hop.commands import ListWindowsCommand
+    from hop.config import LayoutConfig, WindowConfig
+
+    registry = SessionBackendRegistry(
+        global_config_loader=lambda: HopConfig(
+            layouts=(
+                LayoutConfig(
+                    name="rails",
+                    autostart="true",
+                    windows=(WindowConfig(role="server", command="bin/dev"),),
+                ),
+            ),
+            windows=(WindowConfig(role="worker", command="bin/jobs"),),
+        ),
+        sessions_loader=lambda: {},
+    )
+    real_services = HopServices(
+        sway=services.sway,
+        kitty=services.kitty,
+        neovim=services.neovim,
+        browser=services.browser,
+        session_backends=registry,
+    )
+    stdout = io.StringIO()
+
+    with redirect_stdout(stdout):
+        assert execute_command(ListWindowsCommand(), cwd=project_root, services=real_services) == 0
+
+    # Built-ins (shell, editor, browser), then active layout windows (server),
+    # then top-level windows (worker) — each on its own line.
+    assert stdout.getvalue() == "shell\neditor\nbrowser\nserver\nworker\n"
+
+
 def test_execute_command_focuses_terminal_role_in_current_session(tmp_path: Path) -> None:
     project_root = tmp_path / "demo"
     nested_directory = project_root / "src"

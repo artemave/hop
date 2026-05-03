@@ -22,6 +22,7 @@ from hop.commands import (
     EnterSessionCommand,
     KillCommand,
     ListSessionsCommand,
+    ListWindowsCommand,
     RunCommand,
     SwitchSessionCommand,
     TailCommand,
@@ -324,6 +325,10 @@ def execute_command(
             else:
                 for listing in listings:
                     print(listing.name)
+        case ListWindowsCommand():
+            session = resolve_project_session(current_directory)
+            for window in services.session_backends.resolve_windows_for_entry(session):
+                print(window.role)
         case EditCommand(target=target):
             edit_in_session(
                 current_directory,
