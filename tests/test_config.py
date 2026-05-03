@@ -8,10 +8,15 @@ from hop.config import (
     BackendConfig,
     HopConfig,
     HopConfigError,
+    LayoutConfig,
+    WindowConfig,
     default_global_config_path,
     load_global_config,
     load_project_config,
     merge_backends,
+    merge_configs,
+    merge_layouts,
+    merge_windows,
 )
 
 
@@ -20,15 +25,15 @@ def write(path: Path, content: str) -> Path:
     return path
 
 
-# --- parsing -------------------------------------------------------------
+# --- backend parsing -----------------------------------------------------
 
 
 def test_load_global_config_returns_empty_when_file_missing(tmp_path: Path) -> None:
     assert load_global_config(tmp_path / "missing.toml") == HopConfig()
 
 
-def test_load_global_config_returns_empty_when_backends_table_missing(tmp_path: Path) -> None:
-    config_file = write(tmp_path / "config.toml", "# no backends declared\n")
+def test_load_global_config_returns_empty_when_no_sections(tmp_path: Path) -> None:
+    config_file = write(tmp_path / "config.toml", "# nothing here\n")
 
     assert load_global_config(config_file) == HopConfig()
 
@@ -38,12 +43,11 @@ def test_load_global_config_parses_full_backend(tmp_path: Path) -> None:
         tmp_path / "config.toml",
         """
 [backends.devcontainer]
-default  = "test -f docker-compose.dev.yml"
-prepare  = "podman-compose -f docker-compose.dev.yml up -d devcontainer"
-shell    = "podman-compose -f docker-compose.dev.yml exec devcontainer /usr/bin/zsh"
-editor   = "podman-compose -f docker-compose.dev.yml exec devcontainer nvim --listen {listen_addr}"
-teardown = "podman-compose -f docker-compose.dev.yml down"
-workspace = "podman-compose -f docker-compose.dev.yml exec devcontainer pwd"
+default        = "test -f docker-compose.dev.yml"
+prepare        = "podman-compose -f docker-compose.dev.yml up -d devcontainer"
+teardown       = "podman-compose -f docker-compose.dev.yml down"
+workspace      = "podman-compose -f docker-compose.dev.yml exec devcontainer pwd"
+command_prefix = "podman-compose -f docker-compose.dev.yml exec devcontainer"
 """,
     )
 
@@ -52,120 +56,250 @@ workspace = "podman-compose -f docker-compose.dev.yml exec devcontainer pwd"
             name="devcontainer",
             default="test -f docker-compose.dev.yml",
             prepare="podman-compose -f docker-compose.dev.yml up -d devcontainer",
-            shell="podman-compose -f docker-compose.dev.yml exec devcontainer /usr/bin/zsh",
-            editor="podman-compose -f docker-compose.dev.yml exec devcontainer nvim --listen {listen_addr}",
             teardown="podman-compose -f docker-compose.dev.yml down",
             workspace="podman-compose -f docker-compose.dev.yml exec devcontainer pwd",
+            command_prefix="podman-compose -f docker-compose.dev.yml exec devcontainer",
         ),
     )
 
 
-def test_load_global_config_parses_triple_quoted_multiline_command(tmp_path: Path) -> None:
-    """Triple-quoted strings preserve newlines verbatim — sh handles them as
-    line-continuation-style scripts when the user wants to spread a pipeline
-    across lines for readability."""
+def test_load_global_config_rejects_legacy_flat_shell_field(tmp_path: Path) -> None:
     config_file = write(
         tmp_path / "config.toml",
-        '''
-[backends.devcontainer]
-shell = "zsh"
-editor = "nvim"
-port_translate = """
-podman ps -q \\
-  --filter label=service=devcontainer \\
-  | head -1 \\
-  | xargs -r -I@ podman port @ {port} \\
-  | cut -d: -f2
-"""
-''',
+        '[backends.devcontainer]\nshell = "zsh"\n',
     )
 
-    backends = load_global_config(config_file).backends
-    assert backends[0].port_translate is not None
-    assert "podman ps" in backends[0].port_translate
-    assert "{port}" in backends[0].port_translate
+    with pytest.raises(HopConfigError) as exc:
+        load_global_config(config_file)
+
+    message = str(exc.value)
+    assert "removed" in message
+    assert "command_prefix" in message
+    assert "[windows.shell]" in message
 
 
-def test_load_global_config_accepts_partial_entries(tmp_path: Path) -> None:
-    """A backend without shell/editor parses fine — validation lives at use time."""
+def test_load_global_config_rejects_legacy_flat_editor_field(tmp_path: Path) -> None:
     config_file = write(
         tmp_path / "config.toml",
-        '[backends.partial]\ndefault = "true"\n',
+        '[backends.devcontainer]\neditor = "nvim"\n',
     )
 
-    config = load_global_config(config_file)
+    with pytest.raises(HopConfigError) as exc:
+        load_global_config(config_file)
 
-    assert config.backends == (BackendConfig(name="partial", default="true"),)
-    assert config.backends[0].is_runnable is False
+    assert "[windows.editor]" in str(exc.value)
 
 
-def test_load_global_config_preserves_declaration_order(tmp_path: Path) -> None:
+def test_load_global_config_rejects_per_backend_windows_subtable(tmp_path: Path) -> None:
+    """The just-shipped per-backend windows shape was replaced by top-level
+    [layouts.<name>] and [windows.<role>]. Surface that pivot to the user."""
     config_file = write(
         tmp_path / "config.toml",
         """
-[backends.alpha]
-shell = "a"
-editor = "a"
-
-[backends.beta]
-shell = "b"
-editor = "b"
+[backends.devcontainer.windows.shell]
+command = "zsh"
 """,
     )
 
-    config = load_global_config(config_file)
+    with pytest.raises(HopConfigError) as exc:
+        load_global_config(config_file)
 
-    assert tuple(b.name for b in config.backends) == ("alpha", "beta")
+    message = str(exc.value)
+    assert "[layouts.<name>]" in message
+    assert "[windows.<role>]" in message
 
 
 def test_load_global_config_rejects_explicit_host_backend(tmp_path: Path) -> None:
     config_file = write(
         tmp_path / "config.toml",
-        """
-[backends.host]
-shell = "bash"
-editor = "nvim"
-""",
+        '[backends.host]\ncommand_prefix = "nope"\n',
     )
 
     with pytest.raises(HopConfigError, match="reserved"):
         load_global_config(config_file)
 
 
-def test_load_project_config_returns_empty_when_no_file(tmp_path: Path) -> None:
-    assert load_project_config(tmp_path) == HopConfig()
+def test_load_global_config_rejects_unknown_backend_field(tmp_path: Path) -> None:
+    config_file = write(
+        tmp_path / "config.toml",
+        """
+[backends.devcontainer]
+prepar = "typo"
+""",
+    )
+
+    with pytest.raises(HopConfigError, match="backend 'devcontainer' has unknown field 'prepar'"):
+        load_global_config(config_file)
 
 
-def test_load_project_config_uses_same_schema_as_global(tmp_path: Path) -> None:
+def test_load_global_config_rejects_empty_command_prefix(tmp_path: Path) -> None:
+    config_file = write(
+        tmp_path / "config.toml",
+        '[backends.devcontainer]\ncommand_prefix = "   "\n',
+    )
+
+    with pytest.raises(HopConfigError, match="field 'command_prefix' must not be empty"):
+        load_global_config(config_file)
+
+
+# --- layout parsing ------------------------------------------------------
+
+
+def test_load_global_config_parses_layout_with_windows(tmp_path: Path) -> None:
+    config_file = write(
+        tmp_path / "config.toml",
+        """
+[layouts.rails]
+autostart = "test -f bin/rails"
+
+[layouts.rails.windows.server]
+command = "bin/dev"
+
+[layouts.rails.windows.console]
+command   = "bin/rails console"
+autostart = "false"
+""",
+    )
+
+    assert load_global_config(config_file).layouts == (
+        LayoutConfig(
+            name="rails",
+            autostart="test -f bin/rails",
+            windows=(
+                WindowConfig(role="server", command="bin/dev"),
+                WindowConfig(role="console", command="bin/rails console", autostart="false"),
+            ),
+        ),
+    )
+
+
+def test_load_global_config_rejects_unknown_layout_field(tmp_path: Path) -> None:
+    config_file = write(
+        tmp_path / "config.toml",
+        """
+[layouts.rails]
+autostart = "true"
+oops = "no"
+""",
+    )
+
+    with pytest.raises(HopConfigError, match="layout 'rails' has unknown field 'oops'"):
+        load_global_config(config_file)
+
+
+def test_load_global_config_rejects_window_with_invalid_autostart(tmp_path: Path) -> None:
+    config_file = write(
+        tmp_path / "config.toml",
+        """
+[layouts.rails]
+autostart = "true"
+
+[layouts.rails.windows.server]
+command   = "bin/dev"
+autostart = "test -f bin/dev"
+""",
+    )
+
+    with pytest.raises(HopConfigError, match="must be 'true' or 'false'"):
+        load_global_config(config_file)
+
+
+def test_load_global_config_rejects_unknown_window_field_in_layout(tmp_path: Path) -> None:
+    config_file = write(
+        tmp_path / "config.toml",
+        """
+[layouts.rails]
+autostart = "true"
+
+[layouts.rails.windows.server]
+command = "bin/dev"
+extra   = "nope"
+""",
+    )
+
+    with pytest.raises(HopConfigError, match="window 'server' has unknown field 'extra'"):
+        load_global_config(config_file)
+
+
+# --- top-level window parsing -------------------------------------------
+
+
+def test_load_global_config_parses_top_level_windows(tmp_path: Path) -> None:
+    config_file = write(
+        tmp_path / "config.toml",
+        """
+[windows.editor]
+autostart = "false"
+
+[windows.worker]
+command = "bin/jobs"
+""",
+    )
+
+    assert load_global_config(config_file).windows == (
+        WindowConfig(role="editor", autostart="false"),
+        WindowConfig(role="worker", command="bin/jobs"),
+    )
+
+
+def test_load_global_config_rejects_top_level_windows_invalid_autostart(tmp_path: Path) -> None:
+    config_file = write(
+        tmp_path / "config.toml",
+        """
+[windows.worker]
+command   = "bin/jobs"
+autostart = "test -f bin/jobs"
+""",
+    )
+
+    with pytest.raises(HopConfigError, match="must be 'true' or 'false'"):
+        load_global_config(config_file)
+
+
+def test_load_global_config_rejects_unknown_top_level_key(tmp_path: Path) -> None:
+    config_file = write(
+        tmp_path / "config.toml",
+        '[bakends.devcontainer]\ncommand_prefix = "x"\n',
+    )
+
+    with pytest.raises(HopConfigError, match="unknown top-level key 'bakends'"):
+        load_global_config(config_file)
+
+
+# --- project config uses identical schema --------------------------------
+
+
+def test_project_config_supports_identical_schema(tmp_path: Path) -> None:
     write(
         tmp_path / ".hop.toml",
         """
-[backends.devcontainer]
-default = "true"
-
 [backends.lima]
-shell = "lima shell default -- /usr/bin/zsh"
-editor = "lima shell default -- nvim --listen {listen_addr}"
+command_prefix = "lima shell default --"
+
+[layouts.rails]
+autostart = "test -f bin/rails"
+
+[layouts.rails.windows.server]
+command = "bin/dev"
+
+[windows.worker]
+command = "bin/jobs"
 """,
     )
 
     config = load_project_config(tmp_path)
 
     assert config.backends == (
-        BackendConfig(name="devcontainer", default="true"),
-        BackendConfig(
-            name="lima",
-            shell="lima shell default -- /usr/bin/zsh",
-            editor="lima shell default -- nvim --listen {listen_addr}",
+        BackendConfig(name="lima", command_prefix="lima shell default --"),
+    )
+    assert config.layouts == (
+        LayoutConfig(
+            name="rails",
+            autostart="test -f bin/rails",
+            windows=(WindowConfig(role="server", command="bin/dev"),),
         ),
     )
-
-
-def test_load_project_config_rejects_explicit_host_backend(tmp_path: Path) -> None:
-    write(tmp_path / ".hop.toml", '[backends.host]\nshell = "bash"\neditor = "nvim"\n')
-
-    with pytest.raises(HopConfigError, match="reserved"):
-        load_project_config(tmp_path)
+    assert config.windows == (WindowConfig(role="worker", command="bin/jobs"),)
 
 
 # --- merge ---------------------------------------------------------------
@@ -175,35 +309,20 @@ def _backend(name: str, **fields: object) -> BackendConfig:
     return BackendConfig(name=name, **fields)  # type: ignore[arg-type]
 
 
-def test_merge_appends_global_only_entries_after_project() -> None:
+def test_merge_backends_appends_global_only_after_project() -> None:
     project = HopConfig()
-    global_ = HopConfig(backends=(_backend("alpha", shell="a", editor="a"),))
+    global_ = HopConfig(backends=(_backend("alpha", command_prefix="a-prefix"),))
 
     merged = merge_backends(project, global_)
 
     assert tuple(b.name for b in merged) == ("alpha",)
 
 
-def test_merge_project_only_entries_appear_first() -> None:
-    project = HopConfig(backends=(_backend("project-only", shell="p", editor="p"),))
-    global_ = HopConfig(backends=(_backend("alpha", shell="a", editor="a"),))
-
-    merged = merge_backends(project, global_)
-
-    assert tuple(b.name for b in merged) == ("project-only", "alpha")
-
-
-def test_merge_field_merges_same_name_with_project_winning() -> None:
+def test_merge_backends_field_merges_per_field() -> None:
     project = HopConfig(backends=(_backend("alpha", default="true"),))
     global_ = HopConfig(
         backends=(
-            _backend(
-                "alpha",
-                shell="a-shell",
-                editor="a-editor",
-                default="test -f marker",
-                prepare="a-prepare",
-            ),
+            _backend("alpha", command_prefix="prefix", default="test -f marker", prepare="prep"),
         )
     )
 
@@ -212,29 +331,96 @@ def test_merge_field_merges_same_name_with_project_winning() -> None:
     assert merged == (
         _backend(
             "alpha",
-            shell="a-shell",  # inherited from global
-            editor="a-editor",  # inherited from global
-            default="true",  # overridden by project
-            prepare="a-prepare",  # inherited from global
+            command_prefix="prefix",  # inherited
+            default="true",  # project wins
+            prepare="prep",  # inherited
         ),
     )
 
 
-def test_merge_project_mention_moves_backend_to_project_slot() -> None:
-    """A backend the project file mentions — even just as a partial override —
-    moves to the project's slot in the auto-detect order."""
-    project = HopConfig(backends=(_backend("beta", default="true"),))
+def test_merge_layouts_per_window_field_precedence() -> None:
+    """Project layout windows merge per-role with global; global-only roles
+    are appended after project-declared ones."""
+    project = HopConfig(
+        layouts=(
+            LayoutConfig(
+                name="rails",
+                autostart="test -f bin/rails",
+                windows=(
+                    WindowConfig(role="server", autostart="false"),
+                    WindowConfig(role="extra", command="extra-cmd"),
+                ),
+            ),
+        )
+    )
     global_ = HopConfig(
-        backends=(
-            _backend("alpha", shell="a", editor="a"),
-            _backend("beta", shell="b", editor="b", default="test -f .beta"),
+        layouts=(
+            LayoutConfig(
+                name="rails",
+                autostart="ignored",
+                windows=(
+                    WindowConfig(role="server", command="bin/dev"),
+                    WindowConfig(role="console", command="bin/rails console"),
+                ),
+            ),
         )
     )
 
-    merged = merge_backends(project, global_)
+    merged = merge_layouts(project, global_)
 
-    # beta moves to position 0 because the project mentioned it; alpha follows.
-    assert tuple(b.name for b in merged) == ("beta", "alpha")
+    assert merged == (
+        LayoutConfig(
+            name="rails",
+            autostart="test -f bin/rails",  # project wins
+            windows=(
+                WindowConfig(role="server", command="bin/dev", autostart="false"),
+                WindowConfig(role="extra", command="extra-cmd"),
+                WindowConfig(role="console", command="bin/rails console"),
+            ),
+        ),
+    )
+
+
+def test_merge_top_level_windows_per_field() -> None:
+    project = HopConfig(
+        windows=(
+            WindowConfig(role="editor", autostart="false"),
+            WindowConfig(role="worker", command="project-jobs"),
+        )
+    )
+    global_ = HopConfig(
+        windows=(
+            WindowConfig(role="editor", command="vim"),
+            WindowConfig(role="logger", command="tail -f log"),
+        )
+    )
+
+    merged = merge_windows(project, global_)
+
+    assert merged == (
+        WindowConfig(role="editor", command="vim", autostart="false"),  # merged per-field
+        WindowConfig(role="worker", command="project-jobs"),  # project-only
+        WindowConfig(role="logger", command="tail -f log"),  # global-only, appended last
+    )
+
+
+def test_merge_configs_combines_all_three_sections() -> None:
+    project = HopConfig(
+        backends=(_backend("alpha", default="true"),),
+        layouts=(LayoutConfig(name="rails", autostart="proj"),),
+        windows=(WindowConfig(role="worker", command="bin/jobs"),),
+    )
+    global_ = HopConfig(
+        backends=(_backend("alpha", command_prefix="prefix"),),
+        layouts=(LayoutConfig(name="vite", autostart="test -f vite.config.ts"),),
+        windows=(WindowConfig(role="editor", autostart="false"),),
+    )
+
+    merged = merge_configs(project, global_)
+
+    assert tuple(b.name for b in merged.backends) == ("alpha",)
+    assert tuple(layout.name for layout in merged.layouts) == ("rails", "vite")
+    assert tuple(window.role for window in merged.windows) == ("worker", "editor")
 
 
 def test_default_global_config_path_uses_xdg_config_home(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -246,150 +432,3 @@ def test_default_global_config_path_falls_back_to_home_config(monkeypatch: pytes
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     monkeypatch.setenv("HOME", "/home/tester")
     assert default_global_config_path() == Path("/home/tester/.config/hop/config.toml")
-
-
-def test_load_global_config_rejects_unknown_top_level_key(tmp_path: Path) -> None:
-    config_file = write(tmp_path / "config.toml", '[bakends.devcontainer]\nshell = "zsh"\n')
-
-    with pytest.raises(HopConfigError, match="unknown top-level key 'bakends'"):
-        load_global_config(config_file)
-
-
-def test_load_global_config_rejects_non_table_backends_value(tmp_path: Path) -> None:
-    config_file = write(tmp_path / "config.toml", "backends = 'oops'\n")
-
-    with pytest.raises(HopConfigError, match="'backends' must be a table"):
-        load_global_config(config_file)
-
-
-def test_load_global_config_rejects_non_table_backend_entry(tmp_path: Path) -> None:
-    config_file = write(
-        tmp_path / "config.toml",
-        """
-[backends]
-bogus = "not-a-table"
-""",
-    )
-
-    with pytest.raises(HopConfigError, match="backend 'bogus' must be a table"):
-        load_global_config(config_file)
-
-
-def test_load_global_config_rejects_unknown_backend_field(tmp_path: Path) -> None:
-    config_file = write(
-        tmp_path / "config.toml",
-        """
-[backends.devcontainer]
-shell = "zsh"
-shel = "typo"
-""",
-    )
-
-    with pytest.raises(HopConfigError, match="backend 'devcontainer' has unknown field 'shel'"):
-        load_global_config(config_file)
-
-
-def test_load_global_config_rejects_legacy_list_form(tmp_path: Path) -> None:
-    """Lists were the old format — error with a helpful message instead of silently misbehaving."""
-    config_file = write(
-        tmp_path / "config.toml",
-        """
-[backends.devcontainer]
-shell = ["zsh"]
-""",
-    )
-
-    with pytest.raises(HopConfigError, match="commands are now strings"):
-        load_global_config(config_file)
-
-
-def test_load_global_config_rejects_non_string_field(tmp_path: Path) -> None:
-    config_file = write(
-        tmp_path / "config.toml",
-        """
-[backends.devcontainer]
-shell = 42
-""",
-    )
-
-    with pytest.raises(HopConfigError, match="field 'shell' must be a string"):
-        load_global_config(config_file)
-
-
-def test_load_global_config_rejects_empty_command_string(tmp_path: Path) -> None:
-    config_file = write(
-        tmp_path / "config.toml",
-        """
-[backends.devcontainer]
-shell = "   "
-""",
-    )
-
-    with pytest.raises(HopConfigError, match="field 'shell' must not be empty"):
-        load_global_config(config_file)
-
-
-def test_load_global_config_parses_translate_fields(tmp_path: Path) -> None:
-    config_file = write(
-        tmp_path / "config.toml",
-        """
-[backends.devcontainer]
-shell = "zsh"
-editor = "nvim"
-port_translate = "compose port devcontainer {port}"
-host_translate = "echo myserver"
-""",
-    )
-
-    backends = load_global_config(config_file).backends
-
-    assert backends == (
-        BackendConfig(
-            name="devcontainer",
-            shell="zsh",
-            editor="nvim",
-            port_translate="compose port devcontainer {port}",
-            host_translate="echo myserver",
-        ),
-    )
-
-
-def test_merge_translate_fields_independently_with_project_winning() -> None:
-    project = HopConfig(
-        backends=(_backend("alpha", port_translate="project-port"),),
-    )
-    global_ = HopConfig(
-        backends=(
-            _backend(
-                "alpha",
-                shell="zsh",
-                editor="nvim",
-                port_translate="global-port",
-                host_translate="global-host",
-            ),
-        )
-    )
-
-    merged = merge_backends(project, global_)
-
-    assert merged == (
-        _backend(
-            "alpha",
-            shell="zsh",
-            editor="nvim",
-            port_translate="project-port",  # project wins
-            host_translate="global-host",  # inherited from global
-        ),
-    )
-
-
-def test_merge_preserves_partial_entries_in_result() -> None:
-    """Validation lives at use time — merge keeps non-runnable entries so callers
-    can decide how to surface them."""
-    project = HopConfig(backends=(_backend("partial", default="true"),))
-    global_ = HopConfig()
-
-    merged = merge_backends(project, global_)
-
-    assert merged == (_backend("partial", default="true"),)
-    assert merged[0].is_runnable is False

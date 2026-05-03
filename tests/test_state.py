@@ -23,7 +23,7 @@ def make_session(*, name: str, project_root: Path) -> ProjectSession:
     )
 
 
-def test_record_session_writes_json_payload(tmp_path: Path) -> None:
+def test_record_session_writes_host_payload(tmp_path: Path) -> None:
     sessions_dir = tmp_path / "sessions"
     session = make_session(name="demo", project_root=tmp_path / "demo")
 
@@ -37,7 +37,7 @@ def test_record_session_writes_json_payload(tmp_path: Path) -> None:
     }
 
 
-def test_record_session_persists_backend_base(tmp_path: Path) -> None:
+def test_record_session_persists_command_backend_record(tmp_path: Path) -> None:
     sessions_dir = tmp_path / "sessions"
     session = make_session(name="demo", project_root=tmp_path / "demo")
 
@@ -45,8 +45,7 @@ def test_record_session_persists_backend_base(tmp_path: Path) -> None:
         session,
         backend=CommandBackendRecord(
             name="devcontainer",
-            shell="podman-compose exec devcontainer /usr/bin/zsh",
-            editor="podman-compose exec devcontainer nvim",
+            command_prefix="podman-compose -f docker-compose.dev.yml exec devcontainer",
             prepare="podman-compose up -d devcontainer",
             teardown="podman-compose down",
             workspace_command="podman-compose exec devcontainer pwd",
@@ -59,8 +58,7 @@ def test_record_session_persists_backend_base(tmp_path: Path) -> None:
     assert payload["backend"] == {
         "type": "command",
         "name": "devcontainer",
-        "shell": "podman-compose exec devcontainer /usr/bin/zsh",
-        "editor": "podman-compose exec devcontainer nvim",
+        "command_prefix": "podman-compose -f docker-compose.dev.yml exec devcontainer",
         "prepare": "podman-compose up -d devcontainer",
         "teardown": "podman-compose down",
         "workspace_command": "podman-compose exec devcontainer pwd",
@@ -68,27 +66,38 @@ def test_record_session_persists_backend_base(tmp_path: Path) -> None:
     }
 
 
-def test_record_session_omits_optional_backend_fields(tmp_path: Path) -> None:
+def test_record_session_omits_optional_fields(tmp_path: Path) -> None:
+    sessions_dir = tmp_path / "sessions"
+    session = make_session(name="demo", project_root=tmp_path / "demo")
+
+    record_session(
+        session,
+        backend=CommandBackendRecord(name="ssh"),
+        sessions_dir=sessions_dir,
+    )
+
+    payload = json.loads((sessions_dir / "demo.json").read_text())
+    assert payload["backend"] == {"type": "command", "name": "ssh"}
+
+
+def test_record_session_persists_translate_commands(tmp_path: Path) -> None:
     sessions_dir = tmp_path / "sessions"
     session = make_session(name="demo", project_root=tmp_path / "demo")
 
     record_session(
         session,
         backend=CommandBackendRecord(
-            name="ssh",
-            shell="ssh host zsh",
-            editor="ssh host nvim",
+            name="devcontainer",
+            command_prefix="compose exec devcontainer",
+            port_translate_command="compose port devcontainer {port}",
+            host_translate_command="echo myserver",
         ),
         sessions_dir=sessions_dir,
     )
 
     payload = json.loads((sessions_dir / "demo.json").read_text())
-    assert payload["backend"] == {
-        "type": "command",
-        "name": "ssh",
-        "shell": "ssh host zsh",
-        "editor": "ssh host nvim",
-    }
+    assert payload["backend"]["port_translate_command"] == "compose port devcontainer {port}"
+    assert payload["backend"]["host_translate_command"] == "echo myserver"
 
 
 def test_forget_session_removes_state_file(tmp_path: Path) -> None:
@@ -102,7 +111,7 @@ def test_forget_session_removes_state_file(tmp_path: Path) -> None:
     assert not state_file.exists()
 
 
-def test_forget_session_is_idempotent_when_state_file_missing(tmp_path: Path) -> None:
+def test_forget_session_is_idempotent(tmp_path: Path) -> None:
     sessions_dir = tmp_path / "sessions"
     sessions_dir.mkdir()
 
@@ -111,6 +120,57 @@ def test_forget_session_is_idempotent_when_state_file_missing(tmp_path: Path) ->
 
 def test_load_sessions_returns_empty_when_dir_missing(tmp_path: Path) -> None:
     assert load_sessions(sessions_dir=tmp_path / "missing") == {}
+
+
+def test_load_sessions_decodes_command_backend_record(tmp_path: Path) -> None:
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir()
+    (sessions_dir / "alpha.json").write_text(
+        json.dumps(
+            {
+                "name": "alpha",
+                "project_root": "/projects/alpha",
+                "backend": {
+                    "type": "command",
+                    "name": "devcontainer",
+                    "command_prefix": "compose exec devcontainer",
+                    "prepare": "compose up -d devcontainer",
+                    "teardown": "compose down",
+                    "workspace_command": "compose exec devcontainer pwd",
+                    "workspace_path": "/workspace",
+                },
+            }
+        )
+    )
+
+    sessions = load_sessions(sessions_dir=sessions_dir)
+
+    assert sessions["alpha"].backend == CommandBackendRecord(
+        name="devcontainer",
+        command_prefix="compose exec devcontainer",
+        prepare="compose up -d devcontainer",
+        teardown="compose down",
+        workspace_command="compose exec devcontainer pwd",
+        workspace_path="/workspace",
+    )
+
+
+def test_load_sessions_decodes_explicit_host_record(tmp_path: Path) -> None:
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir()
+    (sessions_dir / "alpha.json").write_text(
+        json.dumps(
+            {
+                "name": "alpha",
+                "project_root": "/projects/alpha",
+                "backend": {"type": "host"},
+            }
+        )
+    )
+
+    sessions = load_sessions(sessions_dir=sessions_dir)
+
+    assert sessions["alpha"].backend == HostBackendRecord()
 
 
 def test_load_sessions_skips_non_json_and_wrong_shape_files(tmp_path: Path) -> None:
@@ -140,98 +200,7 @@ def test_load_sessions_raises_on_malformed_json(tmp_path: Path) -> None:
         load_sessions(sessions_dir=sessions_dir)
 
 
-def test_load_sessions_decodes_backend_base(tmp_path: Path) -> None:
-    sessions_dir = tmp_path / "sessions"
-    sessions_dir.mkdir()
-    (sessions_dir / "alpha.json").write_text(
-        json.dumps(
-            {
-                "name": "alpha",
-                "project_root": "/projects/alpha",
-                "backend": {
-                    "type": "command",
-                    "name": "devcontainer",
-                    "shell": "compose exec devcontainer zsh",
-                    "editor": "compose exec devcontainer nvim",
-                    "prepare": "compose up -d devcontainer",
-                    "teardown": "compose down",
-                    "workspace_command": "compose exec devcontainer pwd",
-                    "workspace_path": "/workspace",
-                },
-            }
-        )
-    )
-
-    sessions = load_sessions(sessions_dir=sessions_dir)
-
-    assert sessions["alpha"].backend == CommandBackendRecord(
-        name="devcontainer",
-        shell="compose exec devcontainer zsh",
-        editor="compose exec devcontainer nvim",
-        prepare="compose up -d devcontainer",
-        teardown="compose down",
-        workspace_command="compose exec devcontainer pwd",
-        workspace_path="/workspace",
-    )
-
-
-def test_load_sessions_treats_legacy_records_as_host_base(tmp_path: Path) -> None:
-    sessions_dir = tmp_path / "sessions"
-    sessions_dir.mkdir()
-    (sessions_dir / "alpha.json").write_text(json.dumps({"name": "alpha", "project_root": "/projects/alpha"}))
-
-    sessions = load_sessions(sessions_dir=sessions_dir)
-
-    assert sessions["alpha"].backend == HostBackendRecord()
-
-
-def test_load_sessions_decodes_explicit_host_backend_record(tmp_path: Path) -> None:
-    sessions_dir = tmp_path / "sessions"
-    sessions_dir.mkdir()
-    (sessions_dir / "alpha.json").write_text(
-        json.dumps(
-            {
-                "name": "alpha",
-                "project_root": "/projects/alpha",
-                "backend": {"type": "host"},
-            }
-        )
-    )
-
-    sessions = load_sessions(sessions_dir=sessions_dir)
-
-    assert sessions["alpha"].backend == HostBackendRecord()
-
-
-def test_load_sessions_falls_back_to_host_for_malformed_command_record(tmp_path: Path) -> None:
-    """A `type=command` record missing shell/editor (or with wrong types) is
-    discarded — hop won't have valid command strings to invoke, so persisting a
-    HostBackendRecord lets the next entry resolve fresh."""
-    sessions_dir = tmp_path / "sessions"
-    sessions_dir.mkdir()
-    (sessions_dir / "alpha.json").write_text(
-        json.dumps(
-            {
-                "name": "alpha",
-                "project_root": "/projects/alpha",
-                "backend": {
-                    "type": "command",
-                    "name": "devcontainer",
-                    "shell": ["legacy", "list", "form"],
-                    "editor": "nvim",
-                },
-            }
-        )
-    )
-
-    sessions = load_sessions(sessions_dir=sessions_dir)
-
-    assert sessions["alpha"].backend == HostBackendRecord()
-
-
 def test_load_sessions_drops_optional_command_fields_when_not_strings(tmp_path: Path) -> None:
-    """Persisted records may pre-date a field or carry malformed values; treat
-    optional command fields that aren't strings as missing rather than crashing."""
     sessions_dir = tmp_path / "sessions"
     sessions_dir.mkdir()
     (sessions_dir / "alpha.json").write_text(
@@ -242,8 +211,7 @@ def test_load_sessions_drops_optional_command_fields_when_not_strings(tmp_path: 
                 "backend": {
                     "type": "command",
                     "name": "devcontainer",
-                    "shell": "zsh",
-                    "editor": "nvim",
+                    "command_prefix": "compose exec devcontainer",
                     "prepare": ["legacy", "list"],
                     "teardown": None,
                     "workspace_command": 42,
@@ -256,36 +224,46 @@ def test_load_sessions_drops_optional_command_fields_when_not_strings(tmp_path: 
 
     assert sessions["alpha"].backend == CommandBackendRecord(
         name="devcontainer",
-        shell="zsh",
-        editor="nvim",
+        command_prefix="compose exec devcontainer",
         prepare=None,
         teardown=None,
         workspace_command=None,
     )
 
 
-def test_record_session_persists_translate_commands(tmp_path: Path) -> None:
+def test_load_sessions_falls_back_to_host_for_legacy_windows_array(tmp_path: Path) -> None:
+    """Pre-redesign records persisted a `windows` array on the command record.
+    That shape is no longer recognized; old payloads are treated as stale and
+    decode as host so the next entry re-bootstraps fresh."""
     sessions_dir = tmp_path / "sessions"
-    session = make_session(name="demo", project_root=tmp_path / "demo")
-
-    record_session(
-        session,
-        backend=CommandBackendRecord(
-            name="devcontainer",
-            shell="zsh",
-            editor="nvim",
-            port_translate_command="compose port devcontainer {port}",
-            host_translate_command="echo myserver",
-        ),
-        sessions_dir=sessions_dir,
+    sessions_dir.mkdir()
+    (sessions_dir / "alpha.json").write_text(
+        json.dumps(
+            {
+                "name": "alpha",
+                "project_root": "/projects/alpha",
+                "backend": {
+                    "type": "command",
+                    "name": "devcontainer",
+                    "windows": [
+                        {"role": "shell", "command": "zsh", "autostart": "true"},
+                    ],
+                },
+            }
+        )
     )
 
-    payload = json.loads((sessions_dir / "demo.json").read_text())
-    assert payload["backend"]["port_translate_command"] == "compose port devcontainer {port}"
-    assert payload["backend"]["host_translate_command"] == "echo myserver"
+    sessions = load_sessions(sessions_dir=sessions_dir)
+
+    # `windows` is silently ignored — record decodes with no command_prefix.
+    assert isinstance(sessions["alpha"].backend, CommandBackendRecord)
+    assert sessions["alpha"].backend.command_prefix is None
 
 
-def test_load_sessions_decodes_translate_commands(tmp_path: Path) -> None:
+def test_load_sessions_falls_back_to_host_for_legacy_flat_record(tmp_path: Path) -> None:
+    """A pre-windows record with flat shell/editor fields decodes under the
+    new schema with neither field recognized; the resulting record has no
+    command_prefix and the next session entry re-bootstraps fresh state."""
     sessions_dir = tmp_path / "sessions"
     sessions_dir.mkdir()
     (sessions_dir / "alpha.json").write_text(
@@ -298,8 +276,6 @@ def test_load_sessions_decodes_translate_commands(tmp_path: Path) -> None:
                     "name": "devcontainer",
                     "shell": "zsh",
                     "editor": "nvim",
-                    "port_translate_command": "compose port {port}",
-                    "host_translate_command": "echo myserver",
                 },
             }
         )
@@ -307,13 +283,8 @@ def test_load_sessions_decodes_translate_commands(tmp_path: Path) -> None:
 
     sessions = load_sessions(sessions_dir=sessions_dir)
 
-    assert sessions["alpha"].backend == CommandBackendRecord(
-        name="devcontainer",
-        shell="zsh",
-        editor="nvim",
-        port_translate_command="compose port {port}",
-        host_translate_command="echo myserver",
-    )
+    assert isinstance(sessions["alpha"].backend, CommandBackendRecord)
+    assert sessions["alpha"].backend.command_prefix is None
 
 
 def test_default_sessions_dir_honors_explicit_override(monkeypatch: pytest.MonkeyPatch) -> None:

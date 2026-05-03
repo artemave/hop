@@ -78,17 +78,51 @@ Each session has exactly one Neovim instance.
 
 ### Session backend
 
-Each session has a **backend** that decides *where* its shells and editor run. The default is **host** (shells spawned by kitty as the user's default shell, neovim running on the host). Non-host backends are user-defined in `~/.config/hop/config.toml` and/or a project's `.hop.toml` — both files use the same `[backends.<name>]` schema and are merged at session entry. Each backend's command fields are shell command strings hop runs through `sh -c` after substituting placeholders:
+Each session has a **backend** that decides *where* its windows run. The default is **host** (shells spawned by kitty as the user's default shell, neovim running on the host). Non-host backends are user-defined in `~/.config/hop/config.toml` and/or a project's `.hop.toml` — both files use the same schema and are merged at session entry. Each backend's command fields are shell command strings hop runs through `sh -c` after substituting placeholders:
 
 - `prepare` (optional) — command hop runs once before bootstrapping kitty. Idempotent.
-- `shell` (required) — command kitty uses to spawn each role terminal.
-- `editor` (required) — command kitty uses to launch the shared neovim. Hop drives this nvim by writing keystrokes into kitty's pty (kitty `send-text`), so the editor command does not need a remote-control socket — `nvim` alone is enough.
 - `teardown` (optional) — command hop runs at `hop kill` after closing windows. Closing kitty windows first sends SIGHUP to in-backend shells so they exit cleanly before any teardown command runs.
 - `workspace` (optional) — command whose stripped stdout is the in-backend path that maps to the host project root. Captured once at session creation and used for cwd translation in the kitten dispatch.
 - `port_translate` (optional) — command hop runs lazily when the kitten dispatch resolves a URL whose host is `localhost`, `127.0.0.1`, or `0.0.0.0`. Stripped stdout is the host-reachable port number that should replace the URL's port. Hop substitutes `{port}` with the URL's original port (or empty string when the URL has no port).
 - `host_translate` (optional) — command hop runs lazily for the same set of localhost URLs. Stripped stdout is the hostname that should replace `localhost` / `127.0.0.1` / `0.0.0.0` in the URL. Both `port_translate` and `host_translate` are independently optional; either or both may be configured.
+- `command_prefix` (optional) — shell snippet hop prepends to every window's command launched in this backend's environment (e.g. `podman-compose -f docker-compose.dev.yml exec devcontainer`). Empty for the implicit host backend.
 
 All commands are run via `sh -c <substituted-string>`, so pipes, redirects, and `$(...)` are part of the contract. Substitution placeholders supported inside any command: `{project_root}`. `{port}` is additionally available inside `port_translate` and `host_translate` (the URL's original port, or empty string when absent). Substituted values are shell-quoted before insertion so paths with spaces or shell metacharacters round-trip safely.
+
+### Layouts and top-level windows
+
+Per-role launch commands live outside the backend, in two top-level config sections:
+
+- `[layouts.<name>]` — a named layout with one required `autostart` shell-snippet probe and a list of `[layouts.<name>.windows.<role>]` declarations. When the probe exits 0 in the project root, all of the layout's windows are queued for autostart. Multiple layouts can match in the same session; their windows compose.
+- `[windows.<role>]` — top-level windows, outside any layout. Always autostart unless individually opted out via `autostart = "false"`.
+
+Each window declaration carries:
+
+- `command` (string) — the role command. **No backend wrap inside this string** — the active backend's `command_prefix` is prepended at launch time. For built-in roles, hop ships a default; the user can override.
+- `autostart` (`"true"` or `"false"`, optional) — opt-in / opt-out only. No probe at the per-window level; the gate is whatever the window's container decides:
+  - **Built-in window** (shell / editor / browser) with no top-level override: hop's default (true for shell/editor, false for browser).
+  - **Top-level window**: defaults true unless the entry sets `autostart = "false"`.
+  - **Layout window**: gated by the layout's `autostart` probe; the window can carry `autostart = "false"` to opt out of even the matched layout (declared but not auto-launched).
+
+Built-in defaults:
+
+| role     | command default                      | autostart default | runtime adapter         |
+|----------|--------------------------------------|-------------------|-------------------------|
+| shell    | `""` (kitty's platform default shell on host; `${SHELL:-sh}` falls back inside a `command_prefix`) | autostart | kitty terminal |
+| editor   | `nvim`                               | autostart         | shared nvim adapter     |
+| browser  | xdg-detected default browser         | not autostart     | session browser adapter |
+
+For user-defined roles (anything other than shell / editor / browser), top-level windows default to autostart-on (the always-on rule above). To declare a user role for `hop term --role <name>` without auto-launching it on entry, either set `autostart = "false"` on the top-level entry, or move it into a layout whose probe is the gate.
+
+Window resolution at session entry, layered with later sources overriding earlier ones for the same role:
+
+1. Built-in defaults (shell, editor, browser).
+2. Each layout in declaration order whose `autostart` probe exits 0, contributing its windows in declaration order.
+3. Top-level `[windows.<role>]` entries in declaration order.
+
+On first session entry, hop ensures the shell window unconditionally (regardless of autostart), then dispatches every remaining autostart-active window to its runtime adapter (editor → nvim, browser → session browser, everything else → kitty terminal). Re-entry from another workspace ensures only the shell window — the autostart sweep never re-fires for a still-live session.
+
+Backend selection (below) is independent of layouts: any session's backend wraps every layout/top-level window's command through `command_prefix`.
 
 Backend selection at session creation:
 

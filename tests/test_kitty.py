@@ -284,15 +284,22 @@ def test_ensure_terminal_uses_base_shell_args_in_launch_payload() -> None:
         ]
     )
 
+    from hop.layouts import WindowSpec
+
     class FakeBackend:
-        def shell_args(self, _session: ProjectSession) -> Sequence[str]:
-            return ("podman-compose", "-f", "docker-compose.dev.yml", "exec", "devcontainer", "/usr/bin/zsh")
+        def wrap(self, command: str, _session: ProjectSession) -> Sequence[str]:
+            # Concatenate prefix and command exactly the way the real
+            # CommandBackend does. Empty command → fall back to the shell
+            # path inside the prefix.
+            inner = command or "${SHELL:-sh}"
+            return ("sh", "-c", f"podman-compose -f docker-compose.dev.yml exec devcontainer {inner}")
 
         def prepare(self, _session: ProjectSession) -> None:
             return None
 
     adapter = KittyRemoteControlAdapter(
         session_backend_for=lambda _session: FakeBackend(),  # type: ignore[arg-type]
+        session_windows_for=lambda _session: (WindowSpec(role="shell", command="/usr/bin/zsh", autostart_active=True),),
         transport_factory=factory,
         launcher=StubLauncher(),
     )
@@ -304,13 +311,133 @@ def test_ensure_terminal_uses_base_shell_args_in_launch_payload() -> None:
     payload = launch_call[2]
     assert payload is not None
     assert payload["args"] == [
-        "podman-compose",
-        "-f",
-        "docker-compose.dev.yml",
-        "exec",
-        "devcontainer",
-        "/usr/bin/zsh",
+        "sh",
+        "-c",
+        "podman-compose -f docker-compose.dev.yml exec devcontainer /usr/bin/zsh",
     ]
+
+
+def test_launch_payload_composes_command_and_shell_for_non_shell_role() -> None:
+    """A custom-role window like `server` running `bin/dev` must keep the
+    kitty window alive when the command exits or is Ctrl-C'd. Hop achieves
+    this by composing `<command>; <shell>` inside the launch args — when
+    `bin/dev` returns, the trailing shell takes over so the window stays
+    usable instead of disappearing."""
+    factory = StubKittyFactory(
+        [
+            {"ok": True, "data": []},
+            {"ok": True},
+        ]
+    )
+
+    from hop.layouts import WindowSpec
+
+    class FakeBackend:
+        # No prefix → inline is identity-substituted; matches a host backend.
+        def inline(self, command: str, _session: ProjectSession) -> str:
+            return command
+
+        def wrap(self, command: str, _session: ProjectSession) -> Sequence[str]:
+            return () if not command else ("sh", "-c", command)
+
+    adapter = KittyRemoteControlAdapter(
+        session_backend_for=lambda _session: FakeBackend(),  # type: ignore[arg-type]
+        session_windows_for=lambda _session: (
+            WindowSpec(role="shell", command="", autostart_active=True),
+            WindowSpec(role="server", command="bin/dev", autostart_active=True),
+        ),
+        transport_factory=factory,
+        launcher=StubLauncher(),
+    )
+
+    adapter.ensure_terminal(build_session(), role="server")
+
+    launch_call = factory.calls[1]
+    assert launch_call[1] == "launch"
+    payload = launch_call[2]
+    assert payload is not None
+    # The shell command in the resolved windows is "" (sentinel for platform
+    # default), so the post-exit shell falls back to ${SHELL:-sh}.
+    assert payload["args"] == ["sh", "-c", "bin/dev; ${SHELL:-sh}"]
+
+
+def test_launch_payload_composes_through_backend_prefix() -> None:
+    """Same Ctrl-C-survives behavior in a prefix backend — each piece is
+    wrapped by the prefix individually so the trailing shell still runs
+    inside the backend's environment."""
+    factory = StubKittyFactory(
+        [
+            {"ok": True, "data": []},
+            {"ok": True},
+        ]
+    )
+
+    from hop.layouts import WindowSpec
+
+    class FakeBackend:
+        def inline(self, command: str, _session: ProjectSession) -> str:
+            return f"compose exec devcontainer {command}"
+
+        def wrap(self, command: str, _session: ProjectSession) -> Sequence[str]:
+            inner = command or "${SHELL:-sh}"
+            return ("sh", "-c", f"compose exec devcontainer {inner}")
+
+    adapter = KittyRemoteControlAdapter(
+        session_backend_for=lambda _session: FakeBackend(),  # type: ignore[arg-type]
+        session_windows_for=lambda _session: (
+            WindowSpec(role="shell", command="", autostart_active=True),
+            WindowSpec(role="server", command="bin/dev", autostart_active=True),
+        ),
+        transport_factory=factory,
+        launcher=StubLauncher(),
+    )
+
+    adapter.ensure_terminal(build_session(), role="server")
+
+    payload = factory.calls[1][2]
+    assert payload is not None
+    assert payload["args"] == [
+        "sh",
+        "-c",
+        "compose exec devcontainer bin/dev; compose exec devcontainer ${SHELL:-sh}",
+    ]
+
+
+def test_launch_payload_does_not_compose_for_shell_role() -> None:
+    """The shell role IS the post-exit fallback — composition would just
+    spawn an extra shell after exit. Verify the wrap path is used directly."""
+    factory = StubKittyFactory(
+        [
+            {"ok": True, "data": []},
+            {"ok": True},
+        ]
+    )
+
+    from hop.layouts import WindowSpec
+
+    class FakeBackend:
+        def inline(self, command: str, _session: ProjectSession) -> str:
+            return command  # never called when wrap is used
+
+        def wrap(self, command: str, _session: ProjectSession) -> Sequence[str]:
+            return ("sh", "-c", "/usr/bin/zsh") if command else ()
+
+    adapter = KittyRemoteControlAdapter(
+        session_backend_for=lambda _session: FakeBackend(),  # type: ignore[arg-type]
+        session_windows_for=lambda _session: (
+            WindowSpec(role="shell", command="/usr/bin/zsh", autostart_active=True),
+        ),
+        transport_factory=factory,
+        launcher=StubLauncher(),
+    )
+
+    adapter.ensure_terminal(build_session(), role="shell-2")  # ad-hoc shell
+
+    payload = factory.calls[1][2]
+    assert payload is not None
+    # Ad-hoc shell falls through to the shell role's command via wrap,
+    # not the `; <shell>` composition.
+    assert payload["args"] == ["sh", "-c", "/usr/bin/zsh"]
 
 
 def test_bootstrap_calls_base_prepare_and_appends_shell_args_after_dash_dash() -> None:
@@ -326,15 +453,19 @@ def test_bootstrap_calls_base_prepare_and_appends_shell_args_after_dash_dash() -
 
     prepared: list[ProjectSession] = []
 
+    from hop.layouts import WindowSpec
+
     class FakeBackend:
-        def shell_args(self, _session: ProjectSession) -> Sequence[str]:
-            return ("podman-compose", "exec", "devcontainer", "/usr/bin/zsh")
+        def wrap(self, command: str, _session: ProjectSession) -> Sequence[str]:
+            inner = command or "${SHELL:-sh}"
+            return ("sh", "-c", f"podman-compose exec devcontainer {inner}")
 
         def prepare(self, session: ProjectSession) -> None:
             prepared.append(session)
 
     adapter = KittyRemoteControlAdapter(
         session_backend_for=lambda _session: FakeBackend(),  # type: ignore[arg-type]
+        session_windows_for=lambda _session: (WindowSpec(role="shell", command="/usr/bin/zsh", autostart_active=True),),
         transport_factory=factory,
         launcher=launcher,
         sleep=lambda _: None,
@@ -345,8 +476,8 @@ def test_bootstrap_calls_base_prepare_and_appends_shell_args_after_dash_dash() -
     assert prepared == [build_session()]
     assert len(launcher.calls) == 1
     args, _env = launcher.calls[0]
-    # Tail of args must be "--" then the shell_args list.
-    assert args[-5:] == ("--", "podman-compose", "exec", "devcontainer", "/usr/bin/zsh")
+    # Tail of args must be "--" then the wrapped shell args (sh -c "...").
+    assert args[-4:] == ("--", "sh", "-c", "podman-compose exec devcontainer /usr/bin/zsh")
 
 
 def test_close_window_addresses_session_socket() -> None:

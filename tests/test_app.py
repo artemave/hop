@@ -505,10 +505,9 @@ def _devcontainer_config() -> BackendConfig:
         name="devcontainer",
         default="test -f docker-compose.dev.yml",
         prepare="compose up -d devcontainer",
-        shell="compose exec devcontainer /usr/bin/zsh",
-        editor="compose exec devcontainer nvim --listen {listen_addr}",
         teardown="compose down",
         workspace="compose exec devcontainer pwd",
+        command_prefix="compose exec devcontainer",
     )
 
 
@@ -613,14 +612,12 @@ def test_session_base_registry_project_override_can_flip_autodetect(tmp_path: Pa
             BackendConfig(
                 name="primary",
                 default="test -e .",  # would normally win
-                shell="primary-shell",
-                editor="primary-editor",
+                command_prefix="primary-prefix",
             ),
             BackendConfig(
                 name="secondary",
                 default="test -e .",
-                shell="secondary-shell",
-                editor="secondary-editor",
+                command_prefix="secondary-prefix",
             ),
         )
     )
@@ -664,9 +661,8 @@ def test_session_backend_registry_uses_project_only_backend_definition(tmp_path:
     (tmp_path / ".hop.toml").write_text(
         """
 [backends.project-only]
-shell = "my-shell"
-editor = "my-editor --listen {listen_addr}"
-default = "true"
+default        = "true"
+command_prefix = "my-prefix"
 """,
     )
 
@@ -683,7 +679,7 @@ default = "true"
 
     assert isinstance(backend, CommandBackend)
     assert backend.name == "project-only"
-    assert backend.shell == "my-shell"
+    assert backend.command_prefix == "my-prefix"
 
 
 def test_session_backend_registry_project_only_backend_wins_autodetect(tmp_path: Path) -> None:
@@ -697,9 +693,8 @@ def test_session_backend_registry_project_only_backend_wins_autodetect(tmp_path:
     (tmp_path / ".hop.toml").write_text(
         """
 [backends.project-only]
-shell = "my-shell"
-editor = "my-editor --listen {listen_addr}"
-default = "true"
+default        = "true"
+command_prefix = "my-prefix"
 """,
     )
 
@@ -730,8 +725,7 @@ def test_session_backend_registry_for_session_returns_override(tmp_path: Path) -
     session = _make_session(tmp_path)
     override = CommandBackend(
         name="overridden",
-        shell="override-shell",
-        editor="override-editor",
+        command_prefix="overridden-prefix",
     )
     registry.set_override(session.session_name, override)
 
@@ -753,8 +747,7 @@ def test_session_backend_registry_for_session_returns_persisted_command_backend(
             project_root=tmp_path,
             backend=CommandBackendRecord(
                 name="legacy",
-                shell="legacy-shell",
-                editor="legacy-editor",
+                command_prefix="legacy-prefix",
                 prepare="legacy-prepare",
                 teardown="legacy-teardown",
                 workspace_command="legacy-workspace",
@@ -801,8 +794,7 @@ def test_record_for_backend_round_trips_command_and_host_backends(tmp_path: Path
 
     command = CommandBackend(
         name="devcontainer",
-        shell="compose exec devcontainer zsh",
-        editor="compose exec devcontainer nvim",
+        command_prefix="compose exec devcontainer",
         prepare_command="compose up -d",
         teardown_command="compose down",
         workspace_command="compose exec devcontainer pwd",
@@ -812,13 +804,17 @@ def test_record_for_backend_round_trips_command_and_host_backends(tmp_path: Path
 
     assert record == CommandBackendRecord(
         name="devcontainer",
-        shell="compose exec devcontainer zsh",
-        editor="compose exec devcontainer nvim",
+        command_prefix="compose exec devcontainer",
         prepare="compose up -d",
         teardown="compose down",
         workspace_command="compose exec devcontainer pwd",
         workspace_path="/workspace",
     )
+
+    # Round-trip back to a runtime backend keeps command_prefix intact.
+    restored = _backend_from_record(record)
+    assert isinstance(restored, CommandBackend)
+    assert restored.command_prefix == "compose exec devcontainer"
 
     host_record = _record_for_backend(HostBackend())
     assert host_record == HostBackendRecord()
@@ -836,8 +832,7 @@ def test_persist_bootstrap_record_writes_session_state(tmp_path: Path, monkeypat
     )
     backend = CommandBackend(
         name="devcontainer",
-        shell="compose exec devcontainer zsh",
-        editor="compose exec devcontainer nvim",
+        command_prefix="compose exec devcontainer",
     )
 
     _persist_bootstrap_record(session, backend)
@@ -889,8 +884,7 @@ def test_session_base_registry_persisted_state_wins_over_autodetect(tmp_path: Pa
             project_root=tmp_path,
             backend=CommandBackendRecord(
                 name="legacy",
-                shell="legacy-shell",
-                editor="legacy-editor",
+                command_prefix="legacy-prefix",
                 workspace_path="/legacy",
             ),
         )

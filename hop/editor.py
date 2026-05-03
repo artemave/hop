@@ -4,13 +4,16 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Mapping, Protocol, Sequence, cast
 
-from hop.backends import HostBackend, SessionBackend
+from hop.backends import SHELL_FALLBACK, HostBackend, SessionBackend
+from hop.config import EDITOR_ROLE as _EDITOR_ROLE_CONST
+from hop.config import SHELL_ROLE
 from hop.errors import HopError
 from hop.kitty import HOP_ROLE_VAR, KittyTransport, SocketKittyTransport, session_socket_address
+from hop.layouts import WindowSpec, find_window
 from hop.session import ProjectSession
 from hop.sway import SwayIpcAdapter, SwayWindow
 
-EDITOR_ROLE = "editor"
+EDITOR_ROLE = _EDITOR_ROLE_CONST
 EDITOR_OS_WINDOW_NAME = f"hop:{EDITOR_ROLE}"
 EDITOR_MARK_PREFIX = "_hop_editor:"
 EDITOR_READY_TIMEOUT_SECONDS = 5.0
@@ -29,6 +32,7 @@ _NORMAL_MODE = "\x1b"
 _CR = "\r"
 
 SessionBackendFactory = Callable[[ProjectSession], SessionBackend]
+SessionWindowsFactory = Callable[[ProjectSession], Sequence[WindowSpec]]
 
 
 class NeovimError(HopError):
@@ -230,12 +234,17 @@ class SharedNeovimEditorAdapter:
         sway: EditorSwayAdapter | None = None,
         kitty_io: KittyEditorIO | None = None,
         session_backend_for: SessionBackendFactory | None = None,
+        session_windows_for: SessionWindowsFactory | None = None,
         ready_timeout_seconds: float = EDITOR_READY_TIMEOUT_SECONDS,
         ready_poll_interval_seconds: float = EDITOR_READY_POLL_INTERVAL_SECONDS,
     ) -> None:
         self._sway: EditorSwayAdapter = sway or SwayIpcAdapter()
         self._kitty_io: KittyEditorIO = kitty_io or IpcKittyEditorIO()
         self._session_backend_for: SessionBackendFactory = session_backend_for or (lambda _session: HostBackend())
+        # Resolves the session's window list so the launch path can pick up
+        # user overrides for editor / shell commands. Default returns no
+        # windows so the built-in nvim + ${SHELL:-sh} fallback applies.
+        self._session_windows_for: SessionWindowsFactory = session_windows_for or (lambda _session: ())
         self._ready_timeout_seconds = ready_timeout_seconds
         self._ready_poll_interval_seconds = ready_poll_interval_seconds
 
@@ -296,12 +305,34 @@ class SharedNeovimEditorAdapter:
         backend = self._session_backend_for(session)
         self._kitty_io.launch_editor(
             session,
-            args=list(backend.editor_args(session)),
+            args=list(self._editor_launch_args(session, backend=backend)),
             os_window_class=EDITOR_OS_WINDOW_NAME,
             var=[f"{HOP_ROLE_VAR}={EDITOR_ROLE}"],
             keep_focus=keep_focus,
         )
         return self._adopt_new_editor_window(session, known_window_ids=known_window_ids), True
+
+    def _editor_launch_args(
+        self,
+        session: ProjectSession,
+        *,
+        backend: SessionBackend,
+    ) -> Sequence[str]:
+        # Compose `<editor>; <shell>` so the kitty window remains usable
+        # after the editor exits — `nvim -S Session.vim` to restore buffers,
+        # peek at git, etc. Each piece is wrapped through the backend's
+        # inline() helper so the prefix runs each side as its own backend
+        # exec, preserving today's two-call behavior. The post-exit shell
+        # falls back to ${SHELL:-sh} when the resolver yields the empty
+        # sentinel (built-in shell on host or backend default).
+        windows = self._session_windows_for(session)
+        editor_spec = find_window(windows, EDITOR_ROLE)
+        editor_command = editor_spec.command if editor_spec is not None and editor_spec.command else "nvim"
+        shell_spec = find_window(windows, SHELL_ROLE)
+        shell_command = shell_spec.command if shell_spec is not None and shell_spec.command else SHELL_FALLBACK
+        editor_inline = backend.inline(editor_command, session)
+        shell_inline = backend.inline(shell_command, session)
+        return ("sh", "-c", f"{editor_inline}; {shell_inline}")
 
     def _find_editor_window(self, session: ProjectSession) -> SwayWindow | None:
         # The session's editor is identified across hop runs by a Sway mark.

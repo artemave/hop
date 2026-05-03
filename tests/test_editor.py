@@ -336,7 +336,11 @@ def test_open_target_translates_host_path_via_backend(tmp_path: Path) -> None:
     assert str(project_root) not in data
 
 
-def test_launch_uses_backend_editor_args() -> None:
+def test_launch_composes_editor_then_shell_through_backend_inline() -> None:
+    """The editor adapter composes `<editor>; <shell>` so the kitty window
+    stays usable after the editor exits. Each piece goes through
+    backend.inline so the prefix wraps each one individually — preserving
+    the today's two-call exec behavior for prefix backends."""
     sway = StubSwayAdapter()
     captured: list[list[Any]] = []
 
@@ -356,8 +360,8 @@ def test_launch_uses_backend_editor_args() -> None:
     factory = TransportFactory(on_launch=on_launch)
 
     class FakeBackend:
-        def editor_args(self, _session: ProjectSession) -> Sequence[str]:
-            return ("podman-compose", "exec", "devcontainer", "nvim")
+        def inline(self, command: str, _session: ProjectSession) -> str:
+            return f"podman-compose exec devcontainer {command}"
 
     adapter = make_adapter(
         sway=sway,
@@ -367,7 +371,14 @@ def test_launch_uses_backend_editor_args() -> None:
 
     adapter.focus(build_session())
 
-    assert captured == [["podman-compose", "exec", "devcontainer", "nvim"]]
+    assert captured == [
+        [
+            "sh",
+            "-c",
+            "podman-compose exec devcontainer nvim; "
+            "podman-compose exec devcontainer ${SHELL:-sh}",
+        ]
+    ]
 
 
 def test_focus_relocates_freshly_launched_editor_to_session_workspace() -> None:

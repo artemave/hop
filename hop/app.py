@@ -44,7 +44,9 @@ from hop.config import (
     load_global_config,
     load_project_config,
     merge_backends,
+    merge_configs,
 )
+from hop.layouts import WindowSpec, resolve_windows
 from hop.editor import SharedNeovimEditorAdapter
 from hop.kitty import KittyRemoteControlAdapter, KittyWindow, KittyWindowContext, KittyWindowState
 from hop.session import ProjectSession, resolve_project_session
@@ -161,13 +163,7 @@ class SessionBackendRegistry:
         if persisted is not None:
             return _backend_from_record(persisted.backend)
 
-        global_config = self._global_config_loader()
-        project_config = load_project_config(session.project_root)
-
-        # Project entries come first in auto-detect order; same-named entries
-        # field-merge with project fields winning. select_backend filters out
-        # entries that don't end up runnable (no shell or no editor).
-        configured = merge_backends(project_config, global_config)
+        configured = self._merged_config(session).backends
 
         if self._runner is not None:
             chosen = select_backend(
@@ -197,6 +193,18 @@ class SessionBackendRegistry:
         workspace_path = backend.discover_workspace(session)
         return backend.with_workspace_path(workspace_path)
 
+    def resolve_windows_for_entry(self, session: ProjectSession) -> tuple[WindowSpec, ...]:
+        from hop.backends import _default_runner  # local import to avoid cycle at module load.
+
+        merged = self._merged_config(session)
+        runner = self._runner if self._runner is not None else _default_runner
+        return resolve_windows(merged, session, runner=runner)
+
+    def _merged_config(self, session: ProjectSession) -> HopConfig:
+        global_config = self._global_config_loader()
+        project_config = load_project_config(session.project_root)
+        return merge_configs(project_config, global_config)
+
     def set_override(self, session_name: str, backend: SessionBackend) -> None:
         self._overrides[session_name] = backend
 
@@ -208,8 +216,7 @@ def _backend_from_record(record: BackendRecord) -> SessionBackend:
     if isinstance(record, CommandBackendRecord):
         return CommandBackend(
             name=record.name,
-            shell=record.shell,
-            editor=record.editor,
+            command_prefix=record.command_prefix,
             prepare_command=record.prepare,
             teardown_command=record.teardown,
             workspace_command=record.workspace_command,
@@ -224,8 +231,7 @@ def _record_for_backend(backend: SessionBackend) -> BackendRecord:
     if isinstance(backend, CommandBackend):
         return CommandBackendRecord(
             name=backend.name,
-            shell=backend.shell,
-            editor=backend.editor,
+            command_prefix=backend.command_prefix,
             prepare=backend.prepare_command,
             teardown=backend.teardown_command,
             workspace_command=backend.workspace_command,
@@ -275,11 +281,18 @@ def execute_command(
                 backend = services.session_backends.resolve_for_entry(session, backend_name=backend_name)
                 services.session_backends.set_override(session.session_name, backend)
                 try:
+                    windows = (
+                        services.session_backends.resolve_windows_for_entry(session)
+                        if is_first_entry
+                        else ()
+                    )
                     enter_project_session(
                         current_directory,
                         sway=services.sway,
                         terminals=services.kitty,
                         editor=services.neovim if is_first_entry else None,
+                        browser=services.browser if is_first_entry else None,
+                        windows=windows,
                     )
                 finally:
                     services.session_backends.clear_override(session.session_name)
@@ -351,17 +364,19 @@ def build_default_services() -> HopServices:
     registry = SessionBackendRegistry()
     kitty = KittyRemoteControlAdapter(
         session_backend_for=registry.for_session,
+        session_windows_for=registry.resolve_windows_for_entry,
         on_session_bootstrap=_persist_bootstrap_record,
     )
     neovim = SharedNeovimEditorAdapter(
         sway=sway,
         session_backend_for=registry.for_session,
+        session_windows_for=registry.resolve_windows_for_entry,
     )
     return HopServices(
         sway=sway,
         kitty=kitty,
         neovim=neovim,
-        browser=SessionBrowserAdapter(sway=sway),
+        browser=SessionBrowserAdapter(sway=sway, session_windows_for=registry.resolve_windows_for_entry),
         session_backends=registry,
     )
 
@@ -378,17 +393,19 @@ def build_kitten_services(boss: object) -> HopServices:
     registry = SessionBackendRegistry()
     kitty = KittyRemoteControlAdapter(
         session_backend_for=registry.for_session,
+        session_windows_for=registry.resolve_windows_for_entry,
         on_session_bootstrap=_persist_bootstrap_record,
     )
     neovim = SharedNeovimEditorAdapter(
         sway=sway,
         kitty_io=BossKittyEditorIO(boss),
         session_backend_for=registry.for_session,
+        session_windows_for=registry.resolve_windows_for_entry,
     )
     return HopServices(
         sway=sway,
         kitty=kitty,
         neovim=neovim,
-        browser=SessionBrowserAdapter(sway=sway),
+        browser=SessionBrowserAdapter(sway=sway, session_windows_for=registry.resolve_windows_for_entry),
         session_backends=registry,
     )

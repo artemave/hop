@@ -18,12 +18,17 @@ from hop.config import (
 from hop.errors import HopError
 from hop.session import ProjectSession
 
-NVIM_COMMAND = "nvim"
-
 # Sentinel hostnames that, inside a non-host backend's network namespace, all
 # refer to "this session's local interface" — i.e. the value the kitten dispatch
 # may need to translate before handing the URL to the host's browser.
 LOCALHOST_HOSTS = frozenset({"localhost", "127.0.0.1", "0.0.0.0"})
+
+# Fallback shell snippet used when wrapping an empty command through a
+# command_prefix. The outer sh expands ${SHELL:-sh} before the prefix exec
+# runs, so the resulting binary is whatever path the user's host shell
+# resolves to — which works as long as the same path exists in the backend's
+# environment (the typical case for container-backed dev setups).
+SHELL_FALLBACK = "${SHELL:-sh}"
 
 
 class SessionBackendError(HopError):
@@ -31,11 +36,14 @@ class SessionBackendError(HopError):
 
 
 class SessionBackend(Protocol):
+    @property
+    def command_prefix(self) -> str | None: ...
+
     def prepare(self, session: ProjectSession) -> None: ...
 
-    def shell_args(self, session: ProjectSession) -> Sequence[str]: ...
+    def wrap(self, command: str, session: ProjectSession) -> Sequence[str]: ...
 
-    def editor_args(self, session: ProjectSession) -> Sequence[str]: ...
+    def inline(self, command: str, session: ProjectSession) -> str: ...
 
     def translate_terminal_cwd(self, session: ProjectSession, cwd: Path) -> Path: ...
 
@@ -44,35 +52,6 @@ class SessionBackend(Protocol):
     def translate_localhost_url(self, session: ProjectSession, url: str) -> str: ...
 
     def teardown(self, session: ProjectSession) -> None: ...
-
-
-@dataclass(frozen=True, slots=True)
-class HostBackend:
-    def prepare(self, session: ProjectSession) -> None:
-        return None
-
-    def shell_args(self, session: ProjectSession) -> Sequence[str]:
-        return ()
-
-    def editor_args(self, session: ProjectSession) -> Sequence[str]:
-        # Wrap nvim in an sh that drops into the user's interactive shell
-        # after exit. Without this, kitty closes the editor window the moment
-        # nvim quits — the user can't run `nvim -S` to restore buffers, can't
-        # peek at git state, can't do anything. The post-exit shell uses the
-        # window's $SHELL (with /bin/sh as the fallback).
-        return ("sh", "-c", f"{NVIM_COMMAND}; ${{SHELL:-sh}}")
-
-    def translate_terminal_cwd(self, session: ProjectSession, cwd: Path) -> Path:
-        return cwd
-
-    def translate_host_path(self, session: ProjectSession, host_path: Path) -> Path:
-        return host_path
-
-    def translate_localhost_url(self, session: ProjectSession, url: str) -> str:
-        return url
-
-    def teardown(self, session: ProjectSession) -> None:
-        return None
 
 
 CommandRunner = Callable[[Sequence[str], Path], subprocess.CompletedProcess[str]]
@@ -89,25 +68,63 @@ def _default_runner(args: Sequence[str], cwd: Path) -> subprocess.CompletedProce
 
 
 @dataclass(frozen=True, slots=True)
+class HostBackend:
+    @property
+    def command_prefix(self) -> str | None:
+        return None
+
+    def prepare(self, session: ProjectSession) -> None:
+        return None
+
+    def wrap(self, command: str, session: ProjectSession) -> Sequence[str]:
+        if not command:
+            # Empty sentinel: caller delegates shell choice to the platform.
+            # Returning empty argv lets kitty's launch path pass no exec args
+            # so kitty picks the user's login shell from /etc/passwd.
+            return ()
+        return ("sh", "-c", _substitute(command, session=session))
+
+    def inline(self, command: str, session: ProjectSession) -> str:
+        return _substitute(command, session=session)
+
+    def translate_terminal_cwd(self, session: ProjectSession, cwd: Path) -> Path:
+        return cwd
+
+    def translate_host_path(self, session: ProjectSession, host_path: Path) -> Path:
+        return host_path
+
+    def translate_localhost_url(self, session: ProjectSession, url: str) -> str:
+        return url
+
+    def teardown(self, session: ProjectSession) -> None:
+        return None
+
+
+@dataclass(frozen=True, slots=True)
 class CommandBackend:
     """A SessionBackend whose lifecycle is described by shell command strings.
 
-    Every command field is a shell snippet hop runs via ``sh -c``, after
-    substituting placeholders. The values come straight from the config
-    file: whatever you would type at a terminal, including pipes and
-    ``$(...)``. Placeholder values are shell-quoted before insertion, so
-    paths with spaces or special characters substitute safely.
+    Lifecycle commands (``prepare`` / ``teardown`` / ``workspace`` / translate
+    helpers) and ``command_prefix`` are shell snippets hop runs via ``sh -c``
+    after substituting placeholders. The values come straight from the config
+    file: whatever you would type at a terminal, including pipes and ``$(...)``.
+    Placeholder values are shell-quoted before insertion.
 
-    ``workspace_path`` is captured at session creation by running the
-    backend's ``workspace`` command and is used to translate terminal cwds
-    back to host paths in the open_selection kitten dispatch. When
-    ``workspace_path`` is ``None`` (no ``workspace`` command configured),
-    translation is identity.
+    ``command_prefix`` is the shell snippet that wraps every window's command
+    launched in this backend's environment (e.g. ``podman-compose -f
+    docker-compose.dev.yml exec devcontainer``). Hop joins it with the window's
+    command via a single space at launch time. Per-role launch commands
+    themselves live in top-level ``[layouts.<name>]`` and ``[windows.<role>]``
+    config sections, not on the backend.
+
+    ``workspace_path`` is captured at session creation by running the backend's
+    ``workspace`` command and is used to translate terminal cwds back to host
+    paths in the open_selection kitten dispatch. When ``workspace_path`` is
+    ``None`` (no ``workspace`` command configured), translation is identity.
     """
 
     name: str
-    shell: str
-    editor: str
+    command_prefix: str | None = None
     prepare_command: str | None = None
     teardown_command: str | None = None
     workspace_command: str | None = None
@@ -125,19 +142,31 @@ class CommandBackend:
             msg = f"backend {self.name!r} prepare failed for {session.session_name!r}: {stderr}"
             raise SessionBackendError(msg)
 
-    def shell_args(self, session: ProjectSession) -> Sequence[str]:
-        return _sh_c(_substitute(self.shell, session=session))
+    def wrap(self, command: str, session: ProjectSession) -> Sequence[str]:
+        if not command:
+            # Empty sentinel: a built-in shell window with no override. With
+            # no prefix this means "kitty default shell" (handled at the host
+            # branch in HostBackend.wrap). With a prefix, we still need to
+            # exec *something* inside the backend — fall back to ${SHELL:-sh}
+            # so the wrap has a binary to launch.
+            return _sh_c(self.inline(SHELL_FALLBACK, session=session))
+        return _sh_c(self.inline(command, session=session))
 
-    def editor_args(self, session: ProjectSession) -> Sequence[str]:
-        # Run the configured editor, then fall through to the configured
-        # shell so the kitty window remains usable after the editor exits
-        # (`nvim -S Session.vim` to restore buffers, etc.). Both fragments
-        # are user-supplied shell snippets meant to be valid in `sh -c`, so
-        # `;`-joining is safe; the post-exit shell ends up inside the same
-        # backend (devcontainer, ssh host, ...) as the editor was running in.
-        editor = _substitute(self.editor, session=session)
-        shell = _substitute(self.shell, session=session)
-        return _sh_c(f"{editor}; {shell}")
+    def inline(self, command: str, session: ProjectSession) -> str:
+        """Build the substituted, prefix-wrapped command string (no sh -c).
+
+        Used when the caller composes multiple commands (e.g. the editor
+        adapter's ``<editor>; <shell>`` post-exit drop) before a single
+        outer ``sh -c`` wraps the script. Each piece must be wrapped by
+        the prefix individually so the ``;`` separator runs each piece
+        as its own backend exec, preserving today's two-call behavior.
+        """
+
+        substituted = _substitute(command, session=session)
+        if self.command_prefix is None:
+            return substituted
+        substituted_prefix = _substitute(self.command_prefix, session=session)
+        return f"{substituted_prefix} {substituted}"
 
     def translate_terminal_cwd(self, session: ProjectSession, cwd: Path) -> Path:
         if self.workspace_path is None:
@@ -231,8 +260,7 @@ class CommandBackend:
     def with_workspace_path(self, workspace_path: str | None) -> "CommandBackend":
         return CommandBackend(
             name=self.name,
-            shell=self.shell,
-            editor=self.editor,
+            command_prefix=self.command_prefix,
             prepare_command=self.prepare_command,
             teardown_command=self.teardown_command,
             workspace_command=self.workspace_command,
@@ -275,35 +303,30 @@ def select_backend(
 ) -> BackendConfig | None:
     """Choose which backend (if any) applies to ``session``.
 
-    Returns ``None`` to mean "use HostBackend". Only runnable backends
-    (those with both ``shell`` and ``editor`` set) are considered.
+    Returns ``None`` to mean "use HostBackend".
 
     Resolution rules:
 
     - ``pinned_name == "host"`` short-circuits to host.
-    - ``pinned_name`` (any other value) picks the runnable backend with that
-      name. Raises ``UnknownBackendError`` when no runnable backend matches —
-      either because the name is missing entirely, or because the merged
-      definition lacks ``shell`` or ``editor``.
+    - ``pinned_name`` (any other value) picks the backend with that name. Raises
+      ``UnknownBackendError`` when no backend matches.
     - Otherwise auto-detect walks ``backends`` in declaration order and runs
-      each runnable backend's ``default`` command (skipping ones without a
-      ``default``); the first that exits 0 wins. If none succeed, returns
-      ``None`` so the host backend is used as the implicit fallback.
+      each backend's ``default`` command (skipping ones without a ``default``);
+      the first that exits 0 wins. If none succeed, returns ``None`` so the
+      host backend is used as the implicit fallback.
     """
 
     if pinned_name == HOST_BACKEND_NAME:
         return None
 
-    runnable = [b for b in backends if b.is_runnable]
-
     if pinned_name is not None:
-        for candidate in runnable:
+        for candidate in backends:
             if candidate.name == pinned_name:
                 return candidate
         msg = f"unknown backend {pinned_name!r}"
         raise UnknownBackendError(msg)
 
-    for candidate in runnable:
+    for candidate in backends:
         if candidate.default is None:
             continue
         substituted = _substitute(candidate.default, session=session)
@@ -319,13 +342,9 @@ def backend_from_config(
     workspace_path: str | None = None,
     runner: CommandRunner = _default_runner,
 ) -> CommandBackend:
-    if config.shell is None or config.editor is None:
-        msg = f"backend {config.name!r} is missing shell or editor; only runnable backends can be instantiated"
-        raise UnknownBackendError(msg)
     return CommandBackend(
         name=config.name,
-        shell=config.shell,
-        editor=config.editor,
+        command_prefix=config.command_prefix,
         prepare_command=config.prepare,
         teardown_command=config.teardown,
         workspace_command=config.workspace,

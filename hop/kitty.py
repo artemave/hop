@@ -10,9 +10,16 @@ from pathlib import Path
 from tempfile import gettempdir
 from typing import Any, Callable, Mapping, Protocol, Sequence, cast
 
-from hop.backends import HostBackend, SessionBackend
+from hop.backends import SHELL_FALLBACK, HostBackend, SessionBackend
+from hop.config import SHELL_ROLE
 from hop.errors import HopError
+from hop.layouts import WindowSpec, find_window
 from hop.session import ProjectSession
+
+# `shell-2`, `shell-3`, ... — ad-hoc shells spawned by `hop` from inside an
+# existing session. These are shells, not user commands, so they don't get
+# the "drop into shell on exit" composition that other roles do.
+ADHOC_SHELL_ROLE_PREFIX = "shell-"
 
 KITTY_LISTEN_ON_ENV_VAR = "KITTY_LISTEN_ON"
 KITTY_PROTOCOL_VERSION = (0, 39, 0)
@@ -49,6 +56,7 @@ TransportFactory = Callable[[str | None], KittyTransport]
 KittyLauncher = Callable[[Sequence[str], Mapping[str, str]], None]
 SessionBootstrapHook = Callable[["ProjectSession", SessionBackend], None]
 SessionBackendFactory = Callable[["ProjectSession"], SessionBackend]
+SessionWindowsFactory = Callable[["ProjectSession"], Sequence[WindowSpec]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,6 +105,7 @@ class KittyRemoteControlAdapter:
         self,
         *,
         session_backend_for: SessionBackendFactory | None = None,
+        session_windows_for: SessionWindowsFactory | None = None,
         transport_factory: TransportFactory | None = None,
         launcher: KittyLauncher | None = None,
         on_session_bootstrap: SessionBootstrapHook | None = None,
@@ -104,6 +113,10 @@ class KittyRemoteControlAdapter:
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._session_backend_for: SessionBackendFactory = session_backend_for or (lambda _session: HostBackend())
+        # Resolves the window list for this session — used by `_launch_payload`
+        # to pick the role's command. Default returns no windows so ad-hoc
+        # roles fall through to the empty-shell sentinel (host default shell).
+        self._session_windows_for: SessionWindowsFactory = session_windows_for or (lambda _session: ())
         self._transport_factory: TransportFactory = transport_factory or _default_transport_factory
         self._launcher: KittyLauncher = launcher or _default_launcher
         self._on_session_bootstrap: SessionBootstrapHook = on_session_bootstrap or (lambda _session, _backend: None)
@@ -283,10 +296,15 @@ class KittyRemoteControlAdapter:
             "--override",
             "allow_remote_control=yes",
         ]
-        shell_args = list(backend.shell_args(session))
-        if shell_args:
+        # Bootstrap always launches the shell role: a freshly created kitty
+        # process needs at least one window. Resolve the shell command from
+        # the active layout/windows config (built-in default is "" → kitty's
+        # platform-default shell on host).
+        shell_command = self._command_for_role(session, SHELL_ROLE)
+        shell_argv = list(backend.wrap(shell_command, session))
+        if shell_argv:
             kitty_args.append("--")
-            kitty_args.extend(shell_args)
+            kitty_args.extend(shell_argv)
         self._launcher(tuple(kitty_args), dict(os.environ))
         self._wait_for_session_kitty(addr)
         # Kitty's CLI doesn't accept --var, so the bootstrap window has no
@@ -356,8 +374,13 @@ class KittyRemoteControlAdapter:
         role: str,
         keep_focus: bool,
     ) -> dict[str, object]:
+        # Declared roles (server, test, console, ...) launch the resolved
+        # command from layouts / top-level windows. Ad-hoc roles like
+        # `shell-2` aren't declared, so they fall back to the shell role's
+        # command — preserving "ask for any role, get a shell" ergonomic.
+        args = list(self._launch_args(session, backend=backend, role=role))
         return {
-            "args": list(backend.shell_args(session)),
+            "args": args,
             "cwd": str(session.project_root),
             "type": "os-window",
             "keep_focus": keep_focus,
@@ -369,6 +392,43 @@ class KittyRemoteControlAdapter:
             "os_window_class": _os_window_name(role),
             "var": [f"{HOP_ROLE_VAR}={role}"],
         }
+
+    def _launch_args(
+        self,
+        session: ProjectSession,
+        *,
+        backend: SessionBackend,
+        role: str,
+    ) -> Sequence[str]:
+        command = self._command_for_role(session, role)
+        # The shell role IS the post-exit fallback, so no composition needed.
+        # An empty command (no resolved spec, no windows resolver wired) is
+        # also treated as shell-like — the wrap path's empty-command branch
+        # handles it (kitty default on host, ${SHELL:-sh} inside a prefix).
+        if _is_shell_role(role) or not command:
+            return backend.wrap(command, session)
+        # For everything else (server, log, console, custom, ...), compose
+        # `<command>; <shell>` so the kitty window stays open if the role's
+        # process exits cleanly or is Ctrl-C'd. Each piece is wrapped
+        # through the prefix individually (via inline) before a single
+        # outer sh -c, so the `;` runs each side as its own backend exec.
+        shell_command = self._command_for_role(session, SHELL_ROLE) or SHELL_FALLBACK
+        command_inline = backend.inline(command, session)
+        shell_inline = backend.inline(shell_command, session)
+        return ("sh", "-c", f"{command_inline}; {shell_inline}")
+
+    def _command_for_role(self, session: ProjectSession, role: str) -> str:
+        windows = self._session_windows_for(session)
+        spec = find_window(windows, role)
+        if spec is not None:
+            return spec.command
+        # Ad-hoc role (e.g. shell-2) or no resolver wired (default factory):
+        # fall back to the shell role's command, then to the empty sentinel
+        # (handled by backend.wrap as "use platform default").
+        shell_spec = find_window(windows, SHELL_ROLE)
+        if shell_spec is not None:
+            return shell_spec.command
+        return ""
 
 
 class SocketKittyTransport:
@@ -571,3 +631,7 @@ def _socket_address(listen_on: str) -> str:
 
 def _os_window_name(role: str) -> str:
     return f"hop:{role}"
+
+
+def _is_shell_role(role: str) -> bool:
+    return role == SHELL_ROLE or role.startswith(ADHOC_SHELL_ROLE_PREFIX)

@@ -21,15 +21,17 @@ class HostBackendRecord:
 class CommandBackendRecord:
     """Persisted command-template backend chosen at session creation.
 
-    Each command field is a shell snippet (run via ``sh -c`` after
-    placeholder substitution). Subsequent commands instantiate a
-    CommandBackend directly from this record without re-reading the global
-    config.
+    Lifecycle commands (``prepare`` / ``teardown`` / ``workspace`` / translate
+    helpers) and ``command_prefix`` are shell snippets (run via ``sh -c``
+    after placeholder substitution). Per-role launch commands are NOT
+    persisted — layouts and top-level windows live in the active config and
+    re-resolve on every session entry, so adding a layout or `bin/rails` to a
+    project after the session was first created picks up on the next
+    `hop kill` + `hop` cycle.
     """
 
     name: str
-    shell: str
-    editor: str
+    command_prefix: str | None = None
     prepare: str | None = None
     teardown: str | None = None
     workspace_command: str | None = None
@@ -42,9 +44,9 @@ class CommandBackendRecord:
         payload: dict[str, object] = {
             "type": "command",
             "name": self.name,
-            "shell": self.shell,
-            "editor": self.editor,
         }
+        if self.command_prefix is not None:
+            payload["command_prefix"] = self.command_prefix
         if self.prepare is not None:
             payload["prepare"] = self.prepare
         if self.teardown is not None:
@@ -134,13 +136,10 @@ def _decode_backend_record(raw: object) -> BackendRecord:
         kind = record.get("type")
         if kind == "command":
             backend_name = record.get("name")
-            shell = record.get("shell")
-            editor = record.get("editor")
-            if isinstance(backend_name, str) and isinstance(shell, str) and isinstance(editor, str):
+            if isinstance(backend_name, str):
                 return CommandBackendRecord(
                     name=backend_name,
-                    shell=shell,
-                    editor=editor,
+                    command_prefix=_optional_str(record.get("command_prefix")),
                     prepare=_optional_str(record.get("prepare")),
                     teardown=_optional_str(record.get("teardown")),
                     workspace_command=_optional_str(record.get("workspace_command")),

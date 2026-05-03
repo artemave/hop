@@ -281,6 +281,65 @@ def test_subprocess_browser_launcher_invokes_popen(monkeypatch: pytest.MonkeyPat
     }
 
 
+def test_browser_launch_spec_from_command_string_parses_argv() -> None:
+    spec = BrowserLaunchSpec.from_command_string("firefox --new-window")
+
+    assert spec.command == ("firefox", "--new-window")
+    # The executable name in argv[0] doubles as a window identifier so
+    # Sway-side rediscovery can match the launched window.
+    assert "firefox" in spec.window_identifiers
+    assert spec.new_window_flag == "--new-window"
+
+
+def test_browser_launch_spec_from_command_string_rejects_empty_argv() -> None:
+    with pytest.raises(BrowserCommandError, match="empty argv"):
+        BrowserLaunchSpec.from_command_string("   ")
+
+
+def test_browser_launch_spec_from_command_string_handles_full_path_executable() -> None:
+    spec = BrowserLaunchSpec.from_command_string("/usr/bin/firefox-developer-edition --new-window")
+
+    assert spec.command == ("/usr/bin/firefox-developer-edition", "--new-window")
+    # Identifier discovery normalizes through Path().name → just the basename.
+    assert "firefox-developer-edition" in spec.window_identifiers
+
+
+def test_session_browser_adapter_uses_top_level_browser_window_override() -> None:
+    """A user-declared `[windows.browser] command = "..."` overrides hop's
+    xdg-detected default. Without a session_windows_for, the existing xdg
+    detection path runs."""
+    from hop.layouts import WindowSpec
+
+    sway = StubSwayAdapter([])
+
+    def launch(args: Sequence[str], *, cwd: Path) -> None:
+        sway.windows.append(
+            SwayWindow(
+                id=99,
+                workspace_name="p:demo",
+                app_id="custom-browser",
+                window_class=None,
+                marks=(),
+            )
+        )
+
+    launcher = StubBrowserLauncher()
+    launcher.launch = launch  # type: ignore[method-assign]
+
+    adapter = SessionBrowserAdapter(
+        sway=sway,
+        launcher=launcher,
+        session_windows_for=lambda _session: (
+            WindowSpec(role="browser", command="custom-browser --kiosk", autostart_active=True),
+        ),
+    )
+
+    adapter.ensure_browser(build_session(), url=None)
+
+    # Custom command was used to launch the browser. No xdg detection needed.
+    assert sway.marks == [(99, "_hop_browser:demo")]
+
+
 def test_subprocess_runner_invokes_subprocess_run(monkeypatch: pytest.MonkeyPatch) -> None:
     expected = CompletedProcess(("firefox",), 0, "ok", "")
 

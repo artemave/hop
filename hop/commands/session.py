@@ -4,13 +4,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Protocol, Sequence
 
+from hop.config import BROWSER_ROLE, EDITOR_ROLE, SHELL_ROLE
 from hop.errors import HopError
 from hop.kitty import KittyWindow
+from hop.layouts import WindowSpec
 from hop.session import ProjectSession, resolve_project_session
 from hop.state import SessionState, load_sessions
 
 SESSION_WORKSPACE_PREFIX = "p:"
-SHELL_TERMINAL_ROLE = "shell"
+SHELL_TERMINAL_ROLE = SHELL_ROLE
 ADHOC_SHELL_ROLE_PREFIX = "shell-"
 
 
@@ -39,12 +41,18 @@ class SessionEditorAdapter(Protocol):
     def ensure(self, session: ProjectSession) -> bool: ...
 
 
+class SessionBrowserAutostartAdapter(Protocol):
+    def ensure_browser(self, session: ProjectSession, *, url: str | None) -> None: ...
+
+
 def enter_project_session(
     cwd: Path | str,
     *,
     sway: SessionSwayAdapter,
     terminals: SessionTerminalAdapter,
     editor: SessionEditorAdapter | None = None,
+    browser: SessionBrowserAutostartAdapter | None = None,
+    windows: Sequence[WindowSpec] = (),
 ) -> ProjectSession:
     session = resolve_project_session(cwd)
     sway.switch_to_workspace(session.workspace_name)
@@ -56,8 +64,28 @@ def enter_project_session(
     # `editor` is only passed on first entry to a session — re-entry from
     # another workspace must not resurrect a deliberately-closed editor.
     terminals.ensure_terminal(session, role=SHELL_TERMINAL_ROLE)
-    if editor is not None:
+    if editor is None:
+        # Re-entry path: caller signals "shell only" by omitting the editor
+        # adapter. The autostart sweep is gated on the same signal.
+        return session
+    if not windows:
+        # No resolved windows (legacy callers/tests): fall back to bringing
+        # up the editor alongside the shell, matching the pre-resolver
+        # bootstrap behavior.
         editor.ensure(session)
+        return session
+    for window in windows:
+        if window.role == SHELL_ROLE:
+            continue
+        if not window.autostart_active:
+            continue
+        if window.role == EDITOR_ROLE:
+            editor.ensure(session)
+        elif window.role == BROWSER_ROLE:
+            if browser is not None:
+                browser.ensure_browser(session, url=None)
+        else:
+            terminals.ensure_terminal(session, role=window.role)
     return session
 
 

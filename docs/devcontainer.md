@@ -53,12 +53,10 @@ Create `${XDG_CONFIG_HOME:-~/.config}/hop/config.toml`:
 
 ```toml
 [backends.devcontainer]
-default   = "test -f docker-compose.dev.yml"
-prepare   = "podman-compose -f docker-compose.dev.yml up -d devcontainer"
-shell     = "podman-compose -f docker-compose.dev.yml exec devcontainer /usr/bin/zsh"
-editor    = "podman-compose -f docker-compose.dev.yml exec devcontainer nvim"
-teardown  = "podman-compose -f docker-compose.dev.yml down"
-workspace = "podman-compose -f docker-compose.dev.yml exec devcontainer pwd"
+default        = "test -f docker-compose.dev.yml"
+prepare        = "podman-compose -f docker-compose.dev.yml up -d devcontainer"
+teardown       = "podman-compose -f docker-compose.dev.yml down"
+workspace      = "podman-compose -f docker-compose.dev.yml exec devcontainer pwd"
 port_translate = """
   podman ps -q \\
     --filter label=io.podman.compose.project=$(basename {project_root}) \\
@@ -67,7 +65,10 @@ port_translate = """
     | xargs -r -I@ podman port @ {port} \\
     | cut -d: -f2
 """
+command_prefix = "podman-compose -f docker-compose.dev.yml exec devcontainer"
 ```
+
+The backend's `command_prefix` wraps every window command launched in this backend's environment. The built-in shell and editor (`${SHELL:-sh}` and `nvim`) automatically get the prefix prepended — you don't need to declare per-role commands here unless you want to override them.
 
 Each command is a single string. Hop runs it through `sh -c` after substituting placeholders, so pipes, redirects, and `$(...)` work — write the value the way you'd type it at a terminal. Triple-quoted strings (`"""…"""`) let you spread a longer pipeline across lines for readability. Placeholder values (`{project_root}`, `{port}`) are shell-quoted before insertion, so paths with spaces substitute safely.
 
@@ -106,18 +107,17 @@ The `backend.workspace_path` field shows the value `workspace` returned (e.g. `/
 
 ## Project config
 
-`<project_root>/.hop.toml` uses **the same `[backends.<name>]` schema** as the global file. Drop in whatever subset of fields you want. Hop merges the two files when resolving the session backend:
+`<project_root>/.hop.toml` uses **the same schema** as the global file — backends, layouts, and top-level windows are all parseable in either place. Drop in whatever subset of sections you want. Hop merges the two files when resolving:
 
-- Project entries come first in auto-detect order.
+- Project entries come first in auto-detect / declaration order.
 - Same-named entries are field-merged with project fields winning. The merged entry takes the project's slot.
-- Backends without `shell` and `editor` after merge are dropped silently.
 
-A single project file can override fields, force/skip a backend via its `default` probe, and define a brand-new backend — there is no syntactic distinction between these uses:
+A single project file can override one field of a global backend, force/skip a backend via its `default` probe, declare project-specific layouts and windows, and define a brand-new backend — there is no syntactic distinction between these uses:
 
 ```toml
 # Override one field of a global backend (this project's compose service is named "app").
 [backends.devcontainer]
-shell = "docker compose -f compose.dev.yml exec app /usr/bin/zsh"
+command_prefix = "docker compose -f compose.dev.yml exec app"
 
 # Force a backend to win auto-detect in this project.
 # [backends.devcontainer]
@@ -127,12 +127,22 @@ shell = "docker compose -f compose.dev.yml exec app /usr/bin/zsh"
 # [backends.other]
 # default = "false"
 
+# A project-specific layout (e.g. one Rails project with a worker process).
+[layouts.this-project]
+autostart = "true"
+
+[layouts.this-project.windows.worker]
+command = "bin/jobs"
+
+# A top-level window that always autostarts in this project.
+[windows.log]
+command = "tail -f log/development.log"
+
 # Define a project-specific backend that doesn't exist globally.
 [backends.my-vm]
-default   = "test -f .my-vm-marker"
-shell     = "lima shell default -- /usr/bin/zsh"
-editor    = "lima shell default -- nvim"
-workspace = "lima shell default -- pwd"
+default        = "test -f .my-vm-marker"
+workspace      = "lima shell default -- pwd"
+command_prefix = "lima shell default --"
 ```
 
 To force the host backend for a project, pass `hop --backend host` once at session creation (persisted), or override every configured backend's `default` to a failing command.

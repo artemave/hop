@@ -196,59 +196,86 @@ File-shaped tokens that don't resolve to a real file under the source window's c
 
 ## Session backends
 
-A session has a **backend** that decides where its shells and editor run. The default is **host**. Other backends - devcontainer, ssh, anything else describable as a chain of commands - are configured as named entries in `~/.config/hop/config.toml` or a project's `.hop.toml`. Both files use the same `[backends.<name>]` schema and are merged at session entry.
+A session has a **backend** that decides where its windows run. The default is **host**. Other backends - devcontainer, ssh, anything else describable as a chain of commands - are configured as named entries in `~/.config/hop/config.toml` or a project's `.hop.toml`. Both files use the **same schema** and are merged at session entry — there is no difference between global and project configs beyond which file you put a section in.
 
 ### Auto-detection
 
 When you enter a session (bare `hop`), hop walks the configured backends in declaration order and runs each backend's `default` probe in the project root. The first one that exits 0 wins. If none succeed, the session falls back to **host**. The chosen backend is persisted and reused for all subsequent commands against that session.
 
-### Global config
+### Three top-level sections
 
-Create `${XDG_CONFIG_HOME:-~/.config}/hop/config.toml`:
+A hop config has three top-level sections, all optional:
+
+- `[backends.<name>]` — backend lifecycle (`prepare` / `teardown` / `workspace` / translate helpers) plus a `command_prefix` shell snippet that wraps every command launched in that backend's environment.
+- `[layouts.<name>]` — a named layout with one required `autostart` shell-snippet probe and a list of windows that come up together when the probe matches.
+- `[windows.<role>]` — top-level windows (always autostart unless `autostart = "false"`).
+
+### Backend example
 
 ```toml
 [backends.devcontainer]
-default   = "test -f docker-compose.dev.yml"
-prepare   = "podman-compose -f docker-compose.dev.yml up -d devcontainer"
-shell     = "podman-compose -f docker-compose.dev.yml exec devcontainer /usr/bin/zsh"
-editor    = "podman-compose -f docker-compose.dev.yml exec devcontainer nvim"
-teardown  = "podman-compose -f docker-compose.dev.yml down"
-workspace = "podman-compose -f docker-compose.dev.yml exec devcontainer pwd"
+default        = "test -f docker-compose.dev.yml"
+prepare        = "podman-compose -f docker-compose.dev.yml up -d devcontainer"
+teardown       = "podman-compose -f docker-compose.dev.yml down"
+workspace      = "podman-compose -f docker-compose.dev.yml exec devcontainer pwd"
+command_prefix = "podman-compose -f docker-compose.dev.yml exec devcontainer"
 ```
 
 Each command is a single string. Hop runs it through `sh -c` after substituting placeholders, so pipes, redirects, and `$(...)` all work — write the value the way you'd type it at a terminal. Use TOML triple-quoted strings (`"""…"""`) for multi-line pipelines. Placeholder values are shell-quoted before insertion, so paths with spaces substitute safely.
 
-Fields per backend:
+Backend fields:
 
-- `shell` (required) - command that spawns one shell per role terminal.
-- `editor` (required) - command that launches the shared nvim. Hop drives this nvim by sending keystrokes through kitty's pty, so it does not need a remote-control socket.
 - `default` (optional) - auto-detect probe. Backends without `default` can only be picked by name.
 - `prepare` (optional) - command run once at session creation, before launching kitty. Should be idempotent.
 - `teardown` (optional) - command run at `hop kill` after closing windows.
 - `workspace` (optional) - command whose stdout maps the backend's path back to the host project root. Used by the open_selection kitten.
 - `port_translate` (optional) - command run lazily by the open_selection kitten when it dispatches a `localhost` / `127.0.0.1` / `0.0.0.0` URL. Stdout is the host-reachable port that should replace the URL's port. `{port}` is substituted with the URL's original port.
-- `host_translate` (optional) - command run lazily for the same set of localhost URLs. Stdout is the hostname that should replace `localhost` / `127.0.0.1` / `0.0.0.0` in the URL. `port_translate` and `host_translate` are independent — configure either, both, or neither.
+- `host_translate` (optional) - command run lazily for the same set of localhost URLs. Stdout is the hostname that should replace `localhost` / `127.0.0.1` / `0.0.0.0` in the URL.
+- `command_prefix` (optional) - shell snippet prepended to every window command launched in this backend's environment. Empty for the implicit host backend.
 
 Supported placeholders: `{project_root}` (anywhere), and `{port}` (in `port_translate` / `host_translate` only).
 
 The name `host` is reserved for the implicit fallback.
 
-### Project config
+### Layouts and windows
 
-`<project_root>/.hop.toml` uses the same `[backends.<name>]` schema as the global file and is merged with it: project entries come first in auto-detect order, and same-named entries are field-merged with project fields winning.
+Per-role launch commands live outside the backend, in `[layouts.<name>]` or `[windows.<role>]` tables:
 
 ```toml
-# Override the global devcontainer service name
-[backends.devcontainer]
-shell = "docker compose -f compose.dev.yml exec app zsh"
+# A layout: one autostart probe, multiple windows.
+[layouts.rails]
+autostart = "test -f bin/rails"
 
-# Define a project-specific backend
-[backends.my-vm]
-default   = "test -f .my-vm-marker"
-shell     = "lima shell default -- /usr/bin/zsh"
-editor    = "lima shell default -- nvim"
-workspace = "lima shell default -- pwd"
+[layouts.rails.windows.server]
+command = "bin/dev"
+
+[layouts.rails.windows.console]
+command   = "bin/rails console"
+autostart = "false"  # declared for `hop term --role console`; not auto-launched
+
+# Top-level window: always autostart unless opted out.
+[windows.worker]
+command = "bin/jobs"
 ```
+
+The active backend's `command_prefix` wraps each window's `command` at launch, so the same Rails layout works in both a host session (runs `bin/dev` directly) and a devcontainer session (runs `podman-compose exec devcontainer bin/dev`).
+
+Per-window fields:
+
+- `command` (string) - the role command, **without** any backend wrap. The active backend's `command_prefix` is prepended at launch.
+- `autostart` (`"true"` or `"false"`, optional) - opt-in / opt-out only. The autostart gate is whatever the window's container decides (built-in default for built-ins, layout's probe for layout windows, always-on for top-level user windows).
+
+Built-in roles `shell`, `editor`, and `browser` ship with hop defaults:
+
+| role    | command default                         | autostart default |
+|---------|-----------------------------------------|-------------------|
+| shell   | platform default (kitty's login shell on host; `${SHELL:-sh}` falls back inside a `command_prefix`) | autostart |
+| editor  | `nvim`                                  | autostart         |
+| browser | xdg-detected default browser            | not autostart     |
+
+To change a built-in, declare it as a top-level window: `[windows.editor] autostart = "false"` opts out of the editor for this config; `[windows.browser] autostart = "true"` autostarts the browser; `[windows.shell] command = "/usr/bin/zsh"` overrides the shell.
+
+Multiple matching layouts compose: a Rails project that also has `vite.config.ts` activates both layouts and gets their windows.
 
 ### Per-invocation override
 

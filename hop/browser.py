@@ -6,11 +6,15 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping, Protocol, Sequence
+from typing import TYPE_CHECKING, Callable, Mapping, Protocol, Sequence
 
+from hop.config import BROWSER_ROLE
 from hop.errors import HopError
 from hop.session import ProjectSession
 from hop.sway import SwayWindow
+
+if TYPE_CHECKING:
+    from hop.layouts import WindowSpec
 
 DEFAULT_BROWSER_DISCOVERY_TIMEOUT_SECONDS = 5.0
 DEFAULT_BROWSER_DISCOVERY_POLL_INTERVAL_SECONDS = 0.05
@@ -53,6 +57,34 @@ class BrowserLaunchSpec:
     window_identifiers: frozenset[str]
     new_window_flag: str | None = None
 
+    @classmethod
+    def from_command_string(cls, command: str) -> "BrowserLaunchSpec":
+        """Build a launch spec from a user-supplied browser command.
+
+        Used when the user declares ``[backends.<name>.windows.browser]
+        command = "..."`` to override hop's xdg-detected default. The
+        executable name in argv[0] doubles as a window identifier so
+        Sway-side rediscovery can match the launched window.
+        """
+
+        argv = tuple(shlex.split(command))
+        if not argv:
+            msg = "browser command resolved to an empty argv."
+            raise BrowserCommandError(msg)
+        identifiers = _build_window_identifiers(
+            desktop_entry_name="",
+            command=argv,
+            startup_wm_class=None,
+        )
+        return cls(
+            command=argv,
+            window_identifiers=identifiers,
+            new_window_flag=DEFAULT_NEW_WINDOW_FLAG,
+        )
+
+
+SessionWindowsFactory = Callable[[ProjectSession], Sequence["WindowSpec"]]
+
 
 class SessionBrowserAdapter:
     def __init__(
@@ -63,6 +95,7 @@ class SessionBrowserAdapter:
         process_runner: ProcessRunner | None = None,
         browser_spec: BrowserLaunchSpec | None = None,
         environ: Mapping[str, str] | None = None,
+        session_windows_for: SessionWindowsFactory | None = None,
         discovery_timeout_seconds: float = DEFAULT_BROWSER_DISCOVERY_TIMEOUT_SECONDS,
         discovery_poll_interval_seconds: float = DEFAULT_BROWSER_DISCOVERY_POLL_INTERVAL_SECONDS,
     ) -> None:
@@ -71,6 +104,9 @@ class SessionBrowserAdapter:
         self._process_runner = process_runner or _SubprocessRunner()
         self._browser_spec = browser_spec
         self._environ = dict(environ or os.environ)
+        # Resolves per-session windows so a top-level [windows.browser]
+        # command override can take precedence over the xdg-detected default.
+        self._session_windows_for = session_windows_for
         self._discovery_timeout_seconds = discovery_timeout_seconds
         self._discovery_poll_interval_seconds = discovery_poll_interval_seconds
 
@@ -88,7 +124,7 @@ class SessionBrowserAdapter:
 
         if url is not None:
             self._launcher.launch(
-                _build_browser_command(self._browser_spec_for_session(), url=url),
+                _build_browser_command(self._browser_spec_for_session(session), url=url),
                 cwd=session.project_root,
             )
 
@@ -98,7 +134,7 @@ class SessionBrowserAdapter:
         *,
         url: str | None,
     ) -> SwayWindow:
-        browser_spec = self._browser_spec_for_session()
+        browser_spec = self._browser_spec_for_session(session)
         known_window_ids = {window.id for window in self._sway.list_windows()}
         self._launcher.launch(
             _build_browser_command(browser_spec, url=url, new_window=True),
@@ -137,12 +173,23 @@ class SessionBrowserAdapter:
 
         return min(windows, key=lambda window: window.id)
 
-    def _browser_spec_for_session(self) -> BrowserLaunchSpec:
-        if self._browser_spec is None:
-            self._browser_spec = _resolve_default_browser_spec(
-                self._process_runner,
-                environ=self._environ,
-            )
+    def _browser_spec_for_session(self, session: ProjectSession) -> BrowserLaunchSpec:
+        if self._browser_spec is not None:
+            return self._browser_spec
+        # A user-declared `[windows.browser] command = "..."` overrides hop's
+        # xdg-detected default. Without an override, fall back to xdg detection.
+        if self._session_windows_for is not None:
+            from hop.layouts import find_window  # local import to avoid cycle.
+
+            windows = self._session_windows_for(session)
+            spec = find_window(windows, BROWSER_ROLE)
+            if spec is not None and spec.command:
+                self._browser_spec = BrowserLaunchSpec.from_command_string(spec.command)
+                return self._browser_spec
+        self._browser_spec = _resolve_default_browser_spec(
+            self._process_runner,
+            environ=self._environ,
+        )
         return self._browser_spec
 
 

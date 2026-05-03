@@ -8,6 +8,7 @@ from hop.commands.session import (
 )
 from hop.errors import HopError
 from hop.kitty import KittyWindow
+from hop.layouts import WindowSpec
 from hop.session import ProjectSession
 from hop.state import SessionState
 
@@ -48,6 +49,16 @@ class StubEditorAdapter:
     def ensure(self, session: ProjectSession) -> bool:
         self.ensured.append(session.session_name)
         return self._editor_was_closed
+
+
+class StubBrowserAdapter:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str | None]] = []
+
+    def ensure_browser(self, session: ProjectSession, *, url: str | None) -> None:
+        self.calls.append((session.session_name, url))
+
+
 
 
 def test_enter_project_session_switches_to_workspace_and_bootstraps_shell(tmp_path: Path) -> None:
@@ -124,6 +135,137 @@ def test_enter_project_session_does_not_touch_editor_on_re_entry(tmp_path: Path)
     enter_project_session(project_root, sway=sway, terminals=terminals, editor=None)
 
     assert editor.ensured == []
+
+
+def test_enter_project_session_autostarts_active_windows_in_declaration_order(tmp_path: Path) -> None:
+    """First entry with a resolved windows tuple: shell + editor + server (active)
+    + console (inactive) ensures shell, editor, and server but not console."""
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+
+    sway = StubSwayAdapter()
+    terminals = StubTerminalAdapter()
+    editor = StubEditorAdapter()
+    browser = StubBrowserAdapter()
+
+    enter_project_session(
+        project_root,
+        sway=sway,
+        terminals=terminals,
+        editor=editor,
+        browser=browser,
+        windows=(
+            WindowSpec(role="shell", command="zsh", autostart_active=True),
+            WindowSpec(role="editor", command="nvim", autostart_active=True),
+            WindowSpec(role="server", command="bin/dev", autostart_active=True),
+            WindowSpec(role="console", command="bin/rails console", autostart_active=False),
+        ),
+    )
+
+    assert editor.ensured == ["demo"]
+    assert terminals.ensured_terminals == [
+        ("demo", "shell", project_root),
+        ("demo", "server", project_root),
+    ]
+    assert browser.calls == []
+
+
+def test_enter_project_session_skips_autostart_sweep_on_re_entry(tmp_path: Path) -> None:
+    """Re-entry (editor=None) ensures only the shell window — autostart-active
+    server / browser entries are NOT launched."""
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+
+    sway = StubSwayAdapter()
+    terminals = StubTerminalAdapter()
+    browser = StubBrowserAdapter()
+
+    enter_project_session(
+        project_root,
+        sway=sway,
+        terminals=terminals,
+        editor=None,
+        browser=browser,
+        windows=(
+            WindowSpec(role="shell", command="zsh", autostart_active=True),
+            WindowSpec(role="server", command="bin/dev", autostart_active=True),
+            WindowSpec(role="browser", command="firefox", autostart_active=True),
+        ),
+    )
+
+    assert terminals.ensured_terminals == [("demo", "shell", project_root)]
+    assert browser.calls == []
+
+
+def test_enter_project_session_dispatches_browser_role_to_browser_adapter(tmp_path: Path) -> None:
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+
+    sway = StubSwayAdapter()
+    terminals = StubTerminalAdapter()
+    editor = StubEditorAdapter()
+    browser = StubBrowserAdapter()
+
+    enter_project_session(
+        project_root,
+        sway=sway,
+        terminals=terminals,
+        editor=editor,
+        browser=browser,
+        windows=(
+            WindowSpec(role="shell", command="zsh", autostart_active=True),
+            WindowSpec(role="browser", command="firefox", autostart_active=True),
+        ),
+    )
+
+    assert browser.calls == [("demo", None)]
+    # Browser doesn't go through the kitty terminal adapter — only the shell
+    # was ensured there.
+    assert terminals.ensured_terminals == [("demo", "shell", project_root)]
+
+
+def test_enter_project_session_skips_inactive_window(tmp_path: Path) -> None:
+    """A window with autostart_active=False (resolver output for a layout
+    whose probe failed, or an explicit autostart="false") is skipped from
+    the autostart sweep — declared but not auto-launched."""
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+
+    sway = StubSwayAdapter()
+    terminals = StubTerminalAdapter()
+    editor = StubEditorAdapter()
+    browser = StubBrowserAdapter()
+
+    enter_project_session(
+        project_root,
+        sway=sway,
+        terminals=terminals,
+        editor=editor,
+        browser=browser,
+        windows=(
+            WindowSpec(role="shell", command="zsh", autostart_active=True),
+            WindowSpec(role="server", command="bin/dev", autostart_active=False),
+        ),
+    )
+
+    # Shell was ensured; server window was skipped because autostart_active is False.
+    assert terminals.ensured_terminals == [("demo", "shell", project_root)]
+
+
+def test_enter_project_session_falls_back_to_legacy_behavior_without_windows(tmp_path: Path) -> None:
+    """Callers that don't pass a resolved windows tuple (legacy tests, etc.)
+    still get the pre-resolver behavior: shell + editor."""
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+
+    sway = StubSwayAdapter()
+    terminals = StubTerminalAdapter()
+    editor = StubEditorAdapter()
+
+    enter_project_session(project_root, sway=sway, terminals=terminals, editor=editor)
+
+    assert editor.ensured == ["demo"]
+    assert terminals.ensured_terminals == [("demo", "shell", project_root)]
 
 
 def test_enter_project_session_reuses_the_same_directory_session_on_repeat_invocation(tmp_path: Path) -> None:
