@@ -131,9 +131,17 @@ When you enter a session (bare `hop`), hop walks the configured backends in decl
 ```toml
 [backends.devcontainer]
 default        = "test -f docker-compose.dev.yml"
-prepare        = "podman-compose -f docker-compose.dev.yml up -d devcontainer"
+prepare        = "podman-compose -f docker-compose.dev.yml --in-pod=false up -d devcontainer"
 teardown       = "podman-compose -f docker-compose.dev.yml down"
 workspace      = "podman-compose -f docker-compose.dev.yml exec devcontainer pwd"
+port_translate = """
+  podman ps -q \\
+    --filter label=io.podman.compose.project=$(basename {project_root}) \\
+    --filter label=io.podman.compose.service=devcontainer \\
+    | head -1 \\
+    | xargs -r -I@ podman port @ {port} \\
+    | cut -d: -f2
+"""
 command_prefix = "podman-compose -f docker-compose.dev.yml exec devcontainer"
 ```
 
