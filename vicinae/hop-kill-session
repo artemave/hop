@@ -13,8 +13,24 @@ set -euo pipefail
 # down was killed mid-flight). setsid -f forks past that signal so cleanup
 # runs to completion. `vicinae close` is invoked from the detached session
 # for the same reason.
-SWAY_SCRIPT="$(dirname "$(readlink -f "$0")")/../sway/hop-kill-session"
 exec setsid -f bash -c '
+    set -e
+
     vicinae close
-    exec "$1"
-' _ "$SWAY_SCRIPT"
+
+    ws=$(swaymsg -t get_workspaces | jq -r ".[] | select(.focused).name")
+
+    if [[ $ws != p:* ]]; then
+        exit 0
+    fi
+
+    project_root=$(hop list --json 2>/dev/null | jq -r --arg s "${ws#p:}" "
+        .[] | select(.name == \$s) | .project_root // empty
+    " || true)
+
+    if [[ ! -d $project_root ]]; then
+        exit 0
+    fi
+
+    cd "$project_root" && exec hop kill
+'

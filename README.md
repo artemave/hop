@@ -47,111 +47,23 @@ python3 -m pip install -e .
 
 ## Usage
 
-A session is the resolved current working directory. Every session-scoped command (`hop`, `hop edit`, `hop term`, `hop run`, `hop browser`) resolves the session this way.
+Run `hop` from a terminal `cd`-ed into your project. This creates the session — a Sway workspace named `p:<dirname>` — or attaches to it if one already exists for that directory.
 
-### Enter or create session
+Day-to-day use is driven by three surfaces, each with its own section below:
 
-```bash
-hop
-```
+- [Sway shortcuts](#sway-shortcuts) — a key for "new shell in this session".
+- [Vicinae launcher integration](#vicinae-launcher-integration) — pick a session to switch to, focus or create any declared window in the current session, move windows between sessions.
+- [Open visible-output targets from Kitty](#open-visible-output-targets-from-kitty) — a Kitty kitten that picks file paths and URLs from terminal output and routes them to the session's editor or browser.
 
-Run from a terminal with your shell `cd`-ed into the project directory. Creates the session - a Sway workspace named `p:<dirname>` with a `shell` terminal - or attaches to it if one already exists for that directory.
-
-### Add another shell to the session
-
-```bash
-hop # run from inside one of the session's terminals
-```
-
-Spawns an additional shell terminal named `shell-2`, `shell-3`, etc.
-
-### Switch to a named session
-
-```bash
-hop switch demo
-```
-
-Focuses the Sway workspace `p:demo`.
-
-### List live sessions
-
-```bash
-hop list
-```
-
-Prints active Sway workspaces whose names start with `p:`.
-
-### Open the shared editor
-
-```bash
-hop edit
-hop edit app/models/user.rb
-hop edit app/models/user.rb:42
-```
-
-Focuses the session's Neovim instance and optionally opens a file or `path:line` target.
-
-### Focus or create a terminal by role
-
-```bash
-hop term --role shell
-hop term --role test
-hop term --role server
-```
-
-Each role maps to a dedicated Kitty window inside the session.
-
-### Send a command to a role terminal
-
-```bash
-hop run "ls"
-hop run --role test "python3 -m pytest -q"
-hop run --role server "bin/dev"
-```
-
-The command must be a single CLI argument. The default role is `shell`. `hop run` dispatches the command, prints an opaque run id, and returns immediately - it does not wait for completion.
-
-### Stream the output of a previous `hop run`
-
-```bash
-id=$(hop run --role test "python3 -m pytest -q")
-hop tail "$id"
-```
-
-`hop tail` blocks until the dispatched command returns to its shell prompt, then writes the combined output to stdout. Together with `hop run` it forms the two-step protocol used by [vigun](https://github.com/artemave/vigun).
-
-Prompt detection uses Kitty's shell integration (OSC 133), which is on by default for `bash`, `zsh`, and `fish`.
-
-### Browser command
-
-```bash
-hop browser
-hop browser https://example.com
-```
-
-Reuses or creates a session-owned window in your default browser. If the window was moved to another workspace, `hop browser` moves it back before focusing it.
-
-### Kill the current session
-
-```bash
-hop kill # run from the project root
-```
-
-Closes every Sway/Kitty window owned by the session, removes its workspace, and runs the backend's `teardown`.
+To kill a session, use the Vicinae script (below) or run `hop kill` from the project root on the host.
 
 ## Sway shortcuts
 
-Bind these helper scripts in your Sway config for one-keystroke access:
+Bind this helper script in your Sway config to spawn a new shell in the focused hop session (or a plain kitty when not on a hop workspace):
 
 ```conf
-# New shell in a hop session, or plain kitty otherwise
 bindsym $mod+Return exec /path/to/hop/sway/hop-term-or-kitty
-
-# Kill the focused hop session
-bindsym $mod+Shift+k exec /path/to/hop/sway/hop-kill-session
 ```
-
-`hop-term-or-kitty` accepts an optional fallback terminal as its first arg (e.g. `… exec /path/to/sway/hop-term-or-kitty alacritty`).
 
 ## Vicinae launcher integration
 
@@ -292,6 +204,38 @@ hop --backend <name>
 Forces a backend at session creation regardless of auto-detect. Use `hop --backend host` to keep the host backend in a project that would otherwise auto-activate something else. The choice is persisted for the session's lifetime.
 
 For step-by-step devcontainer setup and troubleshooting, see [`docs/devcontainer.md`](docs/devcontainer.md).
+
+## Automation
+
+The `hop` CLI runs on the host. In a devcontainer session it's not available inside the container — scripts that drive a session run on the host side. The commands below are the integration surface for external tools.
+
+### `hop run` and `hop tail`
+
+```bash
+hop run "ls"
+hop run --role test "python3 -m pytest -q"
+hop run --role server "bin/dev"
+```
+
+The command must be a single CLI argument. The default role is `shell`. `hop run` dispatches the command, prints an opaque run id, and returns immediately — it does not wait for completion.
+
+```bash
+id=$(hop run --role test "python3 -m pytest -q")
+hop tail "$id"
+```
+
+`hop tail` blocks until the dispatched command returns to its shell prompt, then writes the combined output to stdout. This two-step protocol is what [vigun](https://github.com/artemave/vigun) uses to send a test run from the editor to a dedicated terminal in the session and collect its output once the run finishes.
+
+Prompt detection uses Kitty's shell integration (OSC 133), which is on by default for `bash`, `zsh`, and `fish`.
+
+### Other commands
+
+- `hop list` — print active Sway workspaces whose names start with `p:`.
+- `hop switch <name>` — focus the Sway workspace `p:<name>`.
+- `hop edit [<file>[:<line>]]` — focus the session's Neovim and optionally open a file or `path:line` target.
+- `hop term --role <name>` — focus or create a Kitty window for the given role.
+- `hop browser [<url>]` — reuse or create a session-owned browser window. If the window was moved to another workspace, it's moved back before being focused.
+- `hop kill` — close every Sway/Kitty window owned by the session, remove its workspace, and run the backend's `teardown`. Run from the project root.
 
 ## Development
 
