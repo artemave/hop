@@ -76,22 +76,31 @@ def resolve_windows(
     """
 
     specs: dict[str, _MutableSpec] = {}
-    order: list[str] = []
+    # Pre-load built-in specs so layout / top-level windows that override
+    # them by role find an existing spec to merge into. The order of
+    # built-ins in the final output is decided after the config walk:
+    # shell pinned slot 1, editor pinned slot 2, browser appended at the
+    # end if the user never declared it.
     for role, command, autostart_active in _BUILTIN_DEFAULTS:
         specs[role] = _MutableSpec(role=role, command=command, autostart_active=autostart_active)
-        order.append(role)
 
+    declared_order: list[str] = []
     for layout in config.layouts:
         if not _layout_matches(layout, session=session, runner=runner):
             continue
         for window in layout.windows:
-            _apply_layout_window(window, specs=specs, order=order)
+            _apply_layout_window(window, specs=specs, declared_order=declared_order)
 
     for window in config.windows:
-        _apply_top_level_window(window, specs=specs, order=order)
+        _apply_top_level_window(window, specs=specs, declared_order=declared_order)
+
+    final_order: list[str] = [SHELL_ROLE, EDITOR_ROLE]
+    final_order.extend(role for role in declared_order if role not in (SHELL_ROLE, EDITOR_ROLE))
+    if BROWSER_ROLE not in final_order:
+        final_order.append(BROWSER_ROLE)
 
     result: list[WindowSpec] = []
-    for role in order:
+    for role in final_order:
         spec = specs[role]
         if spec.command is None and role not in _BUILTIN_ROLES:
             # A user-declared role with no resolved command — typically a
@@ -133,8 +142,10 @@ def _apply_layout_window(
     window: WindowConfig,
     *,
     specs: dict[str, _MutableSpec],
-    order: list[str],
+    declared_order: list[str],
 ) -> None:
+    if window.role not in declared_order:
+        declared_order.append(window.role)
     existing = specs.get(window.role)
     autostart_active = window.autostart != AUTOSTART_FALSE
     if existing is None:
@@ -143,7 +154,6 @@ def _apply_layout_window(
             command=window.command,
             autostart_active=autostart_active,
         )
-        order.append(window.role)
         return
     if window.command is not None:
         existing.command = window.command
@@ -154,8 +164,10 @@ def _apply_top_level_window(
     window: WindowConfig,
     *,
     specs: dict[str, _MutableSpec],
-    order: list[str],
+    declared_order: list[str],
 ) -> None:
+    if window.role not in declared_order:
+        declared_order.append(window.role)
     existing = specs.get(window.role)
     if existing is None:
         autostart_active = window.autostart != AUTOSTART_FALSE
@@ -164,7 +176,6 @@ def _apply_top_level_window(
             command=window.command,
             autostart_active=autostart_active,
         )
-        order.append(window.role)
         return
     if window.command is not None:
         existing.command = window.command

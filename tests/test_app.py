@@ -115,7 +115,7 @@ class StubNeovimAdapter:
         # already running" with False.
         self._editor_was_closed = editor_was_closed
 
-    def ensure(self, session: ProjectSession) -> bool:
+    def ensure(self, session: ProjectSession, *, keep_focus: bool = True) -> bool:
         self.ensured_sessions.append((session.session_name, session.project_root))
         return self._editor_was_closed
 
@@ -478,9 +478,10 @@ def test_execute_command_lists_windows_for_current_session(tmp_path: Path) -> No
     with redirect_stdout(stdout):
         assert execute_command(ListWindowsCommand(), cwd=project_root, services=real_services) == 0
 
-    # Built-ins (shell, editor, browser), then active layout windows (server),
-    # then top-level windows (worker) — each on its own line.
-    assert stdout.getvalue() == "shell\neditor\nbrowser\nserver\nworker\n"
+    # Shell first, editor second, then user-declared roles in declaration
+    # order (layout's `server` then top-level `worker`); built-in browser
+    # at the end since it wasn't user-declared.
+    assert stdout.getvalue() == "shell\neditor\nserver\nworker\nbrowser\n"
 
 
 def test_execute_command_focuses_terminal_role_in_current_session(tmp_path: Path) -> None:

@@ -264,7 +264,11 @@ def test_layout_overrides_built_in_command(tmp_path: Path) -> None:
 # --- ordering ------------------------------------------------------------
 
 
-def test_resolve_windows_order_is_builtins_then_layouts_then_top_level(tmp_path: Path) -> None:
+def test_resolve_windows_order_pins_shell_editor_then_declared_then_browser(tmp_path: Path) -> None:
+    """Shell first, editor second, then user-declared roles in the order
+    they appear in the config (layout windows then top-level windows).
+    Built-in browser, when not user-declared, is appended last so the
+    spec stays addressable without disturbing declaration order."""
     config = HopConfig(
         layouts=(
             LayoutConfig(
@@ -278,7 +282,74 @@ def test_resolve_windows_order_is_builtins_then_layouts_then_top_level(tmp_path:
 
     windows = resolve_windows(config, build_session(tmp_path), runner=RecordingRunner())
 
-    assert tuple(window.role for window in windows) == ("shell", "editor", "browser", "server", "worker")
+    assert tuple(window.role for window in windows) == ("shell", "editor", "server", "worker", "browser")
+
+
+def test_resolve_windows_keeps_shell_and_editor_pinned_when_user_declares_them(tmp_path: Path) -> None:
+    """A user-declared shell or editor (e.g. as a layout window) doesn't
+    move them out of slots 1 and 2 — the pinning rule wins over the
+    declaration position."""
+    config = HopConfig(
+        layouts=(
+            LayoutConfig(
+                name="rails",
+                autostart="true",
+                windows=(
+                    WindowConfig(role="server", command="bin/dev"),
+                    WindowConfig(role="editor", command="hx"),
+                    WindowConfig(role="shell", command="/usr/bin/zsh"),
+                ),
+            ),
+        )
+    )
+
+    windows = resolve_windows(config, build_session(tmp_path), runner=RecordingRunner())
+
+    assert tuple(window.role for window in windows) == ("shell", "editor", "server", "browser")
+
+
+def test_resolve_windows_role_declared_in_two_matching_layouts_keeps_first_position(tmp_path: Path) -> None:
+    """A role contributed by two matching layouts keeps the slot from its
+    first appearance (the second layout's entry merges into the existing
+    spec instead of bumping the role to a later position)."""
+    config = HopConfig(
+        layouts=(
+            LayoutConfig(
+                name="rails",
+                autostart="true",
+                windows=(
+                    WindowConfig(role="server", command="bin/dev"),
+                    WindowConfig(role="worker", command="bin/jobs"),
+                ),
+            ),
+            LayoutConfig(
+                name="vite",
+                autostart="true",
+                windows=(WindowConfig(role="server", command="bin/vite"),),
+            ),
+        )
+    )
+
+    windows = resolve_windows(config, build_session(tmp_path), runner=RecordingRunner())
+
+    assert tuple(window.role for window in windows) == ("shell", "editor", "server", "worker", "browser")
+    server = find_window(windows, "server")
+    assert server is not None
+    assert server.command == "bin/vite"  # second layout wins per-field
+
+
+def test_resolve_windows_browser_takes_declared_position_when_user_declares_it(tmp_path: Path) -> None:
+    config = HopConfig(
+        windows=(
+            WindowConfig(role="worker", command="bin/jobs"),
+            WindowConfig(role="browser", autostart="true"),
+            WindowConfig(role="logs", command="tail -f log/dev.log"),
+        )
+    )
+
+    windows = resolve_windows(config, build_session(tmp_path), runner=RecordingRunner())
+
+    assert tuple(window.role for window in windows) == ("shell", "editor", "worker", "browser", "logs")
 
 
 def test_layout_with_no_autostart_field_never_matches(tmp_path: Path) -> None:

@@ -45,7 +45,7 @@ class SpawnTerminalAdapter(SessionTerminalAdapter, Protocol):
 
 
 class SessionEditorAdapter(Protocol):
-    def ensure(self, session: ProjectSession) -> bool: ...
+    def ensure(self, session: ProjectSession, *, keep_focus: bool = True) -> bool: ...
 
 
 class SessionBrowserAutostartAdapter(Protocol):
@@ -85,7 +85,7 @@ def enter_project_session(
         # No resolved windows (legacy callers/tests): fall back to bringing
         # up the editor alongside the shell, matching the pre-resolver
         # bootstrap behavior.
-        editor.ensure(session)
+        editor.ensure(session, keep_focus=False)
     else:
         for window in windows:
             if window.role == SHELL_ROLE:
@@ -93,7 +93,7 @@ def enter_project_session(
             if not window.autostart_active:
                 continue
             if window.role == EDITOR_ROLE:
-                editor.ensure(session)
+                editor.ensure(session, keep_focus=False)
             elif window.role == BROWSER_ROLE:
                 if browser is not None:
                     browser.ensure_browser(session, url=None)

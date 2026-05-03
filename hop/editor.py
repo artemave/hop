@@ -248,15 +248,24 @@ class SharedNeovimEditorAdapter:
         self._ready_timeout_seconds = ready_timeout_seconds
         self._ready_poll_interval_seconds = ready_poll_interval_seconds
 
-    def ensure(self, session: ProjectSession) -> bool:
-        # Bring up the editor without stealing focus. Used during session
-        # bootstrap and new-shell spawning, where the freshly launched shell
-        # should win focus. Returns True if a new editor window was launched,
-        # False if an existing one was found — callers (spawn_session_terminal)
-        # use this to decide whether `hop` from within a session should also
-        # spawn an extra shell, or whether resurrecting the editor was the
-        # whole job.
-        _, was_launched = self._ensure_editor(session, keep_focus=True)
+    def ensure(self, session: ProjectSession, *, keep_focus: bool = True) -> bool:
+        # Bring up the editor. ``keep_focus`` controls whether the launch
+        # steals focus to the new editor (False) or leaves it on the
+        # currently-focused window (True). Returns True if a new editor
+        # window was launched, False if an existing one was found —
+        # callers (spawn_session_terminal) use this to decide whether
+        # `hop` from within a session should also spawn an extra shell,
+        # or whether resurrecting the editor was the whole job.
+        #
+        # The bootstrap path passes ``keep_focus=False`` so that the
+        # autostart sweep's subsequent terminal launches tab in *after*
+        # the editor in sway's tabbed layout (sway inserts new tabs after
+        # the focused one). With ``keep_focus=True`` the shell would stay
+        # focused, terminals would slot in between shell and editor, and
+        # the editor would walk to the end of the tab strip. End-of-
+        # bootstrap ``_focus_shell_if_present`` still hands focus back
+        # to the shell.
+        _, was_launched = self._ensure_editor(session, keep_focus=keep_focus)
         return was_launched
 
     def focus(self, session: ProjectSession) -> None:

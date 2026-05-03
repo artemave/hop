@@ -57,14 +57,16 @@ class StubTerminalAdapter:
 class StubEditorAdapter:
     def __init__(self, *, editor_was_closed: bool = False) -> None:
         self.ensured: list[str] = []
+        self.keep_focus_calls: list[bool] = []
         # Whether ensure() should report "I just launched a new editor".
         # spawn_session_terminal short-circuits when this is True so the
         # user gets exactly one window back — the editor — instead of
         # editor + a new shell.
         self._editor_was_closed = editor_was_closed
 
-    def ensure(self, session: ProjectSession) -> bool:
+    def ensure(self, session: ProjectSession, *, keep_focus: bool = True) -> bool:
         self.ensured.append(session.session_name)
+        self.keep_focus_calls.append(keep_focus)
         return self._editor_was_closed
 
 
@@ -107,6 +109,52 @@ def test_enter_project_session_ensures_editor_when_one_is_supplied(tmp_path: Pat
     assert terminals.ensured_terminals == [("demo", "shell", project_root)]
 
 
+def test_enter_project_session_passes_keep_focus_false_to_editor_during_bootstrap(tmp_path: Path) -> None:
+    """In sway tabbed mode, new windows are inserted right after the
+    focused tab. The bootstrap autostart sweep launches editor first,
+    then layout terminals. If the editor doesn't take focus, every
+    subsequent terminal slots in between shell and editor and the editor
+    walks to the end of the tab strip. Passing ``keep_focus=False``
+    makes the editor the focused tab, so terminals tab in *after* it,
+    yielding the desired shell → editor → terminals order."""
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+
+    editor = StubEditorAdapter()
+
+    enter_project_session(
+        project_root,
+        sway=StubSwayAdapter(),
+        terminals=StubTerminalAdapter(),
+        editor=editor,
+        windows=(
+            WindowSpec(role="shell", command="", autostart_active=True),
+            WindowSpec(role="editor", command="nvim", autostart_active=True),
+            WindowSpec(role="server", command="bin/dev", autostart_active=True),
+        ),
+    )
+
+    assert editor.keep_focus_calls == [False]
+
+
+def test_enter_project_session_passes_keep_focus_false_to_editor_in_legacy_no_windows_path(tmp_path: Path) -> None:
+    """Same keep_focus contract for the legacy path (callers that pass no
+    ``windows`` tuple) — the editor still owns slot 2 in the tab strip."""
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+
+    editor = StubEditorAdapter()
+
+    enter_project_session(
+        project_root,
+        sway=StubSwayAdapter(),
+        terminals=StubTerminalAdapter(),
+        editor=editor,
+    )
+
+    assert editor.keep_focus_calls == [False]
+
+
 def test_enter_project_session_launches_terminal_before_editor(tmp_path: Path) -> None:
     """Order matters: the per-session kitty isn't running on first entry,
     and only ensure_terminal knows how to bootstrap it. The editor adapter
@@ -123,9 +171,9 @@ def test_enter_project_session_launches_terminal_before_editor(tmp_path: Path) -
             super().ensure_terminal(session, role=role)
 
     class OrderedEditorAdapter(StubEditorAdapter):
-        def ensure(self, session: ProjectSession) -> bool:
+        def ensure(self, session: ProjectSession, *, keep_focus: bool = True) -> bool:
             call_log.append("editor")
-            return super().ensure(session)
+            return super().ensure(session, keep_focus=keep_focus)
 
     enter_project_session(
         project_root,
