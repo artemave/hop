@@ -28,9 +28,17 @@ class RecordingRunner:
 
     def __call__(self, args: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
         self.calls.append((tuple(args), cwd))
+        # `true` / `false` short-circuit so autostart probes resolve without
+        # wiring a real subprocess; other probes use the configured returncode.
+        rc = self.returncode
+        if len(args) == 3 and args[0] == "sh" and args[1] == "-c":
+            if args[2] == "true":
+                rc = 0
+            elif args[2] == "false":
+                rc = 1
         return subprocess.CompletedProcess(
             args=list(args),
-            returncode=self.returncode,
+            returncode=rc,
             stdout=self.stdout,
             stderr=self.stderr,
         )
@@ -306,6 +314,55 @@ def test_resolve_windows_keeps_shell_and_editor_pinned_when_user_declares_them(t
     windows = resolve_windows(config, build_session(tmp_path), runner=RecordingRunner())
 
     assert tuple(window.role for window in windows) == ("shell", "editor", "server", "browser")
+
+
+def test_layout_window_autostart_runs_as_shell_probe(tmp_path: Path) -> None:
+    """Window-level ``autostart`` is a shell probe — when it exits 0 the
+    window auto-launches; non-zero opts it out (declared but inactive).
+    Same shape as the layout-level autostart probe."""
+    log_dir = tmp_path / "log"
+    log_dir.mkdir()
+    (log_dir / "dev.log").write_text("logged")
+
+    config = HopConfig(
+        layouts=(
+            LayoutConfig(
+                name="rails",
+                autostart="true",
+                windows=(
+                    WindowConfig(
+                        role="present_log",
+                        command="less log/dev.log",
+                        autostart="test -s log/dev.log",
+                    ),
+                    WindowConfig(
+                        role="missing_log",
+                        command="less log/missing.log",
+                        autostart="test -s log/missing.log",
+                    ),
+                ),
+            ),
+        )
+    )
+
+    windows = resolve_windows(config, build_session(tmp_path), runner=_real_runner)
+
+    present = find_window(windows, "present_log")
+    missing = find_window(windows, "missing_log")
+    assert present is not None and present.autostart_active is True
+    assert missing is not None and missing.autostart_active is False
+
+
+def test_top_level_window_autostart_runs_as_shell_probe(tmp_path: Path) -> None:
+    sentinel = tmp_path / "sentinel"
+    sentinel.write_text("present")
+
+    config = HopConfig(windows=(WindowConfig(role="conditional", command="bin/jobs", autostart="test -f sentinel"),))
+
+    windows = resolve_windows(config, build_session(tmp_path), runner=_real_runner)
+
+    conditional = find_window(windows, "conditional")
+    assert conditional is not None and conditional.autostart_active is True
 
 
 def test_resolve_windows_role_declared_in_two_matching_layouts_keeps_first_position(tmp_path: Path) -> None:

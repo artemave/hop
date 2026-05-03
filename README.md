@@ -166,7 +166,6 @@ The name `host` is reserved for the implicit fallback.
 Per-role launch commands live outside the backend, in `[layouts.<name>]` or `[windows.<role>]` tables:
 
 ```toml
-# A layout: one autostart probe, multiple windows.
 [layouts.rails]
 autostart = "test -f bin/rails"
 
@@ -175,9 +174,9 @@ command = "bin/dev"
 
 [layouts.rails.windows.console]
 command   = "bin/rails console"
-autostart = "false"  # declared for `hop term --role console`; not auto-launched
+autostart = "false"
 
-# Top-level window: always autostart unless opted out.
+# Top-level window
 [windows.worker]
 command = "bin/jobs"
 ```
@@ -187,7 +186,7 @@ The active backend's `command_prefix` wraps each window's `command` at launch, s
 Per-window fields:
 
 - `command` (string) - the role command, **without** any backend wrap. The active backend's `command_prefix` is prepended at launch.
-- `autostart` (`"true"` or `"false"`, optional) - opt-in / opt-out only. The autostart gate is whatever the window's container decides (built-in default for built-ins, layout's probe for layout windows, always-on for top-level user windows).
+- `autostart` (string, optional) - shell probe; the window auto-launches when it exits 0. Defaults to `"true"`.
 
 Built-in roles `shell`, `editor`, and `browser` ship with hop defaults:
 

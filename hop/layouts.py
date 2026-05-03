@@ -7,8 +7,6 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 from hop.config import (
-    AUTOSTART_FALSE,
-    AUTOSTART_TRUE,
     BROWSER_ROLE,
     EDITOR_ROLE,
     PLACEHOLDER_PROJECT_ROOT,
@@ -69,10 +67,10 @@ def resolve_windows(
        contributing its windows in declaration order.
     3. Top-level ``[windows.<role>]`` entries in declaration order.
 
-    Within each step, a per-window ``autostart = "false"`` opts the window
-    out of the autostart sweep (declared but inactive); ``"true"`` flips the
-    default for browser. Windows whose merged ``command`` is empty are kept
-    only for the built-in roles (where empty is a meaningful sentinel).
+    A per-window ``autostart`` is a shell probe (same shape as the layout-
+    level one); the window auto-launches when it exits 0. Windows whose
+    merged ``command`` is empty are kept only for the built-in roles
+    (where empty is a meaningful sentinel).
     """
 
     specs: dict[str, _MutableSpec] = {}
@@ -89,10 +87,10 @@ def resolve_windows(
         if not _layout_matches(layout, session=session, runner=runner):
             continue
         for window in layout.windows:
-            _apply_layout_window(window, specs=specs, declared_order=declared_order)
+            _apply_layout_window(window, specs=specs, declared_order=declared_order, session=session, runner=runner)
 
     for window in config.windows:
-        _apply_top_level_window(window, specs=specs, declared_order=declared_order)
+        _apply_top_level_window(window, specs=specs, declared_order=declared_order, session=session, runner=runner)
 
     final_order: list[str] = [SHELL_ROLE, EDITOR_ROLE]
     final_order.extend(role for role in declared_order if role not in (SHELL_ROLE, EDITOR_ROLE))
@@ -143,11 +141,13 @@ def _apply_layout_window(
     *,
     specs: dict[str, _MutableSpec],
     declared_order: list[str],
+    session: ProjectSession,
+    runner: CommandRunner,
 ) -> None:
     if window.role not in declared_order:
         declared_order.append(window.role)
     existing = specs.get(window.role)
-    autostart_active = window.autostart != AUTOSTART_FALSE
+    autostart_active = _resolve_window_autostart(window.autostart, default=True, session=session, runner=runner)
     if existing is None:
         specs[window.role] = _MutableSpec(
             role=window.role,
@@ -165,12 +165,14 @@ def _apply_top_level_window(
     *,
     specs: dict[str, _MutableSpec],
     declared_order: list[str],
+    session: ProjectSession,
+    runner: CommandRunner,
 ) -> None:
     if window.role not in declared_order:
         declared_order.append(window.role)
     existing = specs.get(window.role)
     if existing is None:
-        autostart_active = window.autostart != AUTOSTART_FALSE
+        autostart_active = _resolve_window_autostart(window.autostart, default=True, session=session, runner=runner)
         specs[window.role] = _MutableSpec(
             role=window.role,
             command=window.command,
@@ -180,7 +182,22 @@ def _apply_top_level_window(
     if window.command is not None:
         existing.command = window.command
     if window.autostart is not None:
-        existing.autostart_active = window.autostart == AUTOSTART_TRUE
+        existing.autostart_active = _resolve_window_autostart(
+            window.autostart, default=existing.autostart_active, session=session, runner=runner
+        )
+
+
+def _resolve_window_autostart(
+    autostart: str | None,
+    *,
+    default: bool,
+    session: ProjectSession,
+    runner: CommandRunner,
+) -> bool:
+    if autostart is None:
+        return default
+    substituted = _substitute(autostart, session=session)
+    return runner(("sh", "-c", substituted), session.project_root).returncode == 0
 
 
 def _substitute(template: str, *, session: ProjectSession) -> str:

@@ -187,7 +187,10 @@ oops = "no"
         load_global_config(config_file)
 
 
-def test_load_global_config_rejects_window_with_invalid_autostart(tmp_path: Path) -> None:
+def test_load_global_config_accepts_arbitrary_autostart_probe_on_layout_window(tmp_path: Path) -> None:
+    """Window-level ``autostart`` is a shell probe, just like at the layout
+    level; ``"true"`` and ``"false"`` keep their always-on / never-on meaning
+    (they're real shell built-ins) and arbitrary probes work too."""
     config_file = write(
         tmp_path / "config.toml",
         """
@@ -200,8 +203,9 @@ autostart = "test -f bin/dev"
 """,
     )
 
-    with pytest.raises(HopConfigError, match="must be 'true' or 'false'"):
-        load_global_config(config_file)
+    config = load_global_config(config_file)
+
+    assert config.layouts[0].windows[0].autostart == "test -f bin/dev"
 
 
 def test_load_global_config_rejects_unknown_window_field_in_layout(tmp_path: Path) -> None:
@@ -242,7 +246,7 @@ command = "bin/jobs"
     )
 
 
-def test_load_global_config_rejects_top_level_windows_invalid_autostart(tmp_path: Path) -> None:
+def test_load_global_config_accepts_arbitrary_autostart_probe_on_top_level_window(tmp_path: Path) -> None:
     config_file = write(
         tmp_path / "config.toml",
         """
@@ -252,8 +256,9 @@ autostart = "test -f bin/jobs"
 """,
     )
 
-    with pytest.raises(HopConfigError, match="must be 'true' or 'false'"):
-        load_global_config(config_file)
+    config = load_global_config(config_file)
+
+    assert config.windows[0].autostart == "test -f bin/jobs"
 
 
 def test_load_global_config_parses_workspace_layout(tmp_path: Path) -> None:

@@ -29,12 +29,6 @@ SHELL_ROLE = "shell"
 EDITOR_ROLE = "editor"
 BROWSER_ROLE = "browser"
 
-# Per-window autostart accepts only these literal values; the gate is the
-# layout's autostart probe, the top-level always-on rule, or the built-in
-# default — never a per-window probe.
-AUTOSTART_TRUE = "true"
-AUTOSTART_FALSE = "false"
-_AUTOSTART_VALUES = frozenset({AUTOSTART_TRUE, AUTOSTART_FALSE})
 
 # Sway workspace layout modes accepted by the top-level `workspace_layout`
 # setting. These are the only values sway's IPC `layout <mode>` command
@@ -448,12 +442,6 @@ def _parse_window(role: str, table: dict[str, Any], *, context: str, source: Pat
         raise HopConfigError(msg)
     command = _parse_command(table, key="command", context=context, source=source, allow_empty=True)
     autostart_raw = _parse_command(table, key="autostart", context=context, source=source)
-    if autostart_raw is not None and autostart_raw not in _AUTOSTART_VALUES:
-        msg = (
-            f"{source}: {context} field 'autostart' must be {AUTOSTART_TRUE!r} or {AUTOSTART_FALSE!r}, "
-            f"got {autostart_raw!r}"
-        )
-        raise HopConfigError(msg)
     return WindowConfig(role=role, command=command, autostart=autostart_raw)
 
 
