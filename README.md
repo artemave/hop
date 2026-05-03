@@ -107,15 +107,7 @@ The picker scans visible terminal output and dispatches supported selections to 
 
 File-shaped tokens that don't resolve to a real file under the source window's cwd are not highlighted.
 
-## Session backends
-
-A session has a **backend** that decides where its windows run. The default is **host**. Other backends - devcontainer, ssh, anything else describable as a chain of commands - are configured as named entries in `~/.config/hop/config.toml` or a project's `.hop.toml`. Both files use the **same schema** and are merged at session entry — there is no difference between global and project configs beyond which file you put a section in.
-
-### Auto-detection
-
-When you enter a session (bare `hop`), hop walks the configured backends in declaration order and runs each backend's `default` probe in the project root. The first one that exits 0 wins. If none succeed, the session falls back to **host**. The chosen backend is persisted and reused for all subsequent commands against that session.
-
-### Top-level shape
+## Configuration
 
 A hop config has three named sections plus one scalar setting, all optional:
 
@@ -123,6 +115,16 @@ A hop config has three named sections plus one scalar setting, all optional:
 - `[layouts.<name>]` — a named layout with one required `autostart` shell-snippet probe and a list of windows that come up together when the probe matches.
 - `[windows.<role>]` — top-level windows (always autostart unless `autostart = "false"`).
 - `workspace_layout = "<mode>"` — sway workspace layout applied at first session entry. One of `splith`, `splitv`, `stacking`, `tabbed`.
+
+Configs live in `~/.config/hop/config.toml` or a project's `.hop.toml`.
+
+## Session backends
+
+A session has a **backend** that decides where its windows run. The default is **host**. Other backends - devcontainer, ssh, anything else describable as a chain of commands - are configured as named entries in the config file.
+
+### Auto-detection
+
+When you enter a session (bare `hop`), hop walks the configured backends in declaration order and runs each backend's `default` probe in the project root. The first one that exits 0 wins. If none succeed, the session falls back to **host**. The chosen backend is persisted and reused for all subsequent commands against that session.
 
 ### Backend example
 
