@@ -33,14 +33,13 @@ Optionally:
 
 ## Installation
 
-With `uv`:
-
 ```bash
-uv sync
-uv run hop --help
+git clone https://github.com/artemave/hop
+cd hop
+uv tool install .
 ```
 
-Or as an editable package:
+Or, as an editable pip package:
 
 ```bash
 python3 -m pip install -e .
@@ -297,5 +296,6 @@ For step-by-step devcontainer setup and troubleshooting, see [`docs/devcontainer
 ## Development
 
 ```bash
+uv sync
 uv run pytest -q
 ```
