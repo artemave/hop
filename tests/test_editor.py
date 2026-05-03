@@ -375,8 +375,7 @@ def test_launch_composes_editor_then_shell_through_backend_inline() -> None:
         [
             "sh",
             "-c",
-            "podman-compose exec devcontainer nvim; "
-            "podman-compose exec devcontainer ${SHELL:-sh}",
+            "podman-compose exec devcontainer nvim; podman-compose exec devcontainer ${SHELL:-sh}",
         ]
     ]
 

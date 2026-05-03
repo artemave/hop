@@ -424,9 +424,7 @@ def test_launch_payload_does_not_compose_for_shell_role() -> None:
 
     adapter = KittyRemoteControlAdapter(
         session_backend_for=lambda _session: FakeBackend(),  # type: ignore[arg-type]
-        session_windows_for=lambda _session: (
-            WindowSpec(role="shell", command="/usr/bin/zsh", autostart_active=True),
-        ),
+        session_windows_for=lambda _session: (WindowSpec(role="shell", command="/usr/bin/zsh", autostart_active=True),),
         transport_factory=factory,
         launcher=StubLauncher(),
     )

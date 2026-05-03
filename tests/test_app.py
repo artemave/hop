@@ -40,6 +40,7 @@ class StubSwayAdapter:
         self.windows = windows
         self.switched_workspaces: list[str] = []
         self.layout_calls: list[tuple[str, str]] = []
+        self.focused_window_ids: list[int] = []
         self.closed_windows: list[int] = []
         self.removed_workspaces: list[str] = []
 
@@ -48,6 +49,12 @@ class StubSwayAdapter:
 
     def set_workspace_layout(self, workspace_name: str, layout: str) -> None:
         self.layout_calls.append((workspace_name, layout))
+
+    def focus_window(self, window_id: int) -> None:
+        # Tests don't currently assert on shell-focus behavior; the real
+        # _focus_shell_if_present pass against an empty `windows` list is a
+        # no-op, so we just record the calls in case a future test needs them.
+        self.focused_window_ids.append(window_id)
 
     def list_session_workspaces(self, *, prefix: str = "p:") -> tuple[str, ...]:
         return tuple(workspace for workspace in self.workspaces if workspace.startswith(prefix))

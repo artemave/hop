@@ -306,6 +306,151 @@ def test_load_global_config_rejects_unknown_top_level_key(tmp_path: Path) -> Non
         load_global_config(config_file)
 
 
+def test_load_global_config_rejects_non_table_backends_value(tmp_path: Path) -> None:
+    config_file = write(tmp_path / "config.toml", "backends = 'oops'\n")
+
+    with pytest.raises(HopConfigError, match="'backends' must be a table"):
+        load_global_config(config_file)
+
+
+def test_load_global_config_rejects_non_table_backend_entry(tmp_path: Path) -> None:
+    config_file = write(
+        tmp_path / "config.toml",
+        """
+[backends]
+bogus = "not-a-table"
+""",
+    )
+
+    with pytest.raises(HopConfigError, match="backend 'bogus' must be a table"):
+        load_global_config(config_file)
+
+
+def test_load_global_config_rejects_non_table_layouts_value(tmp_path: Path) -> None:
+    config_file = write(tmp_path / "config.toml", "layouts = 'oops'\n")
+
+    with pytest.raises(HopConfigError, match="'layouts' must be a table"):
+        load_global_config(config_file)
+
+
+def test_load_global_config_rejects_non_table_layout_entry(tmp_path: Path) -> None:
+    config_file = write(
+        tmp_path / "config.toml",
+        """
+[layouts]
+bogus = "not-a-table"
+""",
+    )
+
+    with pytest.raises(HopConfigError, match="layout 'bogus' must be a table"):
+        load_global_config(config_file)
+
+
+def test_load_global_config_parses_layout_without_windows_subtable(tmp_path: Path) -> None:
+    """A layout can be declared with just an `autostart` probe and no
+    windows — useful in a project file overriding only the autostart of a
+    same-named global layout. The empty windows tuple merges naturally."""
+    config_file = write(
+        tmp_path / "config.toml",
+        """
+[layouts.rails]
+autostart = "false"
+""",
+    )
+
+    layouts = load_global_config(config_file).layouts
+    assert layouts == (LayoutConfig(name="rails", autostart="false", windows=()),)
+
+
+def test_load_global_config_rejects_non_table_layout_windows_value(tmp_path: Path) -> None:
+    config_file = write(
+        tmp_path / "config.toml",
+        """
+[layouts.rails]
+autostart = "true"
+windows = "oops"
+""",
+    )
+
+    with pytest.raises(HopConfigError, match="layout 'rails' field 'windows' must be a table"):
+        load_global_config(config_file)
+
+
+def test_load_global_config_rejects_non_table_layout_window_entry(tmp_path: Path) -> None:
+    config_file = write(
+        tmp_path / "config.toml",
+        """
+[layouts.rails]
+autostart = "true"
+
+[layouts.rails.windows]
+server = "not-a-table"
+""",
+    )
+
+    with pytest.raises(HopConfigError, match="layout 'rails' window 'server' must be a table"):
+        load_global_config(config_file)
+
+
+def test_load_global_config_rejects_non_table_top_level_windows_value(tmp_path: Path) -> None:
+    config_file = write(tmp_path / "config.toml", "windows = 'oops'\n")
+
+    with pytest.raises(HopConfigError, match="'windows' must be a table"):
+        load_global_config(config_file)
+
+
+def test_load_global_config_rejects_non_table_top_level_window_entry(tmp_path: Path) -> None:
+    config_file = write(
+        tmp_path / "config.toml",
+        """
+[windows]
+server = "not-a-table"
+""",
+    )
+
+    with pytest.raises(HopConfigError, match="window 'server' must be a table"):
+        load_global_config(config_file)
+
+
+def test_load_global_config_rejects_legacy_list_command_form(tmp_path: Path) -> None:
+    config_file = write(
+        tmp_path / "config.toml",
+        """
+[backends.devcontainer]
+prepare = ["compose", "up"]
+""",
+    )
+
+    with pytest.raises(HopConfigError, match="commands are now strings"):
+        load_global_config(config_file)
+
+
+def test_load_global_config_rejects_non_string_command(tmp_path: Path) -> None:
+    config_file = write(
+        tmp_path / "config.toml",
+        """
+[backends.devcontainer]
+prepare = 42
+""",
+    )
+
+    with pytest.raises(HopConfigError, match="must be a string"):
+        load_global_config(config_file)
+
+
+def test_load_global_config_rejects_empty_command(tmp_path: Path) -> None:
+    config_file = write(
+        tmp_path / "config.toml",
+        """
+[backends.devcontainer]
+prepare = "   "
+""",
+    )
+
+    with pytest.raises(HopConfigError, match="must not be empty"):
+        load_global_config(config_file)
+
+
 # --- project config uses identical schema --------------------------------
 
 
@@ -329,9 +474,7 @@ command = "bin/jobs"
 
     config = load_project_config(tmp_path)
 
-    assert config.backends == (
-        BackendConfig(name="lima", command_prefix="lima shell default --"),
-    )
+    assert config.backends == (BackendConfig(name="lima", command_prefix="lima shell default --"),)
     assert config.layouts == (
         LayoutConfig(
             name="rails",
@@ -361,9 +504,7 @@ def test_merge_backends_appends_global_only_after_project() -> None:
 def test_merge_backends_field_merges_per_field() -> None:
     project = HopConfig(backends=(_backend("alpha", default="true"),))
     global_ = HopConfig(
-        backends=(
-            _backend("alpha", command_prefix="prefix", default="test -f marker", prepare="prep"),
-        )
+        backends=(_backend("alpha", command_prefix="prefix", default="test -f marker", prepare="prep"),)
     )
 
     merged = merge_backends(project, global_)

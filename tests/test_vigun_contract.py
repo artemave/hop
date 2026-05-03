@@ -22,11 +22,17 @@ class StubSwayAdapter:
     def switch_to_workspace(self, workspace_name: str) -> None:
         self.switched_workspaces.append(workspace_name)
 
+    def set_workspace_layout(self, workspace_name: str, layout: str) -> None:
+        raise AssertionError("set_workspace_layout should not be called for hop run")
+
     def list_session_workspaces(self, *, prefix: str = "p:") -> tuple[str, ...]:
         return ()
 
     def list_windows(self) -> Sequence[SwayWindow]:
         return ()
+
+    def focus_window(self, window_id: int) -> None:
+        raise AssertionError("focus_window should not be called for hop run")
 
     def close_window(self, window_id: int) -> None:
         raise AssertionError("close_window should not be called in this test")

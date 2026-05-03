@@ -57,7 +57,14 @@ class SessionBackend(Protocol):
 CommandRunner = Callable[[Sequence[str], Path], subprocess.CompletedProcess[str]]
 
 
-def _default_runner(args: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+def default_runner(args: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+    """Default ``CommandRunner`` — runs ``args`` in ``cwd`` and captures stdio.
+
+    Exposed publicly so other modules (e.g. ``hop.app``) can pass it to
+    helpers that take a ``CommandRunner`` argument when no override is
+    configured. Tests inject their own runners instead.
+    """
+
     return subprocess.run(
         list(args),
         cwd=str(cwd),
@@ -65,6 +72,12 @@ def _default_runner(args: Sequence[str], cwd: Path) -> subprocess.CompletedProce
         text=True,
         check=False,
     )
+
+
+# Internal alias used as the default-argument value of fields/parameters that
+# accept a CommandRunner. Kept under the original private name so existing
+# call-sites don't need to change.
+_default_runner = default_runner
 
 
 @dataclass(frozen=True, slots=True)

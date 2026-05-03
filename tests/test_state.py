@@ -260,6 +260,31 @@ def test_load_sessions_falls_back_to_host_for_legacy_windows_array(tmp_path: Pat
     assert sessions["alpha"].backend.command_prefix is None
 
 
+def test_load_sessions_falls_back_to_host_for_command_record_without_string_name(tmp_path: Path) -> None:
+    """A `type=command` record missing a string `name` field can't be turned
+    into a usable backend; treat it as stale and decode as host so the next
+    entry re-bootstraps fresh."""
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir()
+    (sessions_dir / "alpha.json").write_text(
+        json.dumps(
+            {
+                "name": "alpha",
+                "project_root": "/projects/alpha",
+                "backend": {
+                    "type": "command",
+                    # name is missing entirely.
+                    "command_prefix": "compose exec devcontainer",
+                },
+            }
+        )
+    )
+
+    sessions = load_sessions(sessions_dir=sessions_dir)
+
+    assert sessions["alpha"].backend == HostBackendRecord()
+
+
 def test_load_sessions_falls_back_to_host_for_legacy_flat_record(tmp_path: Path) -> None:
     """A pre-windows record with flat shell/editor fields decodes under the
     new schema with neither field recognized; the resulting record has no

@@ -12,6 +12,7 @@ from hop.backends import (
     HostBackend,
     SessionBackend,
     backend_from_config,
+    default_runner,
     select_backend,
 )
 from hop.browser import SessionBrowserAdapter
@@ -44,12 +45,11 @@ from hop.config import (
     HopConfig,
     load_global_config,
     load_project_config,
-    merge_backends,
     merge_configs,
 )
-from hop.layouts import WindowSpec, resolve_windows
 from hop.editor import SharedNeovimEditorAdapter
 from hop.kitty import KittyRemoteControlAdapter, KittyWindow, KittyWindowContext, KittyWindowState
+from hop.layouts import WindowSpec, resolve_windows
 from hop.session import ProjectSession, resolve_project_session
 from hop.state import (
     BackendRecord,
@@ -70,6 +70,8 @@ class SwayAdapter(Protocol):
     def list_session_workspaces(self, *, prefix: str = "p:") -> Sequence[str]: ...
 
     def list_windows(self) -> Sequence[SwayWindow]: ...
+
+    def focus_window(self, window_id: int) -> None: ...
 
     def close_window(self, window_id: int) -> None: ...
 
@@ -197,10 +199,8 @@ class SessionBackendRegistry:
         return backend.with_workspace_path(workspace_path)
 
     def resolve_windows_for_entry(self, session: ProjectSession) -> tuple[WindowSpec, ...]:
-        from hop.backends import _default_runner  # local import to avoid cycle at module load.
-
         merged = self._merged_config(session)
-        runner = self._runner if self._runner is not None else _default_runner
+        runner = self._runner if self._runner is not None else default_runner
         return resolve_windows(merged, session, runner=runner)
 
     def workspace_layout_for_entry(self, session: ProjectSession) -> str | None:
@@ -287,15 +287,9 @@ def execute_command(
                 backend = services.session_backends.resolve_for_entry(session, backend_name=backend_name)
                 services.session_backends.set_override(session.session_name, backend)
                 try:
-                    windows = (
-                        services.session_backends.resolve_windows_for_entry(session)
-                        if is_first_entry
-                        else ()
-                    )
+                    windows = services.session_backends.resolve_windows_for_entry(session) if is_first_entry else ()
                     workspace_layout = (
-                        services.session_backends.workspace_layout_for_entry(session)
-                        if is_first_entry
-                        else None
+                        services.session_backends.workspace_layout_for_entry(session) if is_first_entry else None
                     )
                     enter_project_session(
                         current_directory,

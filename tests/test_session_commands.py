@@ -76,8 +76,6 @@ class StubBrowserAdapter:
         self.calls.append((session.session_name, url))
 
 
-
-
 def test_enter_project_session_switches_to_workspace_and_bootstraps_shell(tmp_path: Path) -> None:
     project_root = tmp_path / "demo"
     nested_directory = project_root / "src"
@@ -238,6 +236,33 @@ def test_enter_project_session_dispatches_browser_role_to_browser_adapter(tmp_pa
     assert browser.calls == [("demo", None)]
     # Browser doesn't go through the kitty terminal adapter — only the shell
     # was ensured there.
+    assert terminals.ensured_terminals == [("demo", "shell", project_root)]
+
+
+def test_enter_project_session_skips_browser_role_when_no_browser_adapter(tmp_path: Path) -> None:
+    """If the resolver yields a browser window but the caller didn't pass a
+    browser adapter, skip the browser role instead of crashing."""
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+
+    sway = StubSwayAdapter()
+    terminals = StubTerminalAdapter()
+    editor = StubEditorAdapter()
+
+    enter_project_session(
+        project_root,
+        sway=sway,
+        terminals=terminals,
+        editor=editor,
+        browser=None,
+        windows=(
+            WindowSpec(role="shell", command="zsh", autostart_active=True),
+            WindowSpec(role="browser", command="firefox", autostart_active=True),
+        ),
+    )
+
+    # Shell ensured by the unconditional bootstrap step; browser is skipped
+    # because no adapter was provided.
     assert terminals.ensured_terminals == [("demo", "shell", project_root)]
 
 

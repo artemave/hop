@@ -304,6 +304,55 @@ def test_browser_launch_spec_from_command_string_handles_full_path_executable() 
     assert "firefox-developer-edition" in spec.window_identifiers
 
 
+def test_session_browser_adapter_falls_back_to_xdg_when_no_browser_window_command(tmp_path: Path) -> None:
+    """A session_windows_for that returns a browser window without a
+    command falls through to the xdg-detected default."""
+    from hop.layouts import WindowSpec
+
+    # Set up a fake xdg desktop entry so _resolve_default_browser_spec works
+    # without touching the host's real /usr/share.
+    applications = tmp_path / "applications"
+    applications.mkdir()
+    (applications / "test-browser.desktop").write_text(
+        "[Desktop Entry]\nExec=/usr/bin/test-browser %U\nStartupWMClass=TestBrowser\n"
+    )
+    process_runner = StubProcessRunner(CompletedProcess(("xdg-settings",), 0, "test-browser.desktop\n", ""))
+
+    sway = StubSwayAdapter([])
+
+    def launch(args: Sequence[str], *, cwd: Path) -> None:
+        sway.windows.append(
+            SwayWindow(
+                id=99,
+                workspace_name="p:demo",
+                app_id="test-browser",
+                window_class=None,
+                marks=(),
+            )
+        )
+
+    launcher = StubBrowserLauncher()
+    launcher.launch = launch  # type: ignore[method-assign]
+
+    adapter = SessionBrowserAdapter(
+        sway=sway,
+        launcher=launcher,
+        process_runner=process_runner,
+        environ={"XDG_DATA_HOME": str(tmp_path), "XDG_DATA_DIRS": ""},
+        session_windows_for=lambda _session: (
+            # Browser window declared but with empty command — fall through to
+            # xdg detection rather than blindly using the empty string.
+            WindowSpec(role="browser", command="", autostart_active=False),
+        ),
+    )
+
+    adapter.ensure_browser(build_session(), url=None)
+
+    # Browser was launched via the xdg-detected command, then sway-marked.
+    assert sway.marks == [(99, "_hop_browser:demo")]
+    assert process_runner.commands == [("xdg-settings", "get", "default-web-browser")]
+
+
 def test_session_browser_adapter_uses_top_level_browser_window_override() -> None:
     """A user-declared `[windows.browser] command = "..."` overrides hop's
     xdg-detected default. Without a session_windows_for, the existing xdg

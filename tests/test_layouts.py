@@ -281,6 +281,39 @@ def test_resolve_windows_order_is_builtins_then_layouts_then_top_level(tmp_path:
     assert tuple(window.role for window in windows) == ("shell", "editor", "browser", "server", "worker")
 
 
+def test_layout_with_no_autostart_field_never_matches(tmp_path: Path) -> None:
+    """A layout whose `autostart` field is None (e.g. a project-only override
+    that didn't carry the global's probe) is treated as off — safer than
+    always-on."""
+    config = HopConfig(
+        layouts=(
+            LayoutConfig(
+                name="orphan",
+                autostart=None,
+                windows=(WindowConfig(role="server", command="bin/dev"),),
+            ),
+        )
+    )
+
+    runner = RecordingRunner()
+    windows = resolve_windows(config, build_session(tmp_path), runner=runner)
+
+    assert find_window(windows, "server") is None
+    # Probe never ran since the layout was skipped outright.
+    assert runner.calls == []
+
+
+def test_resolver_drops_user_window_with_no_command(tmp_path: Path) -> None:
+    """A top-level window declared with only an `autostart` opt-out (no
+    `command`) has no resolved command. Drop it so `hop term --role X`
+    doesn't try to launch an undefined target."""
+    config = HopConfig(windows=(WindowConfig(role="ghost", autostart="false"),))
+
+    windows = resolve_windows(config, build_session(tmp_path), runner=RecordingRunner())
+
+    assert find_window(windows, "ghost") is None
+
+
 def test_top_level_window_overrides_layout_window(tmp_path: Path) -> None:
     """When both an active layout and a top-level entry declare the same
     role, the top-level entry wins per-field (top-level resolves last)."""

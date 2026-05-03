@@ -337,7 +337,7 @@ def _parse_backend(name: str, table: dict[str, Any], *, source: Path) -> Backend
         msg = (
             f"{source}: backend {name!r} has top-level field {flat!r}; that field was removed. "
             f"Built-in {flat!r} runs through the active backend's command_prefix; "
-            f"override it with [windows.{flat}] command = \"...\" if you need a custom one."
+            f'override it with [windows.{flat}] command = "..." if you need a custom one.'
         )
         raise HopConfigError(msg)
     if _LEGACY_BACKEND_WINDOWS_FIELD in table:
@@ -405,9 +405,7 @@ def _parse_layout_windows(
     parsed: list[WindowConfig] = []
     for role, value in cast(dict[str, Any], raw).items():
         if not isinstance(value, dict):
-            msg = (
-                f"{source}: layout {layout!r} window {role!r} must be a table, got {type(value).__name__}"
-            )
+            msg = f"{source}: layout {layout!r} window {role!r} must be a table, got {type(value).__name__}"
             raise HopConfigError(msg)
         parsed.append(
             _parse_window(

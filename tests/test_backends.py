@@ -187,6 +187,23 @@ def test_command_backend_translate_terminal_cwd_identity_without_workspace(tmp_p
     assert backend.translate_terminal_cwd(build_session(tmp_path), other) == other
 
 
+def test_command_backend_translate_terminal_cwd_passes_through_unrelated_paths(tmp_path: Path) -> None:
+    """A cwd that isn't under workspace_path is identity-translated; the
+    relative_to call raises ValueError and the backend returns it as-is."""
+    backend = backend_from_config(make_backend(), workspace_path="/workspace")
+    other = Path("/elsewhere")
+
+    assert backend.translate_terminal_cwd(build_session(tmp_path), other) == other
+
+
+def test_command_backend_translate_host_path_identity_without_workspace(tmp_path: Path) -> None:
+    """No workspace_path → no rewrite, even for paths under the project root."""
+    backend = backend_from_config(make_backend(), workspace_path=None)
+    host_path = tmp_path / "lib" / "foo.py"
+
+    assert backend.translate_host_path(build_session(tmp_path), host_path) == host_path
+
+
 def test_command_backend_translate_host_path_rewrites_under_project_root(tmp_path: Path) -> None:
     backend = backend_from_config(make_backend(), workspace_path="/workspace")
     session = build_session(tmp_path)
@@ -303,6 +320,47 @@ def test_command_backend_with_workspace_path_preserves_prefix_and_translate(tmp_
 
 
 # --- localhost URL translation -------------------------------------------
+
+
+def test_command_backend_translate_localhost_url_is_identity_when_no_commands(tmp_path: Path) -> None:
+    runner = RecordingRunner()
+    backend = backend_from_config(
+        make_backend(port_translate=None, host_translate=None),
+        runner=runner,
+    )
+
+    assert (
+        backend.translate_localhost_url(build_session(tmp_path), "http://localhost:3000/foo")
+        == "http://localhost:3000/foo"
+    )
+    assert runner.calls == []
+
+
+def test_command_backend_translate_localhost_url_raises_when_port_translate_returns_non_numeric(
+    tmp_path: Path,
+) -> None:
+    runner = RecordingRunner(stdout="not-a-port\n")
+    backend = backend_from_config(make_backend(port_translate="p {port}"), runner=runner)
+
+    with pytest.raises(SessionBackendError, match="non-numeric"):
+        backend.translate_localhost_url(build_session(tmp_path), "http://localhost:3000/")
+
+
+def test_command_backend_translate_localhost_url_preserves_userinfo_when_port_dropped(
+    tmp_path: Path,
+) -> None:
+    """A URL without an explicit port plus host_translate (no port_translate)
+    rebuilds the netloc with userinfo + host but no port. Exercises the
+    `port is None` branch of the userinfo-preserving rebuilder."""
+    runner = RecordingRunner(stdout="myserver\n")
+    backend = backend_from_config(make_backend(host_translate="echo myserver"), runner=runner)
+
+    translated = backend.translate_localhost_url(
+        build_session(tmp_path),
+        "http://user:pw@localhost/foo",
+    )
+
+    assert translated == "http://user:pw@myserver/foo"
 
 
 def test_command_backend_translate_localhost_url_replaces_port(tmp_path: Path) -> None:
@@ -422,6 +480,31 @@ def test_select_backend_walks_until_default_succeeds(tmp_path: Path) -> None:
 
     assert chosen is not None
     assert chosen.name == "b"
+
+
+def test_select_backend_skips_backends_without_default(tmp_path: Path) -> None:
+    """A backend without a `default` probe can't auto-detect; iterate past it."""
+    runner = RecordingRunner()
+    backends = (
+        make_backend(name="a", default=None),
+        make_backend(name="b", default="b-default"),
+    )
+
+    chosen = select_backend(build_session(tmp_path), backends, runner=runner)
+
+    assert chosen is not None
+    assert chosen.name == "b"
+    assert runner.calls == [(("sh", "-c", "b-default"), tmp_path)]
+
+
+def test_select_backend_returns_none_when_no_default_succeeds(tmp_path: Path) -> None:
+    runner = RecordingRunner(returncode=1)
+    backends = (
+        make_backend(name="a", default="a-default"),
+        make_backend(name="b", default="b-default"),
+    )
+
+    assert select_backend(build_session(tmp_path), backends, runner=runner) is None
 
 
 def test_select_backend_pinned_host_returns_none(tmp_path: Path) -> None:
