@@ -39,11 +39,15 @@ class StubSwayAdapter:
         self.focused_workspace = focused_workspace
         self.windows = windows
         self.switched_workspaces: list[str] = []
+        self.layout_calls: list[tuple[str, str]] = []
         self.closed_windows: list[int] = []
         self.removed_workspaces: list[str] = []
 
     def switch_to_workspace(self, workspace_name: str) -> None:
         self.switched_workspaces.append(workspace_name)
+
+    def set_workspace_layout(self, workspace_name: str, layout: str) -> None:
+        self.layout_calls.append((workspace_name, layout))
 
     def list_session_workspaces(self, *, prefix: str = "p:") -> tuple[str, ...]:
         return tuple(workspace for workspace in self.workspaces if workspace.startswith(prefix))
@@ -284,6 +288,71 @@ def test_execute_command_first_entry_brings_up_both_editor_and_shell(tmp_path: P
     assert services.sway.switched_workspaces == ["p:demo"]
     assert services.kitty.ensured_roles == [("demo", "shell", project_root.resolve())]
     assert services.neovim.ensured_sessions == [("demo", project_root.resolve())]
+
+
+def test_execute_command_applies_workspace_layout_from_config_on_first_entry(tmp_path: Path) -> None:
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+
+    services = StubHopServices(
+        sway=StubSwayAdapter(focused_workspace="p:other"),
+        kitty=StubKittyAdapter(),
+        neovim=StubNeovimAdapter(),
+        browser=StubBrowserAdapter(),
+        persisted_session_names=(),
+    )
+
+    from hop.app import SessionBackendRegistry
+
+    registry = SessionBackendRegistry(
+        global_config_loader=lambda: HopConfig(workspace_layout="tabbed"),
+        sessions_loader=lambda: {},
+    )
+    real_services = HopServices(
+        sway=services.sway,
+        kitty=services.kitty,
+        neovim=services.neovim,
+        browser=services.browser,
+        session_backends=registry,
+    )
+
+    assert execute_command(EnterSessionCommand(), cwd=project_root, services=real_services) == 0
+
+    assert services.sway.layout_calls == [("p:demo", "tabbed")]
+
+
+def test_execute_command_skips_workspace_layout_on_re_entry(tmp_path: Path) -> None:
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+
+    services = StubHopServices(
+        sway=StubSwayAdapter(focused_workspace="p:other"),
+        kitty=StubKittyAdapter(),
+        neovim=StubNeovimAdapter(),
+        browser=StubBrowserAdapter(),
+        persisted_session_names=("demo",),  # already entered before
+    )
+
+    from hop.app import SessionBackendRegistry
+
+    registry = SessionBackendRegistry(
+        global_config_loader=lambda: HopConfig(workspace_layout="tabbed"),
+        sessions_loader=lambda: {
+            "demo": SessionState(name="demo", project_root=project_root.resolve()),
+        },
+    )
+    real_services = HopServices(
+        sway=services.sway,
+        kitty=services.kitty,
+        neovim=services.neovim,
+        browser=services.browser,
+        session_backends=registry,
+    )
+
+    assert execute_command(EnterSessionCommand(), cwd=project_root, services=real_services) == 0
+
+    # Re-entry: layout is not re-applied, only the shell is ensured.
+    assert services.sway.layout_calls == []
 
 
 def test_execute_command_re_entry_does_not_resurrect_a_closed_editor(tmp_path: Path) -> None:

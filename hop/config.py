@@ -36,6 +36,11 @@ AUTOSTART_TRUE = "true"
 AUTOSTART_FALSE = "false"
 _AUTOSTART_VALUES = frozenset({AUTOSTART_TRUE, AUTOSTART_FALSE})
 
+# Sway workspace layout modes accepted by the top-level `workspace_layout`
+# setting. These are the only values sway's IPC `layout <mode>` command
+# accepts; we reject anything else at parse time.
+_WORKSPACE_LAYOUTS = frozenset({"splith", "splitv", "stacking", "tabbed"})
+
 
 @dataclass(frozen=True, slots=True)
 class WindowConfig:
@@ -103,11 +108,16 @@ class HopConfig:
     Backends, layouts, and top-level windows all share a flat declaration
     list (one tuple per kind) so merge can preserve declaration order and
     project-wins-per-field semantics across same-named entries.
+
+    ``workspace_layout`` is the sway workspace layout mode hop sets on a
+    session's workspace at first entry — one of ``splith`` / ``splitv`` /
+    ``stacking`` / ``tabbed``. ``None`` leaves sway's default behavior alone.
     """
 
     backends: tuple[BackendConfig, ...] = ()
     layouts: tuple[LayoutConfig, ...] = ()
     windows: tuple[WindowConfig, ...] = ()
+    workspace_layout: str | None = None
 
 
 def default_global_config_path() -> Path:
@@ -133,6 +143,9 @@ def merge_configs(project: HopConfig, global_: HopConfig) -> HopConfig:
         backends=merge_backends(project, global_),
         layouts=merge_layouts(project, global_),
         windows=merge_windows(project, global_),
+        workspace_layout=(
+            project.workspace_layout if project.workspace_layout is not None else global_.workspace_layout
+        ),
     )
 
 
@@ -256,7 +269,7 @@ _LAYOUT_FIELDS = ("autostart", "windows")
 _WINDOW_FIELDS = ("command", "autostart")
 _LEGACY_FLAT_BACKEND_FIELDS = ("shell", "editor")
 _LEGACY_BACKEND_WINDOWS_FIELD = "windows"
-_TOP_LEVEL_KEYS = ("backends", "layouts", "windows")
+_TOP_LEVEL_KEYS = ("backends", "layouts", "windows", "workspace_layout")
 
 
 def _load_config_file(path: Path) -> HopConfig:
@@ -276,7 +289,26 @@ def _parse_top_level(data: dict[str, Any], *, source: Path) -> HopConfig:
     backends = _parse_backends(data.get("backends"), source=source)
     layouts = _parse_layouts(data.get("layouts"), source=source)
     windows = _parse_top_level_windows(data.get("windows"), source=source)
-    return HopConfig(backends=backends, layouts=layouts, windows=windows)
+    workspace_layout = _parse_workspace_layout(data.get("workspace_layout"), source=source)
+    return HopConfig(
+        backends=backends,
+        layouts=layouts,
+        windows=windows,
+        workspace_layout=workspace_layout,
+    )
+
+
+def _parse_workspace_layout(raw: object, *, source: Path) -> str | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        msg = f"{source}: top-level 'workspace_layout' must be a string, got {type(raw).__name__}"
+        raise HopConfigError(msg)
+    if raw not in _WORKSPACE_LAYOUTS:
+        accepted = ", ".join(sorted(_WORKSPACE_LAYOUTS))
+        msg = f"{source}: top-level 'workspace_layout' must be one of {accepted}, got {raw!r}"
+        raise HopConfigError(msg)
+    return raw
 
 
 def _parse_backends(raw: object, *, source: Path) -> tuple[BackendConfig, ...]:

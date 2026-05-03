@@ -32,6 +32,33 @@ def test_switch_to_workspace_uses_run_command_ipc_message() -> None:
     ]
 
 
+def test_set_workspace_layout_sends_bare_layout_command() -> None:
+    """Caller is expected to have just switched to the workspace, so a bare
+    `layout <mode>` operates on its root container. The chained
+    `workspace foo; layout tabbed` form caused mis-focused window
+    placement during the kitty bootstrap that follows."""
+    transport = StubSwayTransport(responses={SwayMessageType.RUN_COMMAND: json.dumps([{"success": True}]).encode()})
+    sway = SwayIpcAdapter(transport=transport)
+
+    sway.set_workspace_layout("p:demo", "tabbed")
+
+    assert transport.requests == [
+        (SwayMessageType.RUN_COMMAND, b"layout tabbed"),
+    ]
+
+
+def test_set_workspace_layout_raises_when_sway_rejects_command() -> None:
+    transport = StubSwayTransport(responses={SwayMessageType.RUN_COMMAND: json.dumps([{"success": False}]).encode()})
+    sway = SwayIpcAdapter(transport=transport)
+
+    try:
+        sway.set_workspace_layout("p:demo", "tabbed")
+    except SwayCommandError as error:
+        assert "tabbed" in str(error)
+    else:
+        raise AssertionError("Expected SwayCommandError for a rejected layout command")
+
+
 def test_switch_to_workspace_raises_when_sway_rejects_command() -> None:
     transport = StubSwayTransport(responses={SwayMessageType.RUN_COMMAND: json.dumps([{"success": False}]).encode()})
     sway = SwayIpcAdapter(transport=transport)

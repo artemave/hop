@@ -10,6 +10,7 @@ from hop.kitty import KittyWindow
 from hop.layouts import WindowSpec
 from hop.session import ProjectSession, resolve_project_session
 from hop.state import SessionState, load_sessions
+from hop.sway import SwayWindow
 
 SESSION_WORKSPACE_PREFIX = "p:"
 SHELL_TERMINAL_ROLE = SHELL_ROLE
@@ -26,7 +27,13 @@ class SessionListing:
 class SessionSwayAdapter(Protocol):
     def switch_to_workspace(self, workspace_name: str) -> None: ...
 
+    def set_workspace_layout(self, workspace_name: str, layout: str) -> None: ...
+
     def list_session_workspaces(self, *, prefix: str = SESSION_WORKSPACE_PREFIX) -> Sequence[str]: ...
+
+    def list_windows(self) -> Sequence[SwayWindow]: ...
+
+    def focus_window(self, window_id: int) -> None: ...
 
 
 class SessionTerminalAdapter(Protocol):
@@ -53,9 +60,15 @@ def enter_project_session(
     editor: SessionEditorAdapter | None = None,
     browser: SessionBrowserAutostartAdapter | None = None,
     windows: Sequence[WindowSpec] = (),
+    workspace_layout: str | None = None,
 ) -> ProjectSession:
     session = resolve_project_session(cwd)
     sway.switch_to_workspace(session.workspace_name)
+    if workspace_layout is not None:
+        # Apply before launching any windows so the first one lands in the
+        # configured arrangement (tabbed, stacking, splith, splitv) instead
+        # of getting placed under sway's default layout and then reflowed.
+        sway.set_workspace_layout(session.workspace_name, workspace_layout)
     # Terminal must come first: on first entry the per-session kitty isn't
     # running yet, and only ensure_terminal knows how to bootstrap it (catch
     # KittyConnectionError → spawn kitty listening on the session socket).
@@ -73,20 +86,39 @@ def enter_project_session(
         # up the editor alongside the shell, matching the pre-resolver
         # bootstrap behavior.
         editor.ensure(session)
-        return session
-    for window in windows:
-        if window.role == SHELL_ROLE:
-            continue
-        if not window.autostart_active:
-            continue
-        if window.role == EDITOR_ROLE:
-            editor.ensure(session)
-        elif window.role == BROWSER_ROLE:
-            if browser is not None:
-                browser.ensure_browser(session, url=None)
-        else:
-            terminals.ensure_terminal(session, role=window.role)
+    else:
+        for window in windows:
+            if window.role == SHELL_ROLE:
+                continue
+            if not window.autostart_active:
+                continue
+            if window.role == EDITOR_ROLE:
+                editor.ensure(session)
+            elif window.role == BROWSER_ROLE:
+                if browser is not None:
+                    browser.ensure_browser(session, url=None)
+            else:
+                terminals.ensure_terminal(session, role=window.role)
+    # Each kitty `launch` IPC steals focus by default, so after the
+    # autostart sweep the focused window is whichever role landed last
+    # (typically the editor or a layout window). Refocus the shell so the
+    # session lands on a sensible starting point — and in a tabbed
+    # workspace, makes the shell the visible tab.
+    _focus_shell_if_present(session, sway=sway)
     return session
+
+
+def _focus_shell_if_present(session: ProjectSession, *, sway: SessionSwayAdapter) -> None:
+    shell_app_id = f"hop:{SHELL_ROLE}"
+    candidates = [
+        window
+        for window in sway.list_windows()
+        if (window.app_id == shell_app_id or window.window_class == shell_app_id)
+        and window.workspace_name == session.workspace_name
+    ]
+    if not candidates:
+        return
+    sway.focus_window(min(candidates, key=lambda window: window.id).id)
 
 
 def spawn_session_terminal(

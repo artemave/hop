@@ -64,6 +64,8 @@ from hop.sway import SwayIpcAdapter, SwayWindow
 class SwayAdapter(Protocol):
     def switch_to_workspace(self, workspace_name: str) -> None: ...
 
+    def set_workspace_layout(self, workspace_name: str, layout: str) -> None: ...
+
     def list_session_workspaces(self, *, prefix: str = "p:") -> Sequence[str]: ...
 
     def list_windows(self) -> Sequence[SwayWindow]: ...
@@ -200,6 +202,9 @@ class SessionBackendRegistry:
         runner = self._runner if self._runner is not None else _default_runner
         return resolve_windows(merged, session, runner=runner)
 
+    def workspace_layout_for_entry(self, session: ProjectSession) -> str | None:
+        return self._merged_config(session).workspace_layout
+
     def _merged_config(self, session: ProjectSession) -> HopConfig:
         global_config = self._global_config_loader()
         project_config = load_project_config(session.project_root)
@@ -286,6 +291,11 @@ def execute_command(
                         if is_first_entry
                         else ()
                     )
+                    workspace_layout = (
+                        services.session_backends.workspace_layout_for_entry(session)
+                        if is_first_entry
+                        else None
+                    )
                     enter_project_session(
                         current_directory,
                         sway=services.sway,
@@ -293,6 +303,7 @@ def execute_command(
                         editor=services.neovim if is_first_entry else None,
                         browser=services.browser if is_first_entry else None,
                         windows=windows,
+                        workspace_layout=workspace_layout,
                     )
                 finally:
                     services.session_backends.clear_override(session.session_name)

@@ -256,6 +256,46 @@ autostart = "test -f bin/jobs"
         load_global_config(config_file)
 
 
+def test_load_global_config_parses_workspace_layout(tmp_path: Path) -> None:
+    config_file = write(tmp_path / "config.toml", 'workspace_layout = "tabbed"\n')
+
+    assert load_global_config(config_file).workspace_layout == "tabbed"
+
+
+def test_load_global_config_rejects_invalid_workspace_layout(tmp_path: Path) -> None:
+    config_file = write(tmp_path / "config.toml", 'workspace_layout = "tiled"\n')
+
+    with pytest.raises(HopConfigError, match="must be one of"):
+        load_global_config(config_file)
+
+
+def test_load_global_config_rejects_non_string_workspace_layout(tmp_path: Path) -> None:
+    config_file = write(tmp_path / "config.toml", "workspace_layout = 42\n")
+
+    with pytest.raises(HopConfigError, match="must be a string"):
+        load_global_config(config_file)
+
+
+def test_load_global_config_workspace_layout_omitted_is_none(tmp_path: Path) -> None:
+    config_file = write(tmp_path / "config.toml", "# nothing\n")
+
+    assert load_global_config(config_file).workspace_layout is None
+
+
+def test_merge_configs_workspace_layout_project_wins() -> None:
+    project = HopConfig(workspace_layout="tabbed")
+    global_ = HopConfig(workspace_layout="splith")
+
+    assert merge_configs(project, global_).workspace_layout == "tabbed"
+
+
+def test_merge_configs_workspace_layout_inherits_from_global() -> None:
+    project = HopConfig()
+    global_ = HopConfig(workspace_layout="stacking")
+
+    assert merge_configs(project, global_).workspace_layout == "stacking"
+
+
 def test_load_global_config_rejects_unknown_top_level_key(tmp_path: Path) -> None:
     config_file = write(
         tmp_path / "config.toml",

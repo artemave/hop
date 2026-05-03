@@ -11,18 +11,35 @@ from hop.kitty import KittyWindow
 from hop.layouts import WindowSpec
 from hop.session import ProjectSession
 from hop.state import SessionState
+from hop.sway import SwayWindow
 
 
 class StubSwayAdapter:
-    def __init__(self, workspaces: tuple[str, ...] = ()) -> None:
+    def __init__(
+        self,
+        workspaces: tuple[str, ...] = (),
+        windows: tuple[SwayWindow, ...] = (),
+    ) -> None:
         self.workspaces = workspaces
+        self.windows = windows
         self.switched_workspaces: list[str] = []
+        self.layout_calls: list[tuple[str, str]] = []
+        self.focused_window_ids: list[int] = []
 
     def switch_to_workspace(self, workspace_name: str) -> None:
         self.switched_workspaces.append(workspace_name)
 
+    def set_workspace_layout(self, workspace_name: str, layout: str) -> None:
+        self.layout_calls.append((workspace_name, layout))
+
     def list_session_workspaces(self, *, prefix: str = "p:") -> tuple[str, ...]:
         return tuple(workspace for workspace in self.workspaces if workspace.startswith(prefix))
+
+    def list_windows(self) -> tuple[SwayWindow, ...]:
+        return self.windows
+
+    def focus_window(self, window_id: int) -> None:
+        self.focused_window_ids.append(window_id)
 
 
 class StubTerminalAdapter:
@@ -250,6 +267,93 @@ def test_enter_project_session_skips_inactive_window(tmp_path: Path) -> None:
 
     # Shell was ensured; server window was skipped because autostart_active is False.
     assert terminals.ensured_terminals == [("demo", "shell", project_root)]
+
+
+def test_enter_project_session_sets_workspace_layout_before_launching_windows(tmp_path: Path) -> None:
+    """When `workspace_layout` is configured, hop sends it to sway *before*
+    ensuring any windows so the first window lands in the configured
+    arrangement instead of getting reflowed afterwards."""
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+
+    sway = StubSwayAdapter()
+    terminals = StubTerminalAdapter()
+    editor = StubEditorAdapter()
+
+    enter_project_session(
+        project_root,
+        sway=sway,
+        terminals=terminals,
+        editor=editor,
+        workspace_layout="tabbed",
+    )
+
+    assert sway.layout_calls == [("p:demo", "tabbed")]
+    assert sway.switched_workspaces == ["p:demo"]
+
+
+def test_enter_project_session_focuses_shell_window_after_sweep(tmp_path: Path) -> None:
+    """Each kitty launch steals focus, so after the autostart sweep the
+    last-launched window is focused. enter_project_session refocuses the
+    shell so the session lands on a sensible starting point — and in a
+    tabbed workspace, makes the shell the visible tab."""
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+
+    shell_window = SwayWindow(id=42, workspace_name="p:demo", app_id="hop:shell", window_class=None)
+    editor_window = SwayWindow(id=43, workspace_name="p:demo", app_id="hop:editor", window_class=None)
+    sway = StubSwayAdapter(windows=(shell_window, editor_window))
+    terminals = StubTerminalAdapter()
+    editor = StubEditorAdapter()
+
+    enter_project_session(project_root, sway=sway, terminals=terminals, editor=editor)
+
+    assert sway.focused_window_ids == [42]
+
+
+def test_enter_project_session_skips_focus_when_no_shell_window_in_sway(tmp_path: Path) -> None:
+    """If sway hasn't registered the shell window yet (or it ended up on
+    another workspace somehow), skip the refocus instead of erroring."""
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+
+    sway = StubSwayAdapter()  # no windows
+    terminals = StubTerminalAdapter()
+    editor = StubEditorAdapter()
+
+    enter_project_session(project_root, sway=sway, terminals=terminals, editor=editor)
+
+    assert sway.focused_window_ids == []
+
+
+def test_enter_project_session_focuses_lowest_id_shell_on_session_workspace(tmp_path: Path) -> None:
+    """A stale shell window from another workspace must not be picked.
+    Match by app_id AND workspace name, then take the lowest sway id."""
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+
+    foreign_shell = SwayWindow(id=10, workspace_name="p:other", app_id="hop:shell", window_class=None)
+    session_shell = SwayWindow(id=20, workspace_name="p:demo", app_id="hop:shell", window_class=None)
+    sway = StubSwayAdapter(windows=(foreign_shell, session_shell))
+    terminals = StubTerminalAdapter()
+    editor = StubEditorAdapter()
+
+    enter_project_session(project_root, sway=sway, terminals=terminals, editor=editor)
+
+    assert sway.focused_window_ids == [20]
+
+
+def test_enter_project_session_skips_layout_call_when_unset(tmp_path: Path) -> None:
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+
+    sway = StubSwayAdapter()
+    terminals = StubTerminalAdapter()
+    editor = StubEditorAdapter()
+
+    enter_project_session(project_root, sway=sway, terminals=terminals, editor=editor)
+
+    assert sway.layout_calls == []
 
 
 def test_enter_project_session_falls_back_to_legacy_behavior_without_windows(tmp_path: Path) -> None:

@@ -101,6 +101,16 @@ class SwayIpcAdapter:
     def switch_to_workspace(self, workspace_name: str) -> None:
         self.run_command(f"workspace {json.dumps(workspace_name)}")
 
+    def set_workspace_layout(self, workspace_name: str, layout: str) -> None:
+        # `layout <mode>` operates on the focused container. Caller is
+        # expected to have just called `switch_to_workspace(workspace_name)`,
+        # so the focused container is this workspace's root and the layout
+        # change applies to it. The `workspace_name` argument is currently
+        # unused but kept for API symmetry and future per-workspace layout
+        # routing without a focus dance.
+        del workspace_name
+        self.run_command(f"layout {layout}")
+
     def run_command(self, command: str) -> None:
         payload = command.encode()
         response = self._transport.request(SwayMessageType.RUN_COMMAND, payload)

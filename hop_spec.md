@@ -89,6 +89,14 @@ Each session has a **backend** that decides *where* its windows run. The default
 
 All commands are run via `sh -c <substituted-string>`, so pipes, redirects, and `$(...)` are part of the contract. Substitution placeholders supported inside any command: `{project_root}`. `{port}` is additionally available inside `port_translate` and `host_translate` (the URL's original port, or empty string when absent). Substituted values are shell-quoted before insertion so paths with spaces or shell metacharacters round-trip safely.
 
+### Workspace layout
+
+Top-level `workspace_layout` (string, optional) — sway workspace layout mode hop applies to a session's workspace at first entry. Accepts only `splith`, `splitv`, `stacking`, `tabbed`. Omitted ⇒ sway's default layout. Re-entry from another workspace does not re-apply it (the user may have changed the layout deliberately during the session).
+
+```toml
+workspace_layout = "tabbed"
+```
+
 ### Layouts and top-level windows
 
 Per-role launch commands live outside the backend, in two top-level config sections:

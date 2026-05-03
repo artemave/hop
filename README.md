@@ -202,13 +202,14 @@ A session has a **backend** that decides where its windows run. The default is *
 
 When you enter a session (bare `hop`), hop walks the configured backends in declaration order and runs each backend's `default` probe in the project root. The first one that exits 0 wins. If none succeed, the session falls back to **host**. The chosen backend is persisted and reused for all subsequent commands against that session.
 
-### Three top-level sections
+### Top-level shape
 
-A hop config has three top-level sections, all optional:
+A hop config has three named sections plus one scalar setting, all optional:
 
 - `[backends.<name>]` — backend lifecycle (`prepare` / `teardown` / `workspace` / translate helpers) plus a `command_prefix` shell snippet that wraps every command launched in that backend's environment.
 - `[layouts.<name>]` — a named layout with one required `autostart` shell-snippet probe and a list of windows that come up together when the probe matches.
 - `[windows.<role>]` — top-level windows (always autostart unless `autostart = "false"`).
+- `workspace_layout = "<mode>"` — sway workspace layout applied at first session entry. One of `splith`, `splitv`, `stacking`, `tabbed`.
 
 ### Backend example
 
