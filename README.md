@@ -12,13 +12,13 @@ hop is built on top of [Sway](https://swaywm.org/) window manager, [Kitty](https
 
 ## Features
 
-- **Terminals start in the project directory.** - spawn a shell anywhere in a session and it's already `cd`-ed into the project root.
-- **Open from terminal output.** - bundled Kitty kitten picks file paths and URLs from visible output and dispatches them to the session's editor or browser.
+- **Terminals start in the project directory** - spawn a shell anywhere in a session and it's already `cd`-ed into the project root.
+- **Open from terminal output** - bundled Kitty kitten picks file paths and URLs from visible output and dispatches them to the session's editor or browser.
 - **Shared Neovim per session** - all file links open there.
 - **Shared browser per session** - all browser links open there.
-- **Pluggable backends.** - shells and editor can run on the host, inside a devcontainer, over ssh, or anywhere describable as a chain of commands - without changing how you drive the session.
-- **Sway and Vicinae integration.** - helper scripts for one-key session switch, kill, focusing or creating any declared window, and moving windows in.
-- **Scriptable.** - all features are accessible from the CLI.
+- **Pluggable backends** - shells and editor can run on the host, inside a devcontainer, over ssh, or anywhere describable as a chain of commands - without changing how you drive the session.
+- **Sway and Vicinae integration** - helper scripts for one-key session switch, kill, focusing or creating any declared window, and moving windows in.
+- **Scriptable** - all features are accessible from the CLI.
 
 ## Requirements
 
