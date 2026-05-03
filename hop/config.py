@@ -446,7 +446,7 @@ def _parse_window(role: str, table: dict[str, Any], *, context: str, source: Pat
     if unknown:
         msg = f"{source}: {context} has unknown field {unknown[0]!r}"
         raise HopConfigError(msg)
-    command = _parse_command(table, key="command", context=context, source=source)
+    command = _parse_command(table, key="command", context=context, source=source, allow_empty=True)
     autostart_raw = _parse_command(table, key="autostart", context=context, source=source)
     if autostart_raw is not None and autostart_raw not in _AUTOSTART_VALUES:
         msg = (
@@ -463,6 +463,7 @@ def _parse_command(
     key: str,
     context: str,
     source: Path,
+    allow_empty: bool = False,
 ) -> str | None:
     if key not in table:
         return None
@@ -477,7 +478,7 @@ def _parse_command(
     if not isinstance(value, str):
         msg = f"{source}: {context} field {key!r} must be a string, got {type(value).__name__}"
         raise HopConfigError(msg)
-    if not value.strip():
+    if not allow_empty and not value.strip():
         msg = f"{source}: {context} field {key!r} must not be empty"
         raise HopConfigError(msg)
     return value

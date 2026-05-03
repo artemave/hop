@@ -451,6 +451,25 @@ prepare = "   "
         load_global_config(config_file)
 
 
+def test_load_global_config_allows_empty_window_command(tmp_path: Path) -> None:
+    """`command = ""` on a window is the explicit shell-like sentinel —
+    accepted at parse time and surfaced as "" so the resolver can keep it."""
+    config_file = write(
+        tmp_path / "config.toml",
+        """
+[layouts.rails]
+autostart = "test -f bin/rails"
+
+[layouts.rails.windows.test]
+command = ""
+""",
+    )
+
+    config = load_global_config(config_file)
+
+    assert config.layouts[0].windows[0].command == ""
+
+
 # --- project config uses identical schema --------------------------------
 
 

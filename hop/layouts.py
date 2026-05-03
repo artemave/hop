@@ -93,20 +93,21 @@ def resolve_windows(
     result: list[WindowSpec] = []
     for role in order:
         spec = specs[role]
-        if not spec.command and role not in _BUILTIN_ROLES:
+        if spec.command is None and role not in _BUILTIN_ROLES:
             # A user-declared role with no resolved command — typically a
             # partial override that never picked up a command from any
             # layer. Skipping keeps `hop term --role X` from launching
-            # something undefined.
+            # something undefined. An explicit `command = ""` reaches
+            # here as "" (not None) and is preserved as a shell-like spec.
             continue
-        result.append(WindowSpec(role=spec.role, command=spec.command, autostart_active=spec.autostart_active))
+        result.append(WindowSpec(role=spec.role, command=spec.command or "", autostart_active=spec.autostart_active))
     return tuple(result)
 
 
 @dataclass
 class _MutableSpec:
     role: str
-    command: str
+    command: str | None
     autostart_active: bool
 
 
@@ -137,16 +138,15 @@ def _apply_layout_window(
     existing = specs.get(window.role)
     autostart_active = window.autostart != AUTOSTART_FALSE
     if existing is None:
-        command = window.command if window.command is not None else ""
         specs[window.role] = _MutableSpec(
             role=window.role,
-            command=command,
+            command=window.command,
             autostart_active=autostart_active,
         )
         order.append(window.role)
         return
-    command = window.command if window.command is not None else existing.command
-    existing.command = command
+    if window.command is not None:
+        existing.command = window.command
     existing.autostart_active = autostart_active
 
 
@@ -158,11 +158,10 @@ def _apply_top_level_window(
 ) -> None:
     existing = specs.get(window.role)
     if existing is None:
-        command = window.command if window.command is not None else ""
         autostart_active = window.autostart != AUTOSTART_FALSE
         specs[window.role] = _MutableSpec(
             role=window.role,
-            command=command,
+            command=window.command,
             autostart_active=autostart_active,
         )
         order.append(window.role)

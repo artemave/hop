@@ -314,6 +314,60 @@ def test_resolver_drops_user_window_with_no_command(tmp_path: Path) -> None:
     assert find_window(windows, "ghost") is None
 
 
+def test_layout_window_with_explicit_empty_command_resolves_as_shell_like(tmp_path: Path) -> None:
+    """`command = ""` is an explicit "just start kitty / empty shell"
+    sentinel — distinct from omitting the field, which drops the role."""
+    config = HopConfig(
+        layouts=(
+            LayoutConfig(
+                name="rails",
+                autostart="true",
+                windows=(WindowConfig(role="test", command=""),),
+            ),
+        )
+    )
+
+    windows = resolve_windows(config, build_session(tmp_path), runner=RecordingRunner())
+
+    test = find_window(windows, "test")
+    assert test is not None
+    assert test.command == ""
+    assert test.autostart_active is True
+
+
+def test_top_level_window_with_explicit_empty_command_resolves_as_shell_like(tmp_path: Path) -> None:
+    config = HopConfig(windows=(WindowConfig(role="scratch", command=""),))
+
+    windows = resolve_windows(config, build_session(tmp_path), runner=RecordingRunner())
+
+    scratch = find_window(windows, "scratch")
+    assert scratch is not None
+    assert scratch.command == ""
+    assert scratch.autostart_active is True
+
+
+def test_layout_window_without_command_only_flips_autostart_on_existing_spec(tmp_path: Path) -> None:
+    """A layout window may carry just an autostart opt-out (no `command`) to
+    flip the matched layout's behavior for a role that's already been resolved
+    from a prior layer (built-in, earlier layout). The command must survive."""
+    config = HopConfig(
+        layouts=(
+            LayoutConfig(
+                name="rails",
+                autostart="true",
+                windows=(WindowConfig(role="editor", autostart="false"),),
+            ),
+        )
+    )
+
+    windows = resolve_windows(config, build_session(tmp_path), runner=RecordingRunner())
+
+    editor = find_window(windows, "editor")
+    assert editor is not None
+    assert editor.command == "nvim"  # built-in command preserved
+    assert editor.autostart_active is False
+
+
 def test_top_level_window_overrides_layout_window(tmp_path: Path) -> None:
     """When both an active layout and a top-level entry declare the same
     role, the top-level entry wins per-field (top-level resolves last)."""
