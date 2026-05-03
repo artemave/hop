@@ -16,7 +16,12 @@ set -euo pipefail
 exec setsid -f bash -c '
     set -e
 
-    vicinae close
+    # Guarded: in `silent` mode vicinae may auto-close before the detached
+    # script reaches this line, in which case `vicinae close` exits non-zero
+    # ("Failed to close: Already closed") and `set -e` would kill the script
+    # before `hop kill` runs. The intent is "make sure vicinae UI is gone" —
+    # if it already is, that goal is already met.
+    vicinae close || true
 
     ws=$(swaymsg -t get_workspaces | jq -r ".[] | select(.focused).name")
 
