@@ -46,13 +46,20 @@ class StubSwayAdapter:
 
 class StubKittyAdapter:
     def __init__(self) -> None:
-        self.runs: list[tuple[str, str, str, Path]] = []
+        self.runs: list[tuple[str, str, str, Path, bool]] = []
 
     def ensure_terminal(self, session: ProjectSession, *, role: str) -> None:
         raise AssertionError("ensure_terminal should not be called for hop run")
 
-    def run_in_terminal(self, session: ProjectSession, *, role: str, command: str) -> int:
-        self.runs.append((session.session_name, role, command, session.project_root))
+    def run_in_terminal(
+        self,
+        session: ProjectSession,
+        *,
+        role: str,
+        command: str,
+        focus: bool = False,
+    ) -> int:
+        self.runs.append((session.session_name, role, command, session.project_root, focus))
         return 99
 
     def inspect_window(self, window_id: int, *, listen_on: str | None = None) -> KittyWindowContext | None:
@@ -142,7 +149,7 @@ def test_main_smoke_routes_vigun_test_command(tmp_path: Path, monkeypatch: pytes
         hop.cli.build_default_services = original_build_default_services
 
     assert services.sway.switched_workspaces == []
-    assert services.kitty.runs == [("src", "test", command, nested_directory.resolve())]
+    assert services.kitty.runs == [("src", "test", command, nested_directory.resolve(), False)]
     run_id = stdout.getvalue().strip()
     assert re.fullmatch(r"[0-9a-f]{32}", run_id)
     assert (tmp_path / "runs" / f"{run_id}.json").is_file()

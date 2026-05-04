@@ -39,6 +39,7 @@ class TermCommand:
 class RunCommand:
     command_text: str
     role: str = DEFAULT_RUN_ROLE
+    focus: bool = False
 
 
 @dataclass(frozen=True, slots=True)

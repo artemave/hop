@@ -305,7 +305,7 @@ Behavior:
 - if a terminal with that role exists → focus it
 - otherwise → create it
 - terminal lookup is keyed by stable Kitty metadata for the session and role, not by ad hoc window IDs
-- `hop term`, `hop edit`, `hop run`, and `hop browser` do **not** switch Sway workspaces — they assume the caller is already on `p:<session>` (which is true when the command is invoked from any of that session's terminals). Use bare `hop` or `hop switch` to enter a session's workspace.
+- `hop term`, `hop edit`, `hop run`, and `hop browser` do **not** switch Sway workspaces by default — they assume the caller is already on `p:<session>` (which is true when the command is invoked from any of that session's terminals). Use bare `hop` or `hop switch` to enter a session's workspace. `hop run --focus` is the one explicit opt-in that crosses workspaces, since asking to focus the role terminal is meaningless if the caller is somewhere else.
 
 `hop term` invoked without `--role` is an alias for bare `hop` — same env-driven branching: spawns a new `shell-<N>` terminal when run from inside a session, otherwise enters the session.
 
@@ -314,7 +314,7 @@ Behavior:
 ### Send command to terminal
 
 ```bash
-hop run --role <name> "<command>"
+hop run [--focus] --role <name> "<command>"
 ```
 
 Examples:
@@ -322,6 +322,7 @@ Examples:
 ```bash
 hop run --role test "bundle exec rails test"
 hop run "ls"
+hop run --role server --focus "bin/dev"
 ```
 
 Behavior:
@@ -331,9 +332,10 @@ Behavior:
 - if missing → create it
 - send the exact `<command>` string followed by a trailing newline to that terminal
 - default behavior keeps the current focus while routing the command into the target role terminal
+- `--focus` opts in to focusing the role terminal: the role's Kitty window receives focus and Sway switches to the session's workspace, so the operator can dispatch and watch the role from any workspace in one step
 - print a fresh **run id** to stdout and return; `hop run` does not wait for the dispatched command to finish or proxy its exit status
 - the run id is opaque to callers and is the input to `hop tail`
-- `hop run` does not switch Sway workspaces — the caller is expected to already be in the session's workspace (the canonical entry points for that are bare `hop` and `hop switch`)
+- by default `hop run` does not switch Sway workspaces — the caller is expected to already be in the session's workspace (the canonical entry points for that are bare `hop` and `hop switch`); `--focus` is the explicit opt-in that does switch
 
 Default role: `shell`
 

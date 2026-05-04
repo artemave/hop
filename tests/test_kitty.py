@@ -276,6 +276,138 @@ def test_run_in_terminal_returns_window_id_for_existing_role_window() -> None:
     )
 
 
+def test_run_in_terminal_with_focus_focuses_existing_role_window_after_send_text() -> None:
+    existing_window = {
+        "ok": True,
+        "data": [
+            {
+                "tabs": [
+                    {
+                        "windows": [
+                            {
+                                "id": 24,
+                                "user_vars": {
+                                    "hop_session": "demo",
+                                    "hop_role": "shell",
+                                    "hop_project_root": str(build_session().project_root),
+                                },
+                            }
+                        ]
+                    }
+                ]
+            }
+        ],
+    }
+    factory = StubKittyFactory([existing_window, {"ok": True}, {"ok": True}])
+    adapter = KittyRemoteControlAdapter(transport_factory=factory, launcher=StubLauncher())
+
+    window_id = adapter.run_in_terminal(build_session(), role="shell", command="ls", focus=True)
+
+    assert window_id == 24
+    assert factory.calls == [
+        (SESSION_SOCKET, "ls", {"output_format": "json"}),
+        (SESSION_SOCKET, "send-text", {"match": "id:24", "data": "text:ls\n"}),
+        (SESSION_SOCKET, "focus-window", {"match": "id:24"}),
+    ]
+
+
+def test_run_in_terminal_without_focus_launches_missing_window_with_keep_focus_true() -> None:
+    new_window = {
+        "ok": True,
+        "data": [
+            {
+                "tabs": [
+                    {
+                        "windows": [
+                            {
+                                "id": 31,
+                                "user_vars": {
+                                    "hop_session": "demo",
+                                    "hop_role": "server",
+                                    "hop_project_root": str(build_session().project_root),
+                                },
+                            }
+                        ]
+                    }
+                ]
+            }
+        ],
+    }
+    factory = StubKittyFactory(
+        [
+            {"ok": True, "data": []},
+            {"ok": True},
+            new_window,
+            {"ok": True},
+        ]
+    )
+    adapter = KittyRemoteControlAdapter(transport_factory=factory, launcher=StubLauncher())
+
+    window_id = adapter.run_in_terminal(build_session(), role="server", command="bin/dev")
+
+    assert window_id == 31
+    launch_call = factory.calls[1]
+    assert launch_call[1] == "launch"
+    assert launch_call[2] is not None
+    assert launch_call[2]["keep_focus"] is True
+    assert factory.calls[-1] == (
+        SESSION_SOCKET,
+        "send-text",
+        {"match": "id:31", "data": "text:bin/dev\n"},
+    )
+    # No focus-window for the missing-window path.
+    assert all(call[1] != "focus-window" for call in factory.calls)
+
+
+def test_run_in_terminal_with_focus_launches_missing_window_with_keep_focus_false() -> None:
+    new_window = {
+        "ok": True,
+        "data": [
+            {
+                "tabs": [
+                    {
+                        "windows": [
+                            {
+                                "id": 31,
+                                "user_vars": {
+                                    "hop_session": "demo",
+                                    "hop_role": "server",
+                                    "hop_project_root": str(build_session().project_root),
+                                },
+                            }
+                        ]
+                    }
+                ]
+            }
+        ],
+    }
+    factory = StubKittyFactory(
+        [
+            {"ok": True, "data": []},
+            {"ok": True},
+            new_window,
+            {"ok": True},
+        ]
+    )
+    adapter = KittyRemoteControlAdapter(transport_factory=factory, launcher=StubLauncher())
+
+    window_id = adapter.run_in_terminal(build_session(), role="server", command="bin/dev", focus=True)
+
+    assert window_id == 31
+    launch_call = factory.calls[1]
+    assert launch_call[1] == "launch"
+    assert launch_call[2] is not None
+    # Missing-window path with focus=True opts out of keep_focus so kitty
+    # focuses the new OS window itself; no follow-up focus-window IPC.
+    assert launch_call[2]["keep_focus"] is False
+    assert factory.calls[-1] == (
+        SESSION_SOCKET,
+        "send-text",
+        {"match": "id:31", "data": "text:bin/dev\n"},
+    )
+    assert all(call[1] != "focus-window" for call in factory.calls)
+
+
 def test_ensure_terminal_uses_base_shell_args_in_launch_payload() -> None:
     factory = StubKittyFactory(
         [

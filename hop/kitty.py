@@ -137,10 +137,12 @@ class KittyRemoteControlAdapter:
         *,
         role: str,
         command: str,
+        focus: bool = False,
     ) -> int:
         window = self._find_window(session, role=role)
+        existed = window is not None
         if window is None:
-            self._launch_window(session, role=role, keep_focus=True)
+            self._launch_window(session, role=role, keep_focus=not focus)
             window = self._find_window(session, role=role)
 
         if window is None:
@@ -156,6 +158,8 @@ class KittyRemoteControlAdapter:
             "send-text",
             {"match": f"id:{window.id}", "data": f"text:{text}"},
         )
+        if focus and existed:
+            self._send_to(session.session_name, "focus-window", {"match": f"id:{window.id}"})
         return window.id
 
     def get_window_state(self, session_name: str, window_id: int) -> KittyWindowState:

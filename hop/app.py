@@ -89,6 +89,7 @@ class KittyAdapter(Protocol):
         *,
         role: str,
         command: str,
+        focus: bool = False,
     ) -> int: ...
 
     def inspect_window(self, window_id: int, *, listen_on: str | None = None) -> KittyWindowContext | None: ...
@@ -335,13 +336,16 @@ def execute_command(
                 terminals=services.kitty,
                 role=role,
             )
-        case RunCommand(role=role, command_text=command_text):
+        case RunCommand(role=role, command_text=command_text, focus=focus):
             dispatch = run_command(
                 current_directory,
                 terminals=services.kitty,
                 role=role,
                 command=command_text,
+                focus=focus,
             )
+            if focus:
+                services.sway.switch_to_workspace(dispatch.session.workspace_name)
             print(dispatch.run_id)
         case TailCommand(run_id=run_id):
             output = tail_command(run_id, kitty=services.kitty)

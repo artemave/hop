@@ -37,7 +37,15 @@ class IdempotentKittyAdapter:
         else:
             self.focused_windows.append(key)
 
-    def run_in_terminal(self, session: ProjectSession, *, role: str, command: str) -> int:
+    def run_in_terminal(
+        self,
+        session: ProjectSession,
+        *,
+        role: str,
+        command: str,
+        focus: bool = False,
+    ) -> int:
+        del focus
         key = (session.session_name, role)
         if key not in self._windows:
             self._windows.add(key)

@@ -221,9 +221,12 @@ The `hop` CLI runs on the host. In a devcontainer session it's not available ins
 hop run "ls"
 hop run --role test "python3 -m pytest -q"
 hop run --role server "bin/dev"
+hop run --role server --focus "bin/dev"
 ```
 
 The command must be a single CLI argument. The default role is `shell`. `hop run` dispatches the command, prints an opaque run id, and returns immediately - it does not wait for completion.
+
+By default `hop run` keeps the current focus, which is what automated callers like `vigun` want. Pass `--focus` to focus the role terminal and switch Sway to the session's workspace - useful when you're driving `hop run` interactively and want to immediately watch the role you just dispatched into.
 
 ```bash
 id=$(hop run --role test "python3 -m pytest -q")

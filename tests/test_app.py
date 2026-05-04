@@ -76,7 +76,7 @@ class StubSwayAdapter:
 class StubKittyAdapter:
     def __init__(self, *, last_cmd_output: str = "") -> None:
         self.ensured_roles: list[tuple[str, str, Path]] = []
-        self.runs: list[tuple[str, str, str, Path]] = []
+        self.runs: list[tuple[str, str, str, Path, bool]] = []
         self.closed_windows: list[int] = []
         self._last_cmd_output = last_cmd_output
         self._state_calls = 0
@@ -84,8 +84,15 @@ class StubKittyAdapter:
     def ensure_terminal(self, session: ProjectSession, *, role: str) -> None:
         self.ensured_roles.append((session.session_name, role, session.project_root))
 
-    def run_in_terminal(self, session: ProjectSession, *, role: str, command: str) -> int:
-        self.runs.append((session.session_name, role, command, session.project_root))
+    def run_in_terminal(
+        self,
+        session: ProjectSession,
+        *,
+        role: str,
+        command: str,
+        focus: bool = False,
+    ) -> int:
+        self.runs.append((session.session_name, role, command, session.project_root, focus))
         return 0
 
     def inspect_window(self, window_id: int, *, listen_on: str | None = None) -> KittyWindowContext | None:
@@ -515,10 +522,60 @@ def test_execute_command_routes_run_commands_to_role_terminal(tmp_path: Path, mo
             == 0
         )
     assert services.sway.switched_workspaces == []
-    assert services.kitty.runs == [("src", "server", "bin/dev", nested_directory.resolve())]
+    assert services.kitty.runs == [("src", "server", "bin/dev", nested_directory.resolve(), False)]
     run_id = stdout.getvalue().strip()
     assert run_id
     assert (tmp_path / "runs" / f"{run_id}.json").is_file()
+
+
+def test_execute_command_run_with_focus_switches_to_session_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_root = tmp_path / "demo"
+    nested_directory = project_root / "src"
+    nested_directory.mkdir(parents=True)
+    monkeypatch.setenv("HOP_RUNS_DIR", str(tmp_path / "runs"))
+
+    services = build_services(focused_workspace="p:other")
+    stdout = io.StringIO()
+
+    with redirect_stdout(stdout):
+        assert (
+            execute_command(
+                RunCommand(role="server", command_text="bin/dev", focus=True),
+                cwd=nested_directory,
+                services=services.as_services(),
+            )
+            == 0
+        )
+
+    assert services.kitty.runs == [("src", "server", "bin/dev", nested_directory.resolve(), True)]
+    assert services.sway.switched_workspaces == ["p:src"]
+    run_id = stdout.getvalue().strip()
+    assert (tmp_path / "runs" / f"{run_id}.json").is_file()
+
+
+def test_execute_command_run_with_focus_switches_workspace_even_when_already_there(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_root = tmp_path / "demo"
+    nested_directory = project_root / "src"
+    nested_directory.mkdir(parents=True)
+    monkeypatch.setenv("HOP_RUNS_DIR", str(tmp_path / "runs"))
+
+    services = build_services(focused_workspace="p:src")
+    stdout = io.StringIO()
+
+    with redirect_stdout(stdout):
+        execute_command(
+            RunCommand(role="server", command_text="bin/dev", focus=True),
+            cwd=nested_directory,
+            services=services.as_services(),
+        )
+
+    # Idempotent switch: --focus always issues the workspace command, even
+    # when the caller already lives on p:<session>.
+    assert services.sway.switched_workspaces == ["p:src"]
 
 
 def test_execute_command_tails_run_output_to_stdout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

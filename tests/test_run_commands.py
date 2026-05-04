@@ -10,10 +10,17 @@ from hop.session import ProjectSession
 class StubKittyAdapter:
     def __init__(self, *, window_id: int = 7) -> None:
         self._window_id = window_id
-        self.runs: list[tuple[str, str, str, Path]] = []
+        self.runs: list[tuple[str, str, str, Path, bool]] = []
 
-    def run_in_terminal(self, session: ProjectSession, *, role: str, command: str) -> int:
-        self.runs.append((session.session_name, role, command, session.project_root))
+    def run_in_terminal(
+        self,
+        session: ProjectSession,
+        *,
+        role: str,
+        command: str,
+        focus: bool = False,
+    ) -> int:
+        self.runs.append((session.session_name, role, command, session.project_root, focus))
         return self._window_id
 
 
@@ -35,7 +42,7 @@ def test_run_command_routes_to_role_terminal(tmp_path: Path) -> None:
     assert dispatch.session.session_name == "src"
     assert dispatch.window_id == 42
     assert dispatch.run_id
-    assert kitty.runs == [("src", "server", "bin/dev", nested_directory)]
+    assert kitty.runs == [("src", "server", "bin/dev", nested_directory, False)]
 
     state = json.loads((tmp_path / "runs" / f"{dispatch.run_id}.json").read_text())
     assert state["window_id"] == 42
@@ -58,9 +65,27 @@ def test_run_command_defaults_to_shell_role(tmp_path: Path) -> None:
         runs_dir=tmp_path / "runs",
     )
 
-    assert kitty.runs == [("src", DEFAULT_RUN_ROLE, "ls", nested_directory)]
+    assert kitty.runs == [("src", DEFAULT_RUN_ROLE, "ls", nested_directory, False)]
     state = json.loads((tmp_path / "runs" / f"{dispatch.run_id}.json").read_text())
     assert state["role"] == DEFAULT_RUN_ROLE
+
+
+def test_run_command_forwards_focus_to_kitty(tmp_path: Path) -> None:
+    project_root = tmp_path / "demo"
+    nested_directory = project_root / "src"
+    nested_directory.mkdir(parents=True)
+
+    kitty = StubKittyAdapter()
+
+    run_command(
+        nested_directory,
+        terminals=kitty,
+        command="ls",
+        focus=True,
+        runs_dir=tmp_path / "runs",
+    )
+
+    assert kitty.runs == [("src", DEFAULT_RUN_ROLE, "ls", nested_directory, True)]
 
 
 def test_run_command_emits_unique_run_ids(tmp_path: Path) -> None:

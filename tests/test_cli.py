@@ -32,6 +32,15 @@ from hop.commands import (
             ["run", "--role", "server", "bundle exec rails server"],
             RunCommand(role="server", command_text="bundle exec rails server"),
         ),
+        (["run", "--focus", "ls"], RunCommand(command_text="ls", focus=True)),
+        (
+            ["run", "--role", "server", "--focus", "bin/dev"],
+            RunCommand(role="server", command_text="bin/dev", focus=True),
+        ),
+        (
+            ["run", "--focus", "--role", "server", "bin/dev"],
+            RunCommand(role="server", command_text="bin/dev", focus=True),
+        ),
         (["tail", "abc123"], TailCommand(run_id="abc123")),
         (["browser"], BrowserCommand()),
         (["browser", "https://example.com"], BrowserCommand(url="https://example.com")),

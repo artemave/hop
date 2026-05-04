@@ -27,6 +27,7 @@ class RunKittyAdapter(Protocol):
         *,
         role: str,
         command: str,
+        focus: bool = False,
     ) -> int: ...
 
 
@@ -43,10 +44,11 @@ def run_command(
     terminals: RunKittyAdapter,
     command: str,
     role: str = DEFAULT_RUN_ROLE,
+    focus: bool = False,
     runs_dir: Path | None = None,
 ) -> RunDispatch:
     session = resolve_project_session(cwd)
-    window_id = terminals.run_in_terminal(session, role=role, command=command)
+    window_id = terminals.run_in_terminal(session, role=role, command=command, focus=focus)
 
     run_id = uuid.uuid4().hex
     target_dir = runs_dir if runs_dir is not None else default_runs_dir()

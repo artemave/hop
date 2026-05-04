@@ -53,6 +53,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     run_parser = subparsers.add_parser("run")
     run_parser.add_argument("--role", default=DEFAULT_RUN_ROLE)
+    run_parser.add_argument("--focus", action="store_true", dest="focus")
     run_parser.add_argument("command_text")
 
     tail_parser = subparsers.add_parser("tail")
@@ -91,7 +92,11 @@ def parse_command(argv: Sequence[str] | None = None) -> Command:
                 raise ValueError("--backend is only valid without a subcommand")
             return TermCommand(role=namespace.role)
         case "run":
-            return RunCommand(role=namespace.role, command_text=namespace.command_text)
+            return RunCommand(
+                role=namespace.role,
+                command_text=namespace.command_text,
+                focus=bool(namespace.focus),
+            )
         case "tail":
             return TailCommand(run_id=namespace.run_id)
         case "browser":
