@@ -48,13 +48,13 @@ python3 -m pip install -e .
 
 ## Usage
 
-Run `hop` from a terminal `cd`-ed into your project. This creates the session — a Sway workspace named `p:<dirname>` — or attaches to it if one already exists for that directory.
+Run `hop` from a terminal `cd`-ed into your project. This creates the session - a Sway workspace named `p:<dirname>` - or attaches to it if one already exists for that directory.
 
 Day-to-day use is driven by three surfaces, each with its own section below:
 
-- [Sway shortcuts](#sway-shortcuts) — a key for "new shell in this session".
-- [Vicinae launcher integration](#vicinae-launcher-integration) — pick a session to switch to, focus or create any declared window in the current session, move windows between sessions.
-- [Open visible-output targets from Kitty](#open-visible-output-targets-from-kitty) — a Kitty kitten that picks file paths and URLs from terminal output and routes them to the session's editor or browser.
+- [Sway shortcuts](#sway-shortcuts) - a key for "new shell in this session".
+- [Vicinae launcher integration](#vicinae-launcher-integration) - pick a session to switch to, focus or create any declared window in the current session, move windows between sessions.
+- [Open visible-output targets from Kitty](#open-visible-output-targets-from-kitty) - a Kitty kitten that picks file paths and URLs from terminal output and routes them to the session's editor or browser.
 
 To kill a session, use the Vicinae script (below) or run `hop kill` from the project root on the host.
 
@@ -79,9 +79,9 @@ Reload Vicinae's script directories or restart Vicinae afterwards.
 
 What each script does:
 
-- `hop-switch-session` — pick a live session from the launcher and switch to its workspace.
-- `hop-kill-session` — kill the session whose workspace is currently focused. No-op when not on a hop workspace.
-- `hop-window` — focus or create a window in the currently focused session. Lists every declared window (built-ins, active layouts, top-level) via `hop windows` and dispatches to `hop edit` / `hop browser` / `hop term --role <name>`. No-op when not on a hop workspace.
+- `hop-switch-session` - pick a live session from the launcher and switch to its workspace.
+- `hop-kill-session` - kill the session whose workspace is currently focused. No-op when not on a hop workspace.
+- `hop-window` - focus or create a window in the currently focused session. Lists every declared window (built-ins, active layouts, top-level) via `hop windows` and dispatches to `hop edit` / `hop browser` / `hop term --role <name>`. No-op when not on a hop workspace.
 
 The same scripts can be bound directly in Sway, skipping Vicinae's launcher UI:
 
@@ -112,10 +112,10 @@ File-shaped tokens that don't resolve to a real file under the source window's c
 
 A hop config has three named sections plus one scalar setting, all optional:
 
-- `[backends.<name>]` — backend lifecycle (`prepare` / `teardown` / `workspace` / translate helpers) plus a `command_prefix` shell snippet that wraps every command launched in that backend's environment.
-- `[layouts.<name>]` — a named layout with one required `autostart` shell-snippet probe and a list of windows that come up together when the probe matches.
-- `[windows.<role>]` — top-level windows (always autostart unless `autostart = "false"`).
-- `workspace_layout = "<mode>"` — sway workspace layout applied at first session entry. One of `splith`, `splitv`, `stacking`, `tabbed`.
+- `[backends.<name>]` - backend lifecycle (`prepare` / `teardown` / `workspace` / translate helpers) plus a `command_prefix` shell snippet that wraps every command launched in that backend's environment.
+- `[layouts.<name>]` - a named layout with one required `autostart` shell-snippet probe and a list of windows that come up together when the probe matches.
+- `[windows.<role>]` - top-level windows (always autostart unless `autostart = "false"`).
+- `workspace_layout = "<mode>"` - sway workspace layout applied at first session entry. One of `splith`, `splitv`, `stacking`, `tabbed`.
 
 Configs live in `~/.config/hop/config.toml` or a project's `.hop.toml`.
 
@@ -146,7 +146,7 @@ port_translate = """
 command_prefix = "podman-compose -f docker-compose.dev.yml exec devcontainer"
 ```
 
-Each command is a single string. Hop runs it through `sh -c` after substituting placeholders, so pipes, redirects, and `$(...)` all work — write the value the way you'd type it at a terminal. Use TOML triple-quoted strings (`"""…"""`) for multi-line pipelines. Placeholder values are shell-quoted before insertion, so paths with spaces substitute safely.
+Each command is a single string. Hop runs it through `sh -c` after substituting placeholders, so pipes, redirects, and `$(...)` all work - write the value the way you'd type it at a terminal. Use TOML triple-quoted strings (`"""…"""`) for multi-line pipelines. Placeholder values are shell-quoted before insertion, so paths with spaces substitute safely.
 
 Backend fields:
 
@@ -213,7 +213,7 @@ For step-by-step devcontainer setup and troubleshooting, see [`docs/devcontainer
 
 ## Automation
 
-The `hop` CLI runs on the host. In a devcontainer session it's not available inside the container — scripts that drive a session run on the host side. The commands below are the integration surface for external tools.
+The `hop` CLI runs on the host. In a devcontainer session it's not available inside the container - scripts that drive a session run on the host side. The commands below are the integration surface for external tools.
 
 ### `hop run` and `hop tail`
 
@@ -223,7 +223,7 @@ hop run --role test "python3 -m pytest -q"
 hop run --role server "bin/dev"
 ```
 
-The command must be a single CLI argument. The default role is `shell`. `hop run` dispatches the command, prints an opaque run id, and returns immediately — it does not wait for completion.
+The command must be a single CLI argument. The default role is `shell`. `hop run` dispatches the command, prints an opaque run id, and returns immediately - it does not wait for completion.
 
 ```bash
 id=$(hop run --role test "python3 -m pytest -q")
@@ -236,12 +236,12 @@ Prompt detection uses Kitty's shell integration (OSC 133), which is on by defaul
 
 ### Other commands
 
-- `hop list` — print active Sway workspaces whose names start with `p:`.
-- `hop switch <name>` — focus the Sway workspace `p:<name>`.
-- `hop edit [<file>[:<line>]]` — focus the session's Neovim and optionally open a file or `path:line` target.
-- `hop term --role <name>` — focus or create a Kitty window for the given role.
-- `hop browser [<url>]` — reuse or create a session-owned browser window. If the window was moved to another workspace, it's moved back before being focused.
-- `hop kill` — close every Sway/Kitty window owned by the session, remove its workspace, and run the backend's `teardown`. Run from the project root.
+- `hop list` - print active Sway workspaces whose names start with `p:`.
+- `hop switch <name>` - focus the Sway workspace `p:<name>`.
+- `hop edit [<file>[:<line>]]` - focus the session's Neovim and optionally open a file or `path:line` target.
+- `hop term --role <name>` - focus or create a Kitty window for the given role.
+- `hop browser [<url>]` - reuse or create a session-owned browser window. If the window was moved to another workspace, it's moved back before being focused.
+- `hop kill` - close every Sway/Kitty window owned by the session, remove its workspace, and run the backend's `teardown`. Run from the project root.
 
 ## Development
 
