@@ -555,7 +555,7 @@ def test_execute_command_run_with_focus_switches_to_session_workspace(
     assert (tmp_path / "runs" / f"{run_id}.json").is_file()
 
 
-def test_execute_command_run_with_focus_switches_workspace_even_when_already_there(
+def test_execute_command_run_with_focus_skips_workspace_switch_when_already_there(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     project_root = tmp_path / "demo"
@@ -573,9 +573,10 @@ def test_execute_command_run_with_focus_switches_workspace_even_when_already_the
             services=services.as_services(),
         )
 
-    # Idempotent switch: --focus always issues the workspace command, even
-    # when the caller already lives on p:<session>.
-    assert services.sway.switched_workspaces == ["p:src"]
+    # Sway's `workspace_auto_back_and_forth` flips off the focused
+    # workspace when re-targeted; --focus must no-op the switch in that
+    # case so it doesn't yank the operator out of the session.
+    assert services.sway.switched_workspaces == []
 
 
 def test_execute_command_tails_run_output_to_stdout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

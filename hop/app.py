@@ -344,7 +344,11 @@ def execute_command(
                 command=command_text,
                 focus=focus,
             )
-            if focus:
+            if focus and services.sway.get_focused_workspace() != dispatch.session.workspace_name:
+                # Skip the switch when already on p:<session> — sway's
+                # `workspace_auto_back_and_forth` setting flips to the
+                # previous workspace when re-targeting the focused one,
+                # which would yank the operator out of the session.
                 services.sway.switch_to_workspace(dispatch.session.workspace_name)
             print(dispatch.run_id)
         case TailCommand(run_id=run_id):
