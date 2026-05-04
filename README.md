@@ -17,7 +17,7 @@ hop is built on top of [Sway](https://swaywm.org/) window manager, [Kitty](https
 - **Shared Neovim per session** - all file links open there.
 - **Shared browser per session** - all browser links open there.
 - **Pluggable backends** - shells and editor can run on the host, inside a devcontainer, over ssh, or anywhere describable as a chain of commands - without changing how you drive the session.
-- **Sway and Vicinae integration** - helper scripts for one-key session switch, kill, focusing or creating any declared window, and moving windows in.
+- **Sway and Vicinae integration** - helper scripts for one-key session switch, kill, focusing, etc.
 - **Scriptable** - all features are accessible from the CLI.
 
 ## Requirements
