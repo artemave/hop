@@ -14,6 +14,20 @@ from hop.commands.edit import edit_in_session
 from hop.commands.run import run_command
 from hop.commands.term import focus_terminal
 from hop.session import ProjectSession
+from hop.sway import SwayWindow
+
+
+class NoOpSwayAdapter:
+    """`focus_terminal` escalates focus via sway IPC after kitty's IPC.
+    These reuse tests aren't asserting on sway focus behavior — they
+    just need a stub that satisfies the protocol with no visible
+    windows so the sway escalation no-ops."""
+
+    def list_windows(self) -> tuple[SwayWindow, ...]:
+        return ()
+
+    def focus_window(self, window_id: int) -> None:
+        del window_id
 
 
 class IdempotentKittyAdapter:
@@ -124,8 +138,8 @@ def test_repeated_hop_term_reuses_existing_window(tmp_path: Path) -> None:
 
     kitty = IdempotentKittyAdapter()
 
-    focus_terminal(session_root, terminals=kitty, role="shell")
-    focus_terminal(session_root, terminals=kitty, role="shell")
+    focus_terminal(session_root, terminals=kitty, sway=NoOpSwayAdapter(), role="shell")
+    focus_terminal(session_root, terminals=kitty, sway=NoOpSwayAdapter(), role="shell")
 
     assert kitty.created_windows == [("myproject", "shell")]
     assert kitty.focused_windows == [("myproject", "shell")]
@@ -138,9 +152,9 @@ def test_hop_term_different_roles_create_distinct_windows(tmp_path: Path) -> Non
 
     kitty = IdempotentKittyAdapter()
 
-    focus_terminal(session_root, terminals=kitty, role="shell")
-    focus_terminal(session_root, terminals=kitty, role="test")
-    focus_terminal(session_root, terminals=kitty, role="server")
+    focus_terminal(session_root, terminals=kitty, sway=NoOpSwayAdapter(), role="shell")
+    focus_terminal(session_root, terminals=kitty, sway=NoOpSwayAdapter(), role="test")
+    focus_terminal(session_root, terminals=kitty, sway=NoOpSwayAdapter(), role="server")
 
     assert set(kitty.created_windows) == {
         ("myproject", "shell"),
@@ -157,9 +171,9 @@ def test_hop_term_recreates_window_after_manual_close(tmp_path: Path) -> None:
 
     kitty = IdempotentKittyAdapter()
 
-    focus_terminal(session_root, terminals=kitty, role="test")
+    focus_terminal(session_root, terminals=kitty, sway=NoOpSwayAdapter(), role="test")
     kitty.close_window("myproject", "test")
-    focus_terminal(session_root, terminals=kitty, role="test")
+    focus_terminal(session_root, terminals=kitty, sway=NoOpSwayAdapter(), role="test")
 
     assert kitty.created_windows == [("myproject", "test"), ("myproject", "test")]
     assert kitty.focused_windows == []
@@ -311,8 +325,8 @@ def test_same_role_in_different_sessions_creates_separate_windows(tmp_path: Path
 
     kitty = IdempotentKittyAdapter()
 
-    focus_terminal(session_a_root, terminals=kitty, role="shell")
-    focus_terminal(session_b_root, terminals=kitty, role="shell")
+    focus_terminal(session_a_root, terminals=kitty, sway=NoOpSwayAdapter(), role="shell")
+    focus_terminal(session_b_root, terminals=kitty, sway=NoOpSwayAdapter(), role="shell")
 
     assert set(kitty.created_windows) == {("project-a", "shell"), ("project-b", "shell")}
     assert kitty.focused_windows == []
@@ -330,9 +344,9 @@ def test_switching_back_to_session_reuses_its_existing_windows(tmp_path: Path) -
 
     kitty = IdempotentKittyAdapter()
 
-    focus_terminal(session_a_root, terminals=kitty, role="shell")
-    focus_terminal(session_b_root, terminals=kitty, role="shell")
-    focus_terminal(session_a_root, terminals=kitty, role="shell")
+    focus_terminal(session_a_root, terminals=kitty, sway=NoOpSwayAdapter(), role="shell")
+    focus_terminal(session_b_root, terminals=kitty, sway=NoOpSwayAdapter(), role="shell")
+    focus_terminal(session_a_root, terminals=kitty, sway=NoOpSwayAdapter(), role="shell")
 
     assert kitty.created_windows == [("project-a", "shell"), ("project-b", "shell")]
     assert kitty.focused_windows == [("project-a", "shell")]

@@ -53,10 +53,10 @@ Run `hop` from a terminal `cd`-ed into your project. This creates the session - 
 Day-to-day use is driven by three surfaces, each with its own section below:
 
 - [Sway shortcuts](#sway-shortcuts) - a key for "new shell in this session".
-- [Vicinae launcher integration](#vicinae-launcher-integration) - pick a session to switch to, focus or create any declared window in the current session, move windows between sessions.
+- [Vicinae launcher integration](#vicinae-launcher-integration) - the focused session's declared windows, plus session-switch / kill, surface as direct entries in the launcher's main search.
 - [Open visible-output targets from Kitty](#open-visible-output-targets-from-kitty) - a Kitty kitten that picks file paths and URLs from terminal output and routes them to the session's editor or browser.
 
-To kill a session, use the Vicinae script (below) or run `hop kill` from the project root on the host.
+To kill a session, run `hop kill` from the project root on the host or pick `Hop kill` from the Vicinae launcher (below).
 
 ## Sway shortcuts
 
@@ -68,27 +68,22 @@ bindsym $mod+Return exec /path/to/hop/sway/hop-term-or-kitty
 
 ## Vicinae launcher integration
 
-[Vicinae](https://www.vicinae.com/) script commands live in `vicinae/`. Install them by symlinking into Vicinae's scripts directory:
-
-```bash
-mkdir -p ~/.local/share/vicinae/scripts
-ln -sf "$PWD"/vicinae/hop-* ~/.local/share/vicinae/scripts/
-```
-
-Reload Vicinae's script directories or restart Vicinae afterwards.
-
-What each script does:
-
-- `hop-switch-session` - pick a live session from the launcher and switch to its workspace.
-- `hop-kill-session` - kill the session whose workspace is currently focused. No-op when not on a hop workspace.
-- `hop-window` - focus or create a window in the currently focused session. Lists every declared window (built-ins, active layouts, top-level) via `hop windows` and dispatches to `hop edit` / `hop browser` / `hop term --role <name>`. No-op when not on a hop workspace.
-
-The same scripts can be bound directly in Sway, skipping Vicinae's launcher UI:
+[Vicinae](https://www.vicinae.com/) integration is driven by `hopd`, a small daemon shipped alongside `hop` that subscribes to Sway's workspace-focus events and rewrites `~/.local/share/vicinae/scripts/hop-*` to reflect the focused session. Wire it in your Sway config:
 
 ```conf
-bindsym $mod+Shift+s exec /path/to/hop/vicinae/hop-switch-session
-bindsym $mod+Shift+w exec /path/to/hop/vicinae/hop-window
+exec hopd
 ```
+
+On every workspace focus change, `hopd` regenerates the Vicinae script set.
+
+What you get in the launcher's main search depends on what's focused:
+
+- **On a hop session's workspace** (`p:<session>`): one entry per declared window — `Hop editor`, `Hop browser`, `Hop shell`, plus any custom roles like `Hop console`, `Hop server`, `Hop test`, etc. (the same set `hop windows` lists). Plus `Hop kill` for the focused session and `Hop switch to <other-session>` for every other live session.
+- **Off any hop workspace**: only `Hop switch to <session>` per live session — no `Hop kill`, no per-window entries to clutter unrelated workspaces.
+
+Fuzzy queries hit a single search box: `hop con` → `Hop console`, `hop sw rails` → `Hop switch to rails`, `hop ki` → `Hop kill`. No sub-menus.
+
+Hop owns the `hop-*` filename namespace in `~/.local/share/vicinae/scripts/`; any other files in that directory are left alone.
 
 ## Open visible-output targets from Kitty
 

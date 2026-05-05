@@ -12,6 +12,7 @@ dependencies = []
 
 [project.scripts]
 hop = "hop.cli:main"
+hopd = "hop.daemon:main"
 
 [dependency-groups]
 dev = [

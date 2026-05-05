@@ -248,7 +248,7 @@ Behavior:
 - run the same window resolver that bootstrap uses (built-in defaults + active layouts + top-level windows), evaluating layout `autostart` probes against the project root
 - print each resolved role on its own line, in resolution order (built-ins, then active-layout windows, then top-level windows)
 
-Intended for launchers (vicinae, rofi) to enumerate the focusable / launchable windows for the focused session workspace and dispatch to `hop edit` (editor), `hop browser` (browser), or `hop term --role <name>` (any other role).
+Intended for launchers (rofi, fuzzel) to enumerate the focusable / launchable windows for the focused session workspace and dispatch to `hop edit` (editor), `hop browser` (browser), or `hop term --role <name>` (any other role). The vicinae integration consumes the same resolver via the `hopd` daemon (see "Vicinae integration daemon" below) — it does not invoke `hop windows` directly because it has the resolver in-process.
 
 ---
 
@@ -393,6 +393,29 @@ Behavior:
 - remove the session workspace if it still exists after teardown
 - do not close windows on the workspace that hop did not create
 - focus after teardown is left to Sway
+
+---
+
+## Vicinae integration daemon
+
+```bash
+hopd
+```
+
+Long-lived process, separate binary from `hop`. Subscribes to Sway IPC `workspace` events on `SWAYSOCK` and rewrites `~/.local/share/vicinae/scripts/hop-*` on every event.
+
+Behavior:
+
+- on startup: regenerate the script set once, then subscribe to `workspace` events.
+- on every workspace event: regenerate the script set.
+- on focused workspace `p:<session>`: emit `hop-window-<role>` per role from the same window resolver `hop windows` uses (built-ins + active layouts + top-level), `hop-kill` for the focused session, and `hop-switch-<other-session>` for every other live session.
+- off any `p:*` workspace: emit only `hop-switch-<session>` per live session.
+- own the `hop-*` filename namespace in the scripts directory: any `hop-*` file not in the target set is removed; any non-`hop-*` file is left untouched.
+- on Sway IPC failure (refused subscription, dropped connection, malformed reply): print the error and exit non-zero.
+
+Intended to be wired in sway config as `exec hopd` — *not* `exec_always`. The IPC subscription persists across sway config reloads, so a single instance covers the whole sway session; `exec_always` would spawn a duplicate on every reload. If hopd dies between sway sessions the user is responsible for relaunching it (`hopd &` from a terminal, or restart sway). No symlink-based install, no manual reload — vicinae's own `QFileSystemWatcher` picks up the changes within ~100 ms.
+
+Activated entries in vicinae dispatch via `hop edit` (editor role), `hop browser` (browser role), `hop term --role <name>` (any other role), `hop switch <name>`, or `hop kill`. The activated `hop kill` script detaches via `setsid -f` so vicinae's UI-close SIGTERM does not interrupt teardown.
 
 ---
 

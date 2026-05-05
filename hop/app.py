@@ -334,6 +334,7 @@ def execute_command(
             focus_terminal(
                 current_directory,
                 terminals=services.kitty,
+                sway=services.sway,
                 role=role,
             )
         case RunCommand(role=role, command_text=command_text, focus=focus):

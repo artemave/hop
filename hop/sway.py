@@ -7,13 +7,17 @@ import struct
 from dataclasses import dataclass
 from enum import IntEnum
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, Iterator, Protocol, cast
 
 from hop.errors import HopError
 
 IPC_MAGIC = b"i3-ipc"
 IPC_HEADER_FORMAT = "<6sII"
 SWAY_SOCKET_ENV_VAR = "SWAYSOCK"
+# Sway tags every async event reply with the high bit set on the message
+# type. The lower bits identify the event kind (0 = workspace).
+EVENT_TYPE_FLAG = 0x80000000
+WORKSPACE_EVENT_TYPE = EVENT_TYPE_FLAG | 0
 
 
 class SwayError(HopError):
@@ -28,9 +32,14 @@ class SwayCommandError(SwayError):
     """Raised when Sway rejects an IPC command."""
 
 
+class SwaySubscriptionError(SwayError):
+    """Raised when Sway refuses to subscribe to events."""
+
+
 class SwayMessageType(IntEnum):
     RUN_COMMAND = 0
     GET_WORKSPACES = 1
+    SUBSCRIBE = 2
     GET_TREE = 4
 
 
@@ -52,6 +61,8 @@ class SwayWindow:
 
 class SwayIpcTransport(Protocol):
     def request(self, message_type: SwayMessageType, payload: bytes = b"") -> bytes: ...
+
+    def subscribe(self, payload: bytes) -> Iterator[bytes]: ...
 
 
 class UnixSocketSwayIpcTransport:
@@ -79,6 +90,36 @@ class UnixSocketSwayIpcTransport:
 
             return _recv_exact(client, payload_size)
 
+    def subscribe(self, payload: bytes) -> Iterator[bytes]:
+        socket_path = self._resolve_socket_path()
+
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            try:
+                client.connect(socket_path)
+            except OSError as error:
+                msg = f"Could not connect to the Sway IPC socket at {socket_path!s}."
+                raise SwayConnectionError(msg) from error
+
+            header = struct.pack(IPC_HEADER_FORMAT, IPC_MAGIC, len(payload), int(SwayMessageType.SUBSCRIBE))
+            client.sendall(header + payload)
+
+            ack_payload = _read_message(client, allow_eof=False)
+            assert ack_payload is not None
+            decoded: object = json.loads(ack_payload.decode())
+            ack = cast("dict[str, object]", decoded)
+            if ack.get("success") is not True:
+                msg = f"Sway refused subscription with payload {payload!r}: {ack!r}"
+                raise SwaySubscriptionError(msg)
+
+            while True:
+                message = _read_message(client, allow_eof=True)
+                if message is None:
+                    return
+                yield message
+        finally:
+            client.close()
+
     def _resolve_socket_path(self) -> str:
         if self._socket_path is not None:
             return str(Path(self._socket_path))
@@ -92,6 +133,27 @@ class UnixSocketSwayIpcTransport:
             "Run hop inside a Sway session or set SWAYSOCK explicitly."
         )
         raise SwayConnectionError(msg)
+
+
+def _read_message(client: socket.socket, *, allow_eof: bool = False) -> bytes | None:
+    header_size = struct.calcsize(IPC_HEADER_FORMAT)
+    chunks: list[bytes] = []
+    remaining = header_size
+    while remaining > 0:
+        chunk = client.recv(remaining)
+        if not chunk:
+            if allow_eof and not chunks:
+                return None
+            msg = "The Sway IPC socket closed before the full response was received."
+            raise SwayConnectionError(msg)
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    response_header = b"".join(chunks)
+    magic, payload_size, _response_type = struct.unpack(IPC_HEADER_FORMAT, response_header)
+    if magic != IPC_MAGIC:
+        msg = "Received an invalid response from the Sway IPC socket."
+        raise SwayConnectionError(msg)
+    return _recv_exact(client, payload_size)
 
 
 class SwayIpcAdapter:
@@ -162,6 +224,11 @@ class SwayIpcAdapter:
 
     def remove_workspace(self, workspace_name: str) -> None:
         self.run_command("workspace back_and_forth")
+
+    def subscribe_to_workspace_events(self) -> Iterator[dict[str, Any]]:
+        payload = json.dumps(["workspace"]).encode()
+        for raw_event in self._transport.subscribe(payload):
+            yield cast(dict[str, Any], json.loads(raw_event.decode()))
 
 
 def _recv_exact(client: socket.socket, byte_count: int) -> bytes:
