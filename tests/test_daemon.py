@@ -135,6 +135,7 @@ def test_daemon_runs_regen_against_real_tmp_scripts_dir(
     exit_code = daemon.main([])
 
     assert exit_code == 1
-    # No focused session and no sessions → empty target, nothing written.
+    # No focused session and no sessions → just the always-present
+    # `hop-create` entry (the second-search create-or-attach script).
     assert scripts_dir.is_dir()
-    assert list(scripts_dir.iterdir()) == []
+    assert [path.name for path in scripts_dir.iterdir()] == ["hop-create"]

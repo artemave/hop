@@ -410,6 +410,7 @@ Behavior:
 - on every workspace event: regenerate the script set.
 - on focused workspace `p:<session>`: emit `hop-window-<role>` per role from the same window resolver `hop windows` uses (built-ins + active layouts + top-level), `hop-kill` for the focused session, and `hop-switch-<other-session>` for every other live session.
 - off any `p:*` workspace: emit only `hop-switch-<session>` per live session.
+- always emit `hop-create` regardless of focused workspace. The script falls through to a second `vicinae dmenu` over directories under `$HOME` (with dot-dirs and well-known build noise pruned) and dispatches `cd <picked> && exec hop`, which creates a session if the directory has none or attaches if one is already running.
 - own the `hop-*` filename namespace in the scripts directory: any `hop-*` file not in the target set is removed; any non-`hop-*` file is left untouched.
 - on Sway IPC failure (refused subscription, dropped connection, malformed reply): print the error and exit non-zero.
 

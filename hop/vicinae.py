@@ -27,6 +27,7 @@ SCRIPT_FILENAME_PREFIX = "hop-"
 WINDOW_FILENAME_PREFIX = "hop-window-"
 SWITCH_FILENAME_PREFIX = "hop-switch-"
 KILL_FILENAME = "hop-kill"
+CREATE_FILENAME = "hop-create"
 
 
 class VicinaeSwayAdapter(Protocol):
@@ -59,7 +60,9 @@ def compute_target_scripts(
     On a `p:<session>` workspace: per-window scripts for every declared
     role, `hop-kill`, plus `hop-switch-<other-session>` for every other
     live session. Off any `p:*` workspace: only `hop-switch-<session>`
-    for every live session.
+    for every live session. `hop-create` is always emitted — it falls
+    through to a second vicinae dmenu over directories under `$HOME`
+    and either creates a new session or attaches to an existing one.
     """
 
     scripts: list[GeneratedScript] = []
@@ -85,6 +88,8 @@ def compute_target_scripts(
         other_sessions = sessions
     for session in other_sessions:
         scripts.append(_switch_script(session, used=used_filenames))
+
+    scripts.append(_create_script())
 
     return tuple(scripts)
 
@@ -183,6 +188,55 @@ def _kill_script(session: ProjectSession, *, used: set[str]) -> GeneratedScript:
         project_root=session.project_root,
     )
     return GeneratedScript(filename=filename, content=content)
+
+
+def _create_script() -> GeneratedScript:
+    # The candidate set (every directory under $HOME, modulo dot-dirs and
+    # well-known build noise) is far too big for static enumeration as
+    # vicinae root entries, so this script falls through to a second
+    # `vicinae dmenu` search to fuzzy-pick the target. `cd "$HOME/$chosen"
+    # && exec hop` then either creates a fresh session for that path or
+    # attaches to an existing one — `hop` already handles both cases.
+    #
+    # We emit each candidate as a path relative to $HOME (`find -printf '%P'`)
+    # rather than absolute. Vicinae's dmenu auto-detects absolute paths and
+    # renders only the basename in the list view, which makes nested dirs
+    # that share a basename with their parent (e.g. a Python package layout
+    # `tmux_super_fingers/tmux_super_fingers`) look like duplicates. Relative
+    # strings sidestep that detection so distinct paths render distinctly.
+    return GeneratedScript(
+        filename=CREATE_FILENAME,
+        content=(
+            "#!/usr/bin/env bash\n"
+            "# @vicinae.schemaVersion 1\n"
+            "# @vicinae.title Hop create session\n"
+            "# @vicinae.description Create or attach to a hop session for any directory under home.\n"
+            "# @vicinae.packageName \n"
+            "# @vicinae.mode silent\n"
+            "\n"
+            "set -euo pipefail\n"
+            "\n"
+            'candidates=$(find "$HOME" -mindepth 1 -maxdepth 3 \\\n'
+            "    \\( -name '.*' -o -name 'node_modules' -o -name 'target' "
+            "-o -name 'dist' -o -name '__pycache__' \\) -prune \\\n"
+            "    -o -type d -printf '%P\\n')\n"
+            "\n"
+            'if [ -z "$candidates" ]; then\n'
+            "    exit 0\n"
+            "fi\n"
+            "\n"
+            'if ! chosen=$(printf \'%s\\n\' "$candidates" | vicinae dmenu --placeholder "Pick a project"); then\n'
+            "    exit 0\n"
+            "fi\n"
+            "\n"
+            'if [ -z "$chosen" ]; then\n'
+            "    exit 0\n"
+            "fi\n"
+            "\n"
+            'cd "$HOME/$chosen"\n'
+            "exec hop\n"
+        ),
+    )
 
 
 def _switch_script(session: SessionListing, *, used: set[str]) -> GeneratedScript:

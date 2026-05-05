@@ -50,6 +50,7 @@ def test_focused_session_emits_window_kill_and_other_session_switch_scripts() ->
         "hop-window-browser",
         "hop-kill",
         "hop-switch-other",
+        "hop-create",
     ]
 
 
@@ -98,12 +99,31 @@ def test_off_session_workspace_emits_only_session_switch_scripts() -> None:
     )
 
     filenames = [script.filename for script in scripts]
-    assert filenames == ["hop-switch-rails", "hop-switch-other", "hop-switch-third"]
+    assert filenames == ["hop-switch-rails", "hop-switch-other", "hop-switch-third", "hop-create"]
 
 
-def test_no_sessions_and_no_session_focus_emits_empty_set() -> None:
+def test_no_sessions_and_no_session_focus_still_emits_create_script() -> None:
     scripts = compute_target_scripts("scratch", (), windows_for=lambda _: _builtin_windows())
-    assert scripts == ()
+    assert [s.filename for s in scripts] == ["hop-create"]
+
+
+def test_create_script_dispatches_to_vicinae_dmenu_over_home_directories() -> None:
+    scripts = compute_target_scripts("scratch", (), windows_for=lambda _: ())
+    create = next(s for s in scripts if s.filename == "hop-create")
+
+    # Directive header — title fuzzy-matches "hop cr".
+    assert "# @vicinae.title Hop create session\n" in create.content
+    assert "# @vicinae.mode silent\n" in create.content
+    # Falls through to a second vicinae dmenu — that's the whole point;
+    # static root enumeration over $HOME isn't workable.
+    assert 'find "$HOME"' in create.content
+    assert "vicinae dmenu" in create.content
+    # Emits relative paths so vicinae doesn't auto-collapse same-basename
+    # nested directories into a single visible entry.
+    assert "-printf '%P\\n'" in create.content
+    # `hop` from the picked directory creates the session if missing or
+    # attaches if it already exists — same dispatch hop's CLI uses.
+    assert 'cd "$HOME/$chosen"\nexec hop\n' in create.content
 
 
 def test_focused_workspace_with_unregistered_session_falls_back_to_off_session_set() -> None:
@@ -115,7 +135,7 @@ def test_focused_workspace_with_unregistered_session_falls_back_to_off_session_s
         windows_for=lambda _: _builtin_windows(),
     )
 
-    assert [s.filename for s in scripts] == ["hop-switch-other"]
+    assert [s.filename for s in scripts] == ["hop-switch-other", "hop-create"]
 
 
 def test_session_without_project_root_does_not_emit_window_scripts() -> None:
@@ -130,7 +150,7 @@ def test_session_without_project_root_does_not_emit_window_scripts() -> None:
         windows_for=lambda _: _builtin_windows(),
     )
 
-    assert [s.filename for s in scripts] == ["hop-switch-other"]
+    assert [s.filename for s in scripts] == ["hop-switch-other", "hop-create"]
 
 
 def test_role_filename_sanitization_replaces_disallowed_characters() -> None:

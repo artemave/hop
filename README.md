@@ -8,7 +8,7 @@ Conceptually similar to tmux sessions, except session/window management is deleg
 - **GUI apps are part of the session** - browser, etc., not just terminals.
 - **No multiplexer in the way** - native terminal features (true color, kitty graphics, ligatures, mouse, OSC 52/8/133) work without lossy passthrough; system clipboard and scrollback are the real ones, not a copy-mode buffer.
 
-hop is built on top of [Sway](https://swaywm.org/) window manager, [Kitty](https://sw.kovidgoyal.net/kitty/) terminal emulator and [Neovim](https://neovim.io/) as an editor. Those might become swappable building blocks in the future (potentially opening up OSX support).
+hop is built on top of [Sway](https://swaywm.org/) window manager, [Kitty](https://sw.kovidgoyal.net/kitty/) terminal emulator and [Neovim](https://neovim.io/) as an editor. Optional [Vicinae](https://www.vicinae.com/) launcher integration turns hop into a true "zero new hey bindings" solution.
 
 ## Features
 
@@ -17,8 +17,8 @@ hop is built on top of [Sway](https://swaywm.org/) window manager, [Kitty](https
 - **Shared Neovim per session** - all file links open there.
 - **Shared browser per session** - all browser links open there.
 - **Pluggable backends** - shells and editor can run on the host, inside a devcontainer, over ssh, or anywhere describable as a chain of commands - without changing how you drive the session.
-- **Sway and Vicinae integration** - helper scripts for one-key session switch, kill, focusing, etc.
-- **Scriptable** - all features are accessible from the CLI.
+- **Vicinae-driven workflow** - sessions, windows, and switches surface as direct entries in the launcher's main search; a single `exec hopd` line in the Sway config wires it up.
+- **Scriptable** - everything Vicinae dispatches to is also a `hop` CLI subcommand.
 
 ## Requirements
 
@@ -48,15 +48,30 @@ python3 -m pip install -e .
 
 ## Usage
 
-Run `hop` from a terminal `cd`-ed into your project. This creates the session - a Sway workspace named `p:<dirname>` - or attaches to it if one already exists for that directory.
+Day-to-day, [Vicinae](https://www.vicinae.com/) is the primary surface. Add this one line to your Sway config:
 
-Day-to-day use is driven by three surfaces, each with its own section below:
+```conf
+exec hopd
+```
 
-- [Sway shortcuts](#sway-shortcuts) - a key for "new shell in this session".
-- [Vicinae launcher integration](#vicinae-launcher-integration) - the focused session's declared windows, plus session-switch / kill, surface as direct entries in the launcher's main search.
+`hopd` is a small daemon shipped alongside `hop`. It subscribes to Sway's workspace-focus events and keeps `~/.local/share/vicinae/scripts/hop-*` in lockstep with the focused session — every workspace change regenerates the script set, and Vicinae's filesystem watcher picks the changes up within ~100 ms.
+
+What you see when you type `hop` in Vicinae's main search depends on where you are:
+
+- **On a hop session's workspace** (`p:<session>`): one entry per declared window — `Hop editor`, `Hop browser`, `Hop shell`, plus any custom roles like `Hop console`, `Hop server`, `Hop test`, etc. (the same set `hop windows` lists). Plus `Hop kill` for the focused session and `Hop switch to <other-session>` for every other live session.
+- **Off any hop workspace**: only `Hop switch to <session>` per live session — no `Hop kill`, no per-window entries to clutter unrelated workspaces.
+- **Always**: `Hop create session` — falls through to a second Vicinae search over directories under `$HOME` (skips dot-dirs and common build noise like `node_modules`, `target`, `dist`). Picking a directory creates a fresh session for it, or — if it's already a hop session's project root — switches to it.
+
+Fuzzy queries hit a single search box: `hop con` → `Hop console`, `hop sw rails` → `Hop switch to rails`, `hop ki` → `Hop kill`, `hop cr` → `Hop create session`. The only entry with a sub-menu is `Hop create session` itself, where the candidate set is too large to enumerate as static root entries.
+
+Hop owns the `hop-*` filename namespace in `~/.local/share/vicinae/scripts/`; any other files in that directory are left alone.
+
+Two complementary surfaces are described in their own sections below:
+
+- [Sway shortcuts](#sway-shortcuts) - a key for "new shell in this session", faster than going through Vicinae for the most common action.
 - [Open visible-output targets from Kitty](#open-visible-output-targets-from-kitty) - a Kitty kitten that picks file paths and URLs from terminal output and routes them to the session's editor or browser.
 
-To kill a session, run `hop kill` from the project root on the host or pick `Hop kill` from the Vicinae launcher (below).
+Everything Vicinae's entries dispatch to is also reachable directly via the `hop` CLI (`hop`, `hop switch <name>`, `hop edit`, `hop browser`, `hop term --role <name>`, `hop kill`) — useful for scripting and automation.
 
 ## Sway shortcuts
 
@@ -65,25 +80,6 @@ Bind this helper script in your Sway config to spawn a new shell in the focused 
 ```conf
 bindsym $mod+Return exec /path/to/hop/sway/hop-term-or-kitty
 ```
-
-## Vicinae launcher integration
-
-[Vicinae](https://www.vicinae.com/) integration is driven by `hopd`, a small daemon shipped alongside `hop` that subscribes to Sway's workspace-focus events and rewrites `~/.local/share/vicinae/scripts/hop-*` to reflect the focused session. Wire it in your Sway config:
-
-```conf
-exec hopd
-```
-
-On every workspace focus change, `hopd` regenerates the Vicinae script set.
-
-What you get in the launcher's main search depends on what's focused:
-
-- **On a hop session's workspace** (`p:<session>`): one entry per declared window — `Hop editor`, `Hop browser`, `Hop shell`, plus any custom roles like `Hop console`, `Hop server`, `Hop test`, etc. (the same set `hop windows` lists). Plus `Hop kill` for the focused session and `Hop switch to <other-session>` for every other live session.
-- **Off any hop workspace**: only `Hop switch to <session>` per live session — no `Hop kill`, no per-window entries to clutter unrelated workspaces.
-
-Fuzzy queries hit a single search box: `hop con` → `Hop console`, `hop sw rails` → `Hop switch to rails`, `hop ki` → `Hop kill`. No sub-menus.
-
-Hop owns the `hop-*` filename namespace in `~/.local/share/vicinae/scripts/`; any other files in that directory are left alone.
 
 ## Open visible-output targets from Kitty
 
