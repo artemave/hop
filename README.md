@@ -46,23 +46,17 @@ python3 -m pip install -e .
 
 ## Usage
 
-Day-to-day, [Vicinae](https://www.vicinae.com/) is the primary surface. Add this one line to your Sway config:
+Day-to-day, [Vicinae](https://www.vicinae.com/) is the primary surface. Turn on seamless Vicinae integration with this line to your Sway config:
 
 ```conf
 exec hopd
 ```
 
-`hopd` is a small daemon shipped alongside `hop`. It subscribes to Sway's workspace-focus events and keeps `~/.local/share/vicinae/scripts/hop-*` in lockstep with the focused session — every workspace change regenerates the script set, and Vicinae's filesystem watcher picks the changes up within ~100 ms.
+`hopd` dymanically updates hop related Vicinae search results. What you see when you type `hop` in Vicinae's main search depends on where you are:
 
-What you see when you type `hop` in Vicinae's main search depends on where you are:
-
-- **On a hop session's workspace** (`p:<session>`): one entry per declared window — `Hop editor`, `Hop browser`, `Hop shell`, plus any custom roles like `Hop console`, `Hop server`, `Hop test`, etc. (the same set `hop windows` lists). Plus `Hop kill` for the focused session and `Hop switch to <other-session>` for every other live session.
+- **On a hop session's workspace** (`p:<session>`): one entry per declared window — `Hop editor`, `Hop browser`, `Hop shell`, etc. Plus `Hop kill` for the focused session and `Hop switch to <other-session>` for every other live session.
 - **Off any hop workspace**: only `Hop switch to <session>` per live session — no `Hop kill`, no per-window entries to clutter unrelated workspaces.
 - **Always**: `Hop create session` — falls through to a second Vicinae search over directories under `$HOME` (skips dot-dirs and common build noise like `node_modules`, `target`, `dist`). Picking a directory creates a fresh session for it, or — if it's already a hop session's project root — switches to it.
-
-Fuzzy queries hit a single search box: `hop con` → `Hop console`, `hop sw rails` → `Hop switch to rails`, `hop ki` → `Hop kill`, `hop cr` → `Hop create session`. The only entry with a sub-menu is `Hop create session` itself, where the candidate set is too large to enumerate as static root entries.
-
-Hop owns the `hop-*` filename namespace in `~/.local/share/vicinae/scripts/`; any other files in that directory are left alone.
 
 Two complementary surfaces are described in their own sections below:
 
