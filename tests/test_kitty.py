@@ -787,3 +787,19 @@ def test_inspect_window_forwards_explicit_listen_on_to_transport_factory() -> No
     adapter.inspect_window(17, listen_on=SESSION_SOCKET)
 
     assert factory.calls[0][0] == SESSION_SOCKET
+
+
+def test_is_alive_returns_true_when_session_kitty_responds() -> None:
+    factory = StubKittyFactory([{"ok": True, "data": []}])
+    adapter = KittyRemoteControlAdapter(transport_factory=factory, launcher=StubLauncher())
+
+    assert adapter.is_alive(build_session()) is True
+    # The probe is a single `ls` against the session's socket.
+    assert factory.calls == [(SESSION_SOCKET, "ls", {"output_format": "json"})]
+
+
+def test_is_alive_returns_false_when_session_socket_is_unreachable() -> None:
+    factory = StubKittyFactory([KittyConnectionError("Could not talk to Kitty")])
+    adapter = KittyRemoteControlAdapter(transport_factory=factory, launcher=StubLauncher())
+
+    assert adapter.is_alive(build_session()) is False

@@ -43,6 +43,8 @@ class SessionTerminalAdapter(Protocol):
 class SpawnTerminalAdapter(SessionTerminalAdapter, Protocol):
     def list_session_windows(self, session: ProjectSession) -> Sequence[KittyWindow]: ...
 
+    def is_alive(self, session: ProjectSession) -> bool: ...
+
 
 class SessionEditorAdapter(Protocol):
     def ensure(self, session: ProjectSession, *, keep_focus: bool = True) -> bool: ...
@@ -133,6 +135,15 @@ def spawn_session_terminal(
     # user expectation is "one keystroke, one new window" — bringing back
     # the editor and *also* opening another shell would clutter the
     # workspace whenever the user's intent was just to recover the editor.
+    if not terminals.is_alive(session):
+        # The session's kitty has died but the workspace is still alive
+        # (e.g. only a browser window remains). The editor adapter talks
+        # to the kitty socket directly with no bootstrap fallback, so a
+        # bare editor.ensure here would surface KittyConnectionError to
+        # the user. Bootstrap a fresh kitty + shell first via the
+        # terminal adapter (which does have the fallback), then continue
+        # the normal resurrect-editor-or-spawn-shell flow.
+        terminals.ensure_terminal(session, role=SHELL_TERMINAL_ROLE)
     if editor.ensure(session):
         return session
     existing_roles = {window.role for window in terminals.list_session_windows(session) if window.role}

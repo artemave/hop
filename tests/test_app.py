@@ -74,12 +74,21 @@ class StubSwayAdapter:
 
 
 class StubKittyAdapter:
-    def __init__(self, *, last_cmd_output: str = "") -> None:
+    def __init__(
+        self,
+        *,
+        last_cmd_output: str = "",
+        alive_session_names: tuple[str, ...] = (),
+    ) -> None:
         self.ensured_roles: list[tuple[str, str, Path]] = []
         self.runs: list[tuple[str, str, str, Path, bool]] = []
         self.closed_windows: list[int] = []
         self._last_cmd_output = last_cmd_output
         self._state_calls = 0
+        self._alive_session_names = frozenset(alive_session_names)
+
+    def is_alive(self, session: ProjectSession) -> bool:
+        return session.session_name in self._alive_session_names
 
     def ensure_terminal(self, session: ProjectSession, *, role: str) -> None:
         self.ensured_roles.append((session.session_name, role, session.project_root))
@@ -153,8 +162,9 @@ class StubHopServices:
         from hop.app import SessionBackendRegistry
 
         # Treat each name in persisted_session_names as a previously-recorded
-        # session — only the presence of the key matters for the
-        # "first-entry vs re-entry" decision in execute_command.
+        # session — relevant for backend memory (`for_session` /
+        # `resolve_for_entry`); the first-entry vs re-entry decision is
+        # gated separately on `kitty.is_alive` (see StubKittyAdapter).
         persisted: dict[str, SessionState] = {
             name: SessionState(name=name, project_root=Path("/tmp") / name) for name in self.persisted_session_names
         }
@@ -177,14 +187,24 @@ def build_services(
     last_cmd_output: str = "",
     sway_windows: tuple[SwayWindow, ...] = (),
     persisted_session_names: tuple[str, ...] = (),
+    alive_session_names: tuple[str, ...] | None = None,
 ) -> StubHopServices:
+    # Default: a session is "alive" iff it's also persisted. Tests that need
+    # to express the stale-state-but-dead-kitty case (post-reboot, manual
+    # window close) override `alive_session_names` to a subset of (or empty
+    # set vs) persisted_session_names.
+    if alive_session_names is None:
+        alive_session_names = persisted_session_names
     return StubHopServices(
         sway=StubSwayAdapter(
             workspaces=workspaces,
             focused_workspace=focused_workspace,
             windows=sway_windows,
         ),
-        kitty=StubKittyAdapter(last_cmd_output=last_cmd_output),
+        kitty=StubKittyAdapter(
+            last_cmd_output=last_cmd_output,
+            alive_session_names=alive_session_names,
+        ),
         neovim=StubNeovimAdapter(),
         browser=StubBrowserAdapter(),
         persisted_session_names=persisted_session_names,
@@ -227,7 +247,18 @@ def test_hop_enter_session_passes_invocation_directory_as_kitty_launch_cwd(
 
     from hop.app import SessionBackendRegistry
 
-    factory = CapturingKittyFactory([{"ok": True, "data": []}, {"ok": True}])
+    # Three responses, in order: (1) is_alive's `ls` probe before the
+    # first-entry decision, (2) ensure_terminal's window-lookup `ls`,
+    # (3) the launch ack itself. is_alive sees an empty windows list and
+    # treats kitty as alive (no exception); _find_window also sees
+    # empty so the bootstrap launch fires.
+    factory = CapturingKittyFactory(
+        [
+            {"ok": True, "data": []},
+            {"ok": True, "data": []},
+            {"ok": True},
+        ]
+    )
     services = HopServices(
         sway=StubSwayAdapter(),
         kitty=KittyRemoteControlAdapter(transport_factory=factory, launcher=_NoopLauncher()),
@@ -267,8 +298,10 @@ def test_execute_command_spawns_extra_shell_when_focused_on_session_workspace(tm
     # Sway reports we're already focused on this session's workspace, so bare
     # `hop` should spawn another shell rather than re-enter. The editor is
     # also ensured so a previously-closed editor is resurrected on the next
-    # `hop` invocation.
-    services = build_services(focused_workspace="p:demo")
+    # `hop` invocation. Kitty is alive — the dead-kitty branch in
+    # spawn_session_terminal does not fire and no extra `shell` ensure is
+    # added before `shell-2`.
+    services = build_services(focused_workspace="p:demo", alive_session_names=("demo",))
 
     assert (
         execute_command(
@@ -341,7 +374,7 @@ def test_execute_command_skips_workspace_layout_on_re_entry(tmp_path: Path) -> N
 
     services = StubHopServices(
         sway=StubSwayAdapter(focused_workspace="p:other"),
-        kitty=StubKittyAdapter(),
+        kitty=StubKittyAdapter(alive_session_names=("demo",)),  # session's kitty is up
         neovim=StubNeovimAdapter(),
         browser=StubBrowserAdapter(),
         persisted_session_names=("demo",),  # already entered before
@@ -370,7 +403,7 @@ def test_execute_command_skips_workspace_layout_on_re_entry(tmp_path: Path) -> N
 
 
 def test_execute_command_re_entry_does_not_resurrect_a_closed_editor(tmp_path: Path) -> None:
-    """Persisted state exists → user is returning from another workspace.
+    """Kitty is alive → user is returning from another workspace.
     Don't second-guess a deliberately-closed editor; just switch workspace
     and ensure the shell."""
     project_root = tmp_path / "demo"
@@ -392,6 +425,34 @@ def test_execute_command_re_entry_does_not_resurrect_a_closed_editor(tmp_path: P
     assert services.sway.switched_workspaces == ["p:demo"]
     assert services.kitty.ensured_roles == [("demo", "shell", project_root.resolve())]
     assert services.neovim.ensured_sessions == []
+
+
+def test_execute_command_runs_full_autostart_when_state_is_stale_and_kitty_dead(
+    tmp_path: Path,
+) -> None:
+    """A stale state file (kitty died after the last `hop kill`-less close)
+    must not skip the autostart sweep on the next bootstrap. The first-entry
+    gate keys on `kitty.is_alive`, so persisted state with an unreachable
+    kitty is treated as a fresh cold start: shell + editor both come up."""
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+
+    services = build_services(
+        focused_workspace="p:other",
+        persisted_session_names=("demo",),  # state file lingers on disk…
+        alive_session_names=(),  # …but kitty isn't reachable.
+    )
+
+    assert (
+        execute_command(
+            EnterSessionCommand(),
+            cwd=project_root,
+            services=services.as_services(),
+        )
+        == 0
+    )
+    assert services.kitty.ensured_roles == [("demo", "shell", project_root.resolve())]
+    assert services.neovim.ensured_sessions == [("demo", project_root.resolve())]
 
 
 def test_execute_command_switches_to_named_session() -> None:
@@ -1083,3 +1144,50 @@ def test_session_base_registry_persisted_state_wins_over_autodetect(tmp_path: Pa
     assert isinstance(backend, CommandBackend)
     assert backend.name == "legacy"
     assert backend.workspace_path == "/legacy"
+
+
+def test_session_base_registry_re_resolves_when_kitty_dead(tmp_path: Path) -> None:
+    """Persisted record acts as cache only while kitty is alive. When the
+    kitty has died (stale state file), `resolve_for_entry` re-probes
+    against current config + filesystem state instead of replaying the
+    recorded backend — so a session whose recorded preconditions are
+    gone (e.g. compose file removed) re-resolves cleanly to host."""
+    import subprocess
+
+    from hop.app import SessionBackendRegistry
+    from hop.state import CommandBackendRecord, SessionState
+
+    # Compose file is gone: the recorded devcontainer's preconditions no
+    # longer hold, so the next cold bootstrap should fall back to host.
+    persisted = {
+        tmp_path.name: SessionState(
+            name=tmp_path.name,
+            project_root=tmp_path,
+            backend=CommandBackendRecord(
+                name="devcontainer",
+                command_prefix="compose exec devcontainer",
+                prepare="compose up -d devcontainer",
+                workspace_path="/workspace",
+            ),
+        )
+    }
+
+    def runner(args: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+        del cwd
+        # The probe `test -f docker-compose.dev.yml` fails (no file present),
+        # so devcontainer auto-detect declines and we land on host.
+        return subprocess.CompletedProcess(args=list(args), returncode=1, stdout="", stderr="")
+
+    registry = SessionBackendRegistry(
+        global_config_loader=lambda: HopConfig(backends=(_devcontainer_config(),)),
+        sessions_loader=lambda: persisted,
+        runner=runner,
+    )
+
+    backend = registry.resolve_for_entry(
+        _make_session(tmp_path),
+        backend_name=None,
+        kitty_alive=False,
+    )
+
+    assert isinstance(backend, HostBackend)

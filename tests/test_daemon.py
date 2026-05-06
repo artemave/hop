@@ -50,6 +50,10 @@ class StubSubscribingSway:
     def get_focused_workspace(self) -> str:
         return ""
 
+    def list_session_workspaces(self, *, prefix: str = "p:") -> tuple[str, ...]:
+        del prefix
+        return ()
+
     def subscribe_to_workspace_events(self) -> Iterator[dict[str, object]]:
         if self.raise_on_subscribe is not None:
             raise self.raise_on_subscribe
@@ -139,3 +143,30 @@ def test_daemon_runs_regen_against_real_tmp_scripts_dir(
     # `hop-create` entry (the second-search create-or-attach script).
     assert scripts_dir.is_dir()
     assert [path.name for path in scripts_dir.iterdir()] == ["hop-create"]
+
+
+def test_sweep_stale_persisted_sessions_forgets_sessions_with_no_live_workspace(
+    tmp_path: Path,
+) -> None:
+    from hop.daemon import _sweep_stale_persisted_sessions
+    from hop.state import HostBackendRecord, SessionState
+
+    class _SwayWithWorkspaces:
+        def list_session_workspaces(self, *, prefix: str = "p:") -> tuple[str, ...]:
+            del prefix
+            # Only `live` is on the sway side; `stale` was destroyed.
+            return ("p:live",)
+
+    forgotten: list[str] = []
+    sessions = {
+        "live": SessionState(name="live", project_root=tmp_path, backend=HostBackendRecord()),
+        "stale": SessionState(name="stale", project_root=tmp_path, backend=HostBackendRecord()),
+    }
+
+    _sweep_stale_persisted_sessions(
+        sway=_SwayWithWorkspaces(),  # type: ignore[arg-type]
+        sessions_loader=lambda: sessions,
+        forget=forgotten.append,
+    )
+
+    assert forgotten == ["stale"]

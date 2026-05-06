@@ -43,9 +43,19 @@ class StubSwayAdapter:
 
 
 class StubTerminalAdapter:
-    def __init__(self, *, existing_windows: tuple[KittyWindow, ...] = ()) -> None:
+    def __init__(
+        self,
+        *,
+        existing_windows: tuple[KittyWindow, ...] = (),
+        kitty_alive: bool = True,
+    ) -> None:
         self.ensured_terminals: list[tuple[str, str, Path]] = []
         self._existing_windows = existing_windows
+        self._kitty_alive = kitty_alive
+
+    def is_alive(self, session: ProjectSession) -> bool:
+        del session
+        return self._kitty_alive
 
     def ensure_terminal(self, session: ProjectSession, *, role: str) -> None:
         self.ensured_terminals.append((session.session_name, role, session.project_root))
@@ -560,6 +570,28 @@ def test_spawn_session_terminal_spawns_shell_when_editor_already_open(tmp_path: 
 
     assert editor.ensured == ["demo"]
     assert terminals.ensured_terminals == [("demo", "shell-2", project_root)]
+
+
+def test_spawn_session_terminal_bootstraps_shell_when_kitty_socket_is_dead(
+    tmp_path: Path,
+) -> None:
+    """The `p:<session>` workspace can outlive its kitty (e.g. only a
+    browser window remains). `editor.ensure` would otherwise hit the
+    dead socket directly — `spawn_session_terminal` ensures the shell
+    role first so the bootstrap fallback in the terminal adapter
+    relaunches kitty before any editor IPC is sent."""
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+    terminals = StubTerminalAdapter(kitty_alive=False)
+    editor = StubEditorAdapter(editor_was_closed=True)
+
+    spawn_session_terminal(project_root, terminals=terminals, editor=editor)
+
+    # Shell ensured first (revives kitty), then editor.ensure brings the
+    # editor back. No ad-hoc shell is spawned because editor.ensure
+    # returned True.
+    assert terminals.ensured_terminals == [("demo", "shell", project_root)]
+    assert editor.ensured == ["demo"]
 
 
 def test_list_sessions_returns_sorted_listings_with_workspace_and_known_project_roots() -> None:

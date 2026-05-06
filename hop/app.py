@@ -102,6 +102,8 @@ class KittyAdapter(Protocol):
 
     def get_last_cmd_output(self, session_name: str, window_id: int) -> str: ...
 
+    def is_alive(self, session: ProjectSession) -> bool: ...
+
 
 class NeovimAdapter(Protocol):
     def ensure(self, session: ProjectSession, *, keep_focus: bool = True) -> bool: ...
@@ -145,9 +147,6 @@ class SessionBackendRegistry:
         self._runner = runner
         self._overrides: dict[str, SessionBackend] = {}
 
-    def has_persisted_state(self, session: ProjectSession) -> bool:
-        return self._sessions_loader().get(session.session_name) is not None
-
     def for_session(self, session: ProjectSession) -> SessionBackend:
         override = self._overrides.get(session.session_name)
         if override is not None:
@@ -162,12 +161,24 @@ class SessionBackendRegistry:
         # hop run from a workspace created by hand). Fall back to host.
         return HostBackend()
 
-    def resolve_for_entry(self, session: ProjectSession, *, backend_name: str | None) -> SessionBackend:
-        # Persisted state still wins so we don't change a live session's
-        # backend mid-flight; backend_name only matters for first entry.
-        persisted = self._sessions_loader().get(session.session_name)
-        if persisted is not None:
-            return _backend_from_record(persisted.backend)
+    def resolve_for_entry(
+        self,
+        session: ProjectSession,
+        *,
+        backend_name: str | None,
+        kitty_alive: bool = True,
+    ) -> SessionBackend:
+        # When kitty is alive the persisted record is authoritative — the
+        # session is mid-flight, the backend was prepared for it, and we
+        # don't want to flip mid-session because config or filesystem
+        # state changed underneath us. When kitty is dead the record is
+        # cache-only: re-probe so a session whose recorded backend's
+        # preconditions are gone (compose file removed, container torn
+        # down) cleanly re-resolves to a currently-valid backend.
+        if kitty_alive:
+            persisted = self._sessions_loader().get(session.session_name)
+            if persisted is not None:
+                return _backend_from_record(persisted.backend)
 
         configured = self._merged_config(session).backends
 
@@ -283,9 +294,20 @@ def execute_command(
                 # First entry creates both shell and editor; re-entry from
                 # another workspace just switches and ensures the shell —
                 # we don't second-guess a deliberately-closed editor on
-                # every `hop`.
-                is_first_entry = not services.session_backends.has_persisted_state(session)
-                backend = services.session_backends.resolve_for_entry(session, backend_name=backend_name)
+                # every `hop`. "First entry" is gated on the session's
+                # kitty being unreachable, not on the persisted state file
+                # existing: a state file outlives the kitty process when
+                # the user closes windows manually, the wm crashes, or the
+                # machine reboots, and we want every cold bootstrap to run
+                # the full autostart sweep regardless of whether the file
+                # is stale on disk.
+                kitty_alive = services.kitty.is_alive(session)
+                is_first_entry = not kitty_alive
+                backend = services.session_backends.resolve_for_entry(
+                    session,
+                    backend_name=backend_name,
+                    kitty_alive=kitty_alive,
+                )
                 services.session_backends.set_override(session.session_name, backend)
                 try:
                     windows = services.session_backends.resolve_windows_for_entry(session) if is_first_entry else ()

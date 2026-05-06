@@ -104,7 +104,9 @@ Configs live in `~/.config/hop/config.toml` or a project's `.hop.toml`.
 
 ## Session backends
 
-A session has a **backend** that decides where its windows run. The default is **host**. Other backends - devcontainer, ssh, anything else describable as a chain of commands - are configured as named entries in the config file.
+A session has a **backend** that decides where its windows run. The default is **host**. Other backends - docker container (devcontainer), ssh, anything else describable as a chain of commands - are configured as named entries in the config file.
+
+Note, that nvim runs on the backend, not on the host (unless backend is the host).
 
 ### Auto-detection
 

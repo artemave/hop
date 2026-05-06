@@ -131,6 +131,13 @@ class KittyRemoteControlAdapter:
 
         self._launch_window(session, role=role, keep_focus=False)
 
+    def is_alive(self, session: ProjectSession) -> bool:
+        # Truth of "this session's kitty is reachable": probe the per-session
+        # socket with a one-shot `ls`. Anything other than a clean response —
+        # missing socket file, refused connection, malformed reply — counts
+        # as dead and routes the caller through the cold-bootstrap path.
+        return self._is_session_kitty_listening(session_socket_address(session.session_name))
+
     def run_in_terminal(
         self,
         session: ProjectSession,
