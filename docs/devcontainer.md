@@ -39,6 +39,18 @@ Important caveats with `podman-compose` (the Python implementation):
 - Use the **plain-string** form of `include:` (a list of strings). The modern `{path: ...}` dict form is not supported and crashes podman-compose with a `TypeError: join() argument must be str ... not 'dict'`.
 - Use `${HOME}` (or any other env-var expansion) for absolute paths — `~` is **not** expanded by compose and produces a similar error.
 
+The `devcontainer` service must allocate a TTY:
+
+```yaml
+services:
+  devcontainer:
+    tty: true
+    stdin_open: true
+    # ...
+```
+
+Hop's model is "one container, many terminals via `compose exec`" — that requires the container to stay alive. Without `tty: true`, an interactive PID 1 (typical `bash -lc '...'` entrypoints) reaches EOF immediately under `compose up -d` and the container exits. Hop's `prepare` then succeeds, but by the time kitty `exec`s into it the container is gone and the bootstrap shell window flashes open and closes.
+
 After updating the file, sanity-check it:
 
 ```bash
@@ -160,6 +172,38 @@ hop kill                  # no teardown runs
 
 The flag is only valid on bare `hop` (or `hop term` without `--role`, which is the same entry point). Other subcommands reject it. Passing a backend name that isn't configured (and isn't `host`) errors out.
 
+## Tools-managed `$PATH` inside the container (mise / asdf / rbenv / nvm / direnv)
+
+`compose exec devcontainer <cmd>` runs `<cmd>` in a **non-login, non-interactive** shell — `.bashrc`, `.profile`, mise/asdf hooks, and direnv hooks do **not** fire. Anything those normally inject into `$PATH` (`gem`, `rake`, `bundle`, `node`, `npm`, language SDKs, `direnv`-exported env vars, etc.) is missing.
+
+Symptoms: a window declared as `command = "bin/dev"` prints `gem: command not found` / `exec: foreman: not found`, then drops into the post-exit shell where everything works because **that** shell is interactive and triggers the activation.
+
+Wrap any tool-dependent command in a login shell:
+
+```toml
+[layouts.rails.windows.server]
+command = "bash -lc bin/dev"
+```
+
+`bash -l` sources the container user's profile, mise/asdf activate, and `bin/dev` runs with the expected `$PATH`. For multi-word commands, single-quote the inner script so it stays one argument:
+
+```toml
+[layouts.rails.windows.console]
+command = "bash -lc 'bin/rails console'"
+```
+
+If you want to honor the container user's actual login shell instead of hard-coding bash, use `$SHELL` — but it must be expanded **inside** the container, not on the host. Wrap the inner command in single quotes so host sh keeps `$SHELL` literal:
+
+```toml
+[layouts.rails.windows.server]
+command = "sh -c '$SHELL -lc bin/dev'"
+
+[layouts.rails.windows.console]
+command = "sh -c '$SHELL -lc \"bin/rails console\"'"
+```
+
+The single-quote dance is mandatory — without it, `$SHELL` expands to the **host's** `$SHELL`, which usually doesn't exist at the same path inside the container. `$SHELL` in the container reflects the container user's `/etc/passwd` entry, so this only buys portability if the image was built with your preferred shell as the user's login shell. Otherwise `bash -lc` is just as accurate and avoids the quoting trap.
+
 ## Mental model: one container, many terminals
 
 Each session corresponds to **one** instance of the backend. For a compose-based devcontainer, that's one container, with all shells `compose exec`-ing into it:
@@ -177,6 +221,17 @@ Each session corresponds to **one** instance of the backend. For a compose-based
 So starting `bin/dev` in `server` and `curl localhost:3000` from `shell` works exactly as if everything ran on the host — same as `tmux` panes attached to a remote host.
 
 ## Troubleshooting
+
+### Kitty windows flash open and immediately close
+
+The container's PID 1 exited right after `compose up -d`, so by the time hop tries `compose exec` there's nothing to attach to. Most common cause: the service has an interactive entrypoint (e.g. `bash -lc '...'`) but no TTY allocated, so it reaches EOF immediately. Add to the service:
+
+```yaml
+tty: true
+stdin_open: true
+```
+
+Verify with `podman ps` — if `STATUS` shows `Exited (0)` shortly after `hop`, that's the fingerprint. With `debug_log = true`, the bootstrap log will show `prepare` succeeding and `workspace` returning a path, but no further `compose exec` output, since the container died between the two.
 
 ### `hop` fails silently (especially from Vicinae)
 
