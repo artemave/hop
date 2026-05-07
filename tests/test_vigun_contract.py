@@ -48,6 +48,9 @@ class StubKittyAdapter:
     def __init__(self) -> None:
         self.runs: list[tuple[str, str, str, Path, bool]] = []
 
+    def is_alive(self, session: ProjectSession) -> bool:
+        raise AssertionError("is_alive should not be called for hop run")
+
     def ensure_terminal(self, session: ProjectSession, *, role: str) -> None:
         raise AssertionError("ensure_terminal should not be called for hop run")
 

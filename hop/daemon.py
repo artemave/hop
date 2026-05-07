@@ -44,7 +44,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     windows_for = registry.resolve_windows_for_entry
 
     try:
-        _sweep_stale_persisted_sessions(sway=sway)
+        sweep_stale_persisted_sessions(sway=sway)
         regenerate(
             sway=sway,
             sessions_loader=sessions_loader,
@@ -53,7 +53,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         debug.log("hopd: subscribed to workspace events")
         for _event in sway.subscribe_to_workspace_events():
-            _sweep_stale_persisted_sessions(sway=sway)
+            sweep_stale_persisted_sessions(sway=sway)
             regenerate(
                 sway=sway,
                 sessions_loader=sessions_loader,
@@ -78,7 +78,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 1
 
 
-def _sweep_stale_persisted_sessions(
+def sweep_stale_persisted_sessions(
     *,
     sway: SwayIpcAdapter,
     sessions_loader: Callable[[], dict[str, SessionState]] = load_sessions,

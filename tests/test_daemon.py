@@ -244,7 +244,7 @@ def test_daemon_exits_when_global_config_is_invalid(
 def test_sweep_stale_persisted_sessions_forgets_sessions_with_no_live_workspace(
     tmp_path: Path,
 ) -> None:
-    from hop.daemon import _sweep_stale_persisted_sessions
+    from hop.daemon import sweep_stale_persisted_sessions
     from hop.state import HostBackendRecord, SessionState
 
     class _SwayWithWorkspaces:
@@ -259,7 +259,7 @@ def test_sweep_stale_persisted_sessions_forgets_sessions_with_no_live_workspace(
         "stale": SessionState(name="stale", project_root=tmp_path, backend=HostBackendRecord()),
     }
 
-    _sweep_stale_persisted_sessions(
+    sweep_stale_persisted_sessions(
         sway=_SwayWithWorkspaces(),  # type: ignore[arg-type]
         sessions_loader=lambda: sessions,
         forget=forgotten.append,

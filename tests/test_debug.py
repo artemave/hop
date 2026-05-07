@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 
 import pytest
@@ -12,7 +13,7 @@ from hop.session import ProjectSession
 
 
 @pytest.fixture(autouse=True)
-def reset_debug() -> None:
+def reset_debug() -> Iterator[None]:
     debug.configure(None)
     yield
     debug.configure(None)
@@ -45,7 +46,8 @@ class StaticRunner:
         self.stdout = stdout
         self.stderr = stderr
 
-    def __call__(self, args, cwd):  # type: ignore[no-untyped-def]
+    def __call__(self, args: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+        del cwd
         return subprocess.CompletedProcess(
             args=list(args),
             returncode=self.returncode,

@@ -496,6 +496,7 @@ def _default_transport_factory(listen_on: str | None) -> KittyTransport:
 
 def _default_launcher(args: Sequence[str], env: Mapping[str, str]) -> None:
     log_path = debug.log_path()
+    log_fd: int | None = None
     if log_path is None:
         stdout: int | Any = subprocess.DEVNULL
         stderr: int | Any = subprocess.DEVNULL
@@ -517,7 +518,7 @@ def _default_launcher(args: Sequence[str], env: Mapping[str, str]) -> None:
             stdin=subprocess.DEVNULL,
         )
     finally:
-        if log_path is not None:
+        if log_fd is not None:
             os.close(log_fd)
 
 
