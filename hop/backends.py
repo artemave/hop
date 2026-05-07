@@ -333,7 +333,7 @@ def select_backend(
     - ``pinned_name`` (any other value) picks the backend with that name. Raises
       ``UnknownBackendError`` when no backend matches.
     - Otherwise auto-detect walks ``backends`` in declaration order and runs
-      each backend's ``default`` command (skipping ones without a ``default``);
+      each backend's ``activate`` command (skipping ones without an ``activate``);
       the first that exits 0 wins. If none succeed, returns ``None`` so the
       host backend is used as the implicit fallback.
     """
@@ -349,9 +349,9 @@ def select_backend(
         raise UnknownBackendError(msg)
 
     for candidate in backends:
-        if candidate.default is None:
+        if candidate.activate is None:
             continue
-        substituted = _substitute(candidate.default, session=session)
+        substituted = _substitute(candidate.activate, session=session)
         argv = _sh_c(substituted)
         result = runner(argv, session.project_root)
         debug.log_command(argv, session.project_root, result)

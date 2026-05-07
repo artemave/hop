@@ -22,6 +22,7 @@ from hop.session import ProjectSession
 #   host; ${SHELL:-sh} fallback when wrapped through a backend prefix).
 # - editor command is plain `nvim`; the backend prefix wraps it.
 # - browser command "" leaves SessionBrowserAdapter to xdg-detect a default.
+# Third tuple element is the default `active` flag.
 _BUILTIN_DEFAULTS: tuple[tuple[str, str, bool], ...] = (
     (SHELL_ROLE, "", True),
     (EDITOR_ROLE, "nvim", True),
@@ -34,13 +35,13 @@ CommandRunner = Callable[[Sequence[str], Path], subprocess.CompletedProcess[str]
 
 @dataclass(frozen=True, slots=True)
 class WindowSpec:
-    """Resolved per-role window: command + autostart-active decision.
+    """Resolved per-role window: command + activation decision.
 
     ``command`` may be empty for the built-in shell / browser sentinel — the
     launch path interprets that as "use platform default" (kitty's login shell
     or xdg-detected browser respectively).
 
-    ``autostart_active`` is the final decision: layout probes have already
+    ``active`` is the final decision: layout probes have already
     been evaluated, top-level always-on rules applied, per-window opt-outs
     honored. Bootstrap iterates the resolved tuple and launches windows
     whose flag is true (with shell launching unconditionally regardless).
@@ -48,7 +49,7 @@ class WindowSpec:
 
     role: str
     command: str
-    autostart_active: bool
+    active: bool
 
 
 def resolve_windows(
@@ -63,11 +64,11 @@ def resolve_windows(
     the same role:
 
     1. Built-in defaults (shell, editor, browser).
-    2. Each layout in declaration order whose ``autostart`` probe exits 0,
+    2. Each layout in declaration order whose ``activate`` probe exits 0,
        contributing its windows in declaration order.
     3. Top-level ``[windows.<role>]`` entries in declaration order.
 
-    A per-window ``autostart`` is a shell probe (same shape as the layout-
+    A per-window ``activate`` is a shell probe (same shape as the layout-
     level one); the window auto-launches when it exits 0. Windows whose
     merged ``command`` is empty are kept only for the built-in roles
     (where empty is a meaningful sentinel).
@@ -79,8 +80,8 @@ def resolve_windows(
     # built-ins in the final output is decided after the config walk:
     # shell pinned slot 1, editor pinned slot 2, browser appended at the
     # end if the user never declared it.
-    for role, command, autostart_active in _BUILTIN_DEFAULTS:
-        specs[role] = _MutableSpec(role=role, command=command, autostart_active=autostart_active)
+    for role, command, active in _BUILTIN_DEFAULTS:
+        specs[role] = _MutableSpec(role=role, command=command, active=active)
 
     declared_order: list[str] = []
     for layout in config.layouts:
@@ -107,7 +108,7 @@ def resolve_windows(
             # something undefined. An explicit `command = ""` reaches
             # here as "" (not None) and is preserved as a shell-like spec.
             continue
-        result.append(WindowSpec(role=spec.role, command=spec.command or "", autostart_active=spec.autostart_active))
+        result.append(WindowSpec(role=spec.role, command=spec.command or "", active=spec.active))
     return tuple(result)
 
 
@@ -115,7 +116,7 @@ def resolve_windows(
 class _MutableSpec:
     role: str
     command: str | None
-    autostart_active: bool
+    active: bool
 
 
 def _layout_matches(
@@ -124,14 +125,14 @@ def _layout_matches(
     session: ProjectSession,
     runner: CommandRunner,
 ) -> bool:
-    if layout.autostart is None:
-        # A layout without an autostart probe never activates. The parser
-        # currently allows this (autostart is optional at parse time so
+    if layout.activate is None:
+        # A layout without an activate probe never activates. The parser
+        # currently allows this (activate is optional at parse time so
         # project files can override only the windows of a same-named global
         # layout); a layout with no probe in either layer is effectively
         # off, which is safer than always-on.
         return False
-    substituted = _substitute(layout.autostart, session=session)
+    substituted = _substitute(layout.activate, session=session)
     result = runner(("sh", "-c", substituted), session.project_root)
     return result.returncode == 0
 
@@ -147,17 +148,17 @@ def _apply_layout_window(
     if window.role not in declared_order:
         declared_order.append(window.role)
     existing = specs.get(window.role)
-    autostart_active = _resolve_window_autostart(window.autostart, default=True, session=session, runner=runner)
+    active = _resolve_window_activate(window.activate, default=True, session=session, runner=runner)
     if existing is None:
         specs[window.role] = _MutableSpec(
             role=window.role,
             command=window.command,
-            autostart_active=autostart_active,
+            active=active,
         )
         return
     if window.command is not None:
         existing.command = window.command
-    existing.autostart_active = autostart_active
+    existing.active = active
 
 
 def _apply_top_level_window(
@@ -172,31 +173,31 @@ def _apply_top_level_window(
         declared_order.append(window.role)
     existing = specs.get(window.role)
     if existing is None:
-        autostart_active = _resolve_window_autostart(window.autostart, default=True, session=session, runner=runner)
+        active = _resolve_window_activate(window.activate, default=True, session=session, runner=runner)
         specs[window.role] = _MutableSpec(
             role=window.role,
             command=window.command,
-            autostart_active=autostart_active,
+            active=active,
         )
         return
     if window.command is not None:
         existing.command = window.command
-    if window.autostart is not None:
-        existing.autostart_active = _resolve_window_autostart(
-            window.autostart, default=existing.autostart_active, session=session, runner=runner
+    if window.activate is not None:
+        existing.active = _resolve_window_activate(
+            window.activate, default=existing.active, session=session, runner=runner
         )
 
 
-def _resolve_window_autostart(
-    autostart: str | None,
+def _resolve_window_activate(
+    activate: str | None,
     *,
     default: bool,
     session: ProjectSession,
     runner: CommandRunner,
 ) -> bool:
-    if autostart is None:
+    if activate is None:
         return default
-    substituted = _substitute(autostart, session=session)
+    substituted = _substitute(activate, session=session)
     return runner(("sh", "-c", substituted), session.project_root).returncode == 0
 
 

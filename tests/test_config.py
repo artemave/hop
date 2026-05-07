@@ -43,7 +43,7 @@ def test_load_global_config_parses_full_backend(tmp_path: Path) -> None:
         tmp_path / "config.toml",
         """
 [backends.devcontainer]
-default        = "test -f docker-compose.dev.yml"
+activate       = "test -f docker-compose.dev.yml"
 prepare        = "podman-compose -f docker-compose.dev.yml up -d devcontainer"
 teardown       = "podman-compose -f docker-compose.dev.yml down"
 workspace      = "podman-compose -f docker-compose.dev.yml exec devcontainer pwd"
@@ -54,7 +54,7 @@ command_prefix = "podman-compose -f docker-compose.dev.yml exec devcontainer"
     assert load_global_config(config_file).backends == (
         BackendConfig(
             name="devcontainer",
-            default="test -f docker-compose.dev.yml",
+            activate="test -f docker-compose.dev.yml",
             prepare="podman-compose -f docker-compose.dev.yml up -d devcontainer",
             teardown="podman-compose -f docker-compose.dev.yml down",
             workspace="podman-compose -f docker-compose.dev.yml exec devcontainer pwd",
@@ -150,24 +150,24 @@ def test_load_global_config_parses_layout_with_windows(tmp_path: Path) -> None:
         tmp_path / "config.toml",
         """
 [layouts.rails]
-autostart = "test -f bin/rails"
+activate = "test -f bin/rails"
 
 [layouts.rails.windows.server]
 command = "bin/dev"
 
 [layouts.rails.windows.console]
-command   = "bin/rails console"
-autostart = "false"
+command  = "bin/rails console"
+activate = "false"
 """,
     )
 
     assert load_global_config(config_file).layouts == (
         LayoutConfig(
             name="rails",
-            autostart="test -f bin/rails",
+            activate="test -f bin/rails",
             windows=(
                 WindowConfig(role="server", command="bin/dev"),
-                WindowConfig(role="console", command="bin/rails console", autostart="false"),
+                WindowConfig(role="console", command="bin/rails console", activate="false"),
             ),
         ),
     )
@@ -178,7 +178,7 @@ def test_load_global_config_rejects_unknown_layout_field(tmp_path: Path) -> None
         tmp_path / "config.toml",
         """
 [layouts.rails]
-autostart = "true"
+activate = "true"
 oops = "no"
 """,
     )
@@ -187,25 +187,25 @@ oops = "no"
         load_global_config(config_file)
 
 
-def test_load_global_config_accepts_arbitrary_autostart_probe_on_layout_window(tmp_path: Path) -> None:
-    """Window-level ``autostart`` is a shell probe, just like at the layout
+def test_load_global_config_accepts_arbitrary_activate_probe_on_layout_window(tmp_path: Path) -> None:
+    """Window-level ``activate`` is a shell probe, just like at the layout
     level; ``"true"`` and ``"false"`` keep their always-on / never-on meaning
     (they're real shell built-ins) and arbitrary probes work too."""
     config_file = write(
         tmp_path / "config.toml",
         """
 [layouts.rails]
-autostart = "true"
+activate = "true"
 
 [layouts.rails.windows.server]
-command   = "bin/dev"
-autostart = "test -f bin/dev"
+command  = "bin/dev"
+activate = "test -f bin/dev"
 """,
     )
 
     config = load_global_config(config_file)
 
-    assert config.layouts[0].windows[0].autostart == "test -f bin/dev"
+    assert config.layouts[0].windows[0].activate == "test -f bin/dev"
 
 
 def test_load_global_config_rejects_unknown_window_field_in_layout(tmp_path: Path) -> None:
@@ -213,7 +213,7 @@ def test_load_global_config_rejects_unknown_window_field_in_layout(tmp_path: Pat
         tmp_path / "config.toml",
         """
 [layouts.rails]
-autostart = "true"
+activate = "true"
 
 [layouts.rails.windows.server]
 command = "bin/dev"
@@ -233,7 +233,7 @@ def test_load_global_config_parses_top_level_windows(tmp_path: Path) -> None:
         tmp_path / "config.toml",
         """
 [windows.editor]
-autostart = "false"
+activate = "false"
 
 [windows.worker]
 command = "bin/jobs"
@@ -241,24 +241,24 @@ command = "bin/jobs"
     )
 
     assert load_global_config(config_file).windows == (
-        WindowConfig(role="editor", autostart="false"),
+        WindowConfig(role="editor", activate="false"),
         WindowConfig(role="worker", command="bin/jobs"),
     )
 
 
-def test_load_global_config_accepts_arbitrary_autostart_probe_on_top_level_window(tmp_path: Path) -> None:
+def test_load_global_config_accepts_arbitrary_activate_probe_on_top_level_window(tmp_path: Path) -> None:
     config_file = write(
         tmp_path / "config.toml",
         """
 [windows.worker]
-command   = "bin/jobs"
-autostart = "test -f bin/jobs"
+command  = "bin/jobs"
+activate = "test -f bin/jobs"
 """,
     )
 
     config = load_global_config(config_file)
 
-    assert config.windows[0].autostart == "test -f bin/jobs"
+    assert config.windows[0].activate == "test -f bin/jobs"
 
 
 def test_load_global_config_parses_workspace_layout(tmp_path: Path) -> None:
@@ -398,19 +398,19 @@ bogus = "not-a-table"
 
 
 def test_load_global_config_parses_layout_without_windows_subtable(tmp_path: Path) -> None:
-    """A layout can be declared with just an `autostart` probe and no
-    windows — useful in a project file overriding only the autostart of a
+    """A layout can be declared with just an `activate` probe and no
+    windows — useful in a project file overriding only the activate of a
     same-named global layout. The empty windows tuple merges naturally."""
     config_file = write(
         tmp_path / "config.toml",
         """
 [layouts.rails]
-autostart = "false"
+activate = "false"
 """,
     )
 
     layouts = load_global_config(config_file).layouts
-    assert layouts == (LayoutConfig(name="rails", autostart="false", windows=()),)
+    assert layouts == (LayoutConfig(name="rails", activate="false", windows=()),)
 
 
 def test_load_global_config_rejects_non_table_layout_windows_value(tmp_path: Path) -> None:
@@ -418,7 +418,7 @@ def test_load_global_config_rejects_non_table_layout_windows_value(tmp_path: Pat
         tmp_path / "config.toml",
         """
 [layouts.rails]
-autostart = "true"
+activate = "true"
 windows = "oops"
 """,
     )
@@ -432,7 +432,7 @@ def test_load_global_config_rejects_non_table_layout_window_entry(tmp_path: Path
         tmp_path / "config.toml",
         """
 [layouts.rails]
-autostart = "true"
+activate = "true"
 
 [layouts.rails.windows]
 server = "not-a-table"
@@ -509,7 +509,7 @@ def test_load_global_config_allows_empty_window_command(tmp_path: Path) -> None:
         tmp_path / "config.toml",
         """
 [layouts.rails]
-autostart = "test -f bin/rails"
+activate = "test -f bin/rails"
 
 [layouts.rails.windows.test]
 command = ""
@@ -532,7 +532,7 @@ def test_project_config_supports_identical_schema(tmp_path: Path) -> None:
 command_prefix = "lima shell default --"
 
 [layouts.rails]
-autostart = "test -f bin/rails"
+activate = "test -f bin/rails"
 
 [layouts.rails.windows.server]
 command = "bin/dev"
@@ -548,7 +548,7 @@ command = "bin/jobs"
     assert config.layouts == (
         LayoutConfig(
             name="rails",
-            autostart="test -f bin/rails",
+            activate="test -f bin/rails",
             windows=(WindowConfig(role="server", command="bin/dev"),),
         ),
     )
@@ -572,9 +572,9 @@ def test_merge_backends_appends_global_only_after_project() -> None:
 
 
 def test_merge_backends_field_merges_per_field() -> None:
-    project = HopConfig(backends=(_backend("alpha", default="true"),))
+    project = HopConfig(backends=(_backend("alpha", activate="true"),))
     global_ = HopConfig(
-        backends=(_backend("alpha", command_prefix="prefix", default="test -f marker", prepare="prep"),)
+        backends=(_backend("alpha", command_prefix="prefix", activate="test -f marker", prepare="prep"),)
     )
 
     merged = merge_backends(project, global_)
@@ -583,7 +583,7 @@ def test_merge_backends_field_merges_per_field() -> None:
         _backend(
             "alpha",
             command_prefix="prefix",  # inherited
-            default="true",  # project wins
+            activate="true",  # project wins
             prepare="prep",  # inherited
         ),
     )
@@ -596,9 +596,9 @@ def test_merge_layouts_per_window_field_precedence() -> None:
         layouts=(
             LayoutConfig(
                 name="rails",
-                autostart="test -f bin/rails",
+                activate="test -f bin/rails",
                 windows=(
-                    WindowConfig(role="server", autostart="false"),
+                    WindowConfig(role="server", activate="false"),
                     WindowConfig(role="extra", command="extra-cmd"),
                 ),
             ),
@@ -608,7 +608,7 @@ def test_merge_layouts_per_window_field_precedence() -> None:
         layouts=(
             LayoutConfig(
                 name="rails",
-                autostart="ignored",
+                activate="ignored",
                 windows=(
                     WindowConfig(role="server", command="bin/dev"),
                     WindowConfig(role="console", command="bin/rails console"),
@@ -622,9 +622,9 @@ def test_merge_layouts_per_window_field_precedence() -> None:
     assert merged == (
         LayoutConfig(
             name="rails",
-            autostart="test -f bin/rails",  # project wins
+            activate="test -f bin/rails",  # project wins
             windows=(
-                WindowConfig(role="server", command="bin/dev", autostart="false"),
+                WindowConfig(role="server", command="bin/dev", activate="false"),
                 WindowConfig(role="extra", command="extra-cmd"),
                 WindowConfig(role="console", command="bin/rails console"),
             ),
@@ -635,7 +635,7 @@ def test_merge_layouts_per_window_field_precedence() -> None:
 def test_merge_top_level_windows_per_field() -> None:
     project = HopConfig(
         windows=(
-            WindowConfig(role="editor", autostart="false"),
+            WindowConfig(role="editor", activate="false"),
             WindowConfig(role="worker", command="project-jobs"),
         )
     )
@@ -649,7 +649,7 @@ def test_merge_top_level_windows_per_field() -> None:
     merged = merge_windows(project, global_)
 
     assert merged == (
-        WindowConfig(role="editor", command="vim", autostart="false"),  # merged per-field
+        WindowConfig(role="editor", command="vim", activate="false"),  # merged per-field
         WindowConfig(role="worker", command="project-jobs"),  # project-only
         WindowConfig(role="logger", command="tail -f log"),  # global-only, appended last
     )
@@ -657,14 +657,14 @@ def test_merge_top_level_windows_per_field() -> None:
 
 def test_merge_configs_combines_all_three_sections() -> None:
     project = HopConfig(
-        backends=(_backend("alpha", default="true"),),
-        layouts=(LayoutConfig(name="rails", autostart="proj"),),
+        backends=(_backend("alpha", activate="true"),),
+        layouts=(LayoutConfig(name="rails", activate="proj"),),
         windows=(WindowConfig(role="worker", command="bin/jobs"),),
     )
     global_ = HopConfig(
         backends=(_backend("alpha", command_prefix="prefix"),),
-        layouts=(LayoutConfig(name="vite", autostart="test -f vite.config.ts"),),
-        windows=(WindowConfig(role="editor", autostart="false"),),
+        layouts=(LayoutConfig(name="vite", activate="test -f vite.config.ts"),),
+        windows=(WindowConfig(role="editor", activate="false"),),
     )
 
     merged = merge_configs(project, global_)

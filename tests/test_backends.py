@@ -47,7 +47,7 @@ class RecordingRunner:
 def make_backend(**kwargs: object) -> BackendConfig:
     defaults: dict[str, object] = {
         "name": "devcontainer",
-        "default": "test -f docker-compose.dev.yml",
+        "activate": "test -f docker-compose.dev.yml",
         "prepare": "compose up -d devcontainer",
         "teardown": "compose down",
         "workspace": "compose exec devcontainer pwd",
@@ -445,21 +445,21 @@ def test_command_backend_translate_localhost_url_preserves_userinfo(tmp_path: Pa
 # --- backend selection ----------------------------------------------------
 
 
-def test_select_backend_returns_first_default_to_succeed(tmp_path: Path) -> None:
+def test_select_backend_returns_first_activate_to_succeed(tmp_path: Path) -> None:
     runner = RecordingRunner()
     backends = (
-        make_backend(name="a", default="a-default"),
-        make_backend(name="b", default="b-default"),
+        make_backend(name="a", activate="a-activate"),
+        make_backend(name="b", activate="b-activate"),
     )
 
     chosen = select_backend(build_session(tmp_path), backends, runner=runner)
 
     assert chosen is not None
     assert chosen.name == "a"
-    assert runner.calls == [(("sh", "-c", "a-default"), tmp_path)]
+    assert runner.calls == [(("sh", "-c", "a-activate"), tmp_path)]
 
 
-def test_select_backend_walks_until_default_succeeds(tmp_path: Path) -> None:
+def test_select_backend_walks_until_activate_succeeds(tmp_path: Path) -> None:
     @dataclass
     class ScriptedRunner:
         scripts: list[int]
@@ -472,8 +472,8 @@ def test_select_backend_walks_until_default_succeeds(tmp_path: Path) -> None:
 
     runner = ScriptedRunner(scripts=[1, 0])
     backends = (
-        make_backend(name="a", default="a-default"),
-        make_backend(name="b", default="b-default"),
+        make_backend(name="a", activate="a-activate"),
+        make_backend(name="b", activate="b-activate"),
     )
 
     chosen = select_backend(build_session(tmp_path), backends, runner=runner)
@@ -482,26 +482,26 @@ def test_select_backend_walks_until_default_succeeds(tmp_path: Path) -> None:
     assert chosen.name == "b"
 
 
-def test_select_backend_skips_backends_without_default(tmp_path: Path) -> None:
-    """A backend without a `default` probe can't auto-detect; iterate past it."""
+def test_select_backend_skips_backends_without_activate(tmp_path: Path) -> None:
+    """A backend without an `activate` probe can't auto-detect; iterate past it."""
     runner = RecordingRunner()
     backends = (
-        make_backend(name="a", default=None),
-        make_backend(name="b", default="b-default"),
+        make_backend(name="a", activate=None),
+        make_backend(name="b", activate="b-activate"),
     )
 
     chosen = select_backend(build_session(tmp_path), backends, runner=runner)
 
     assert chosen is not None
     assert chosen.name == "b"
-    assert runner.calls == [(("sh", "-c", "b-default"), tmp_path)]
+    assert runner.calls == [(("sh", "-c", "b-activate"), tmp_path)]
 
 
-def test_select_backend_returns_none_when_no_default_succeeds(tmp_path: Path) -> None:
+def test_select_backend_returns_none_when_no_activate_succeeds(tmp_path: Path) -> None:
     runner = RecordingRunner(returncode=1)
     backends = (
-        make_backend(name="a", default="a-default"),
-        make_backend(name="b", default="b-default"),
+        make_backend(name="a", activate="a-activate"),
+        make_backend(name="b", activate="b-activate"),
     )
 
     assert select_backend(build_session(tmp_path), backends, runner=runner) is None

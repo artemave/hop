@@ -21,7 +21,7 @@ def reset_debug() -> None:
 def make_backend(**kwargs: object) -> BackendConfig:
     defaults: dict[str, object] = {
         "name": "devcontainer",
-        "default": "test -f docker-compose.dev.yml",
+        "activate": "test -f docker-compose.dev.yml",
         "prepare": "compose up -d devcontainer",
         "teardown": "compose down",
         "workspace": "compose exec devcontainer pwd",

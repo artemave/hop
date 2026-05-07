@@ -28,7 +28,7 @@ class RecordingRunner:
 
     def __call__(self, args: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
         self.calls.append((tuple(args), cwd))
-        # `true` / `false` short-circuit so autostart probes resolve without
+        # `true` / `false` short-circuit so activate probes resolve without
         # wiring a real subprocess; other probes use the configured returncode.
         rc = self.returncode
         if len(args) == 3 and args[0] == "sh" and args[1] == "-c":
@@ -56,9 +56,9 @@ def test_resolve_windows_defaults_when_config_is_empty(tmp_path: Path) -> None:
     windows = resolve_windows(HopConfig(), build_session(tmp_path), runner=runner)
 
     assert windows == (
-        WindowSpec(role="shell", command="", autostart_active=True),
-        WindowSpec(role="editor", command="nvim", autostart_active=True),
-        WindowSpec(role="browser", command="", autostart_active=False),
+        WindowSpec(role="shell", command="", active=True),
+        WindowSpec(role="editor", command="nvim", active=True),
+        WindowSpec(role="browser", command="", active=False),
     )
     assert runner.calls == []
 
@@ -67,24 +67,24 @@ def test_resolve_windows_defaults_when_config_is_empty(tmp_path: Path) -> None:
 
 
 def test_top_level_windows_can_opt_out_of_built_in_editor(tmp_path: Path) -> None:
-    config = HopConfig(windows=(WindowConfig(role="editor", autostart="false"),))
+    config = HopConfig(windows=(WindowConfig(role="editor", activate="false"),))
 
     windows = resolve_windows(config, build_session(tmp_path), runner=RecordingRunner())
 
     editor = find_window(windows, "editor")
     assert editor is not None
     assert editor.command == "nvim"  # built-in default still applied
-    assert editor.autostart_active is False
+    assert editor.active is False
 
 
 def test_top_level_windows_can_opt_in_browser(tmp_path: Path) -> None:
-    config = HopConfig(windows=(WindowConfig(role="browser", autostart="true"),))
+    config = HopConfig(windows=(WindowConfig(role="browser", activate="true"),))
 
     windows = resolve_windows(config, build_session(tmp_path), runner=RecordingRunner())
 
     browser = find_window(windows, "browser")
     assert browser is not None
-    assert browser.autostart_active is True
+    assert browser.active is True
 
 
 def test_top_level_windows_can_override_built_in_command(tmp_path: Path) -> None:
@@ -95,10 +95,10 @@ def test_top_level_windows_can_override_built_in_command(tmp_path: Path) -> None
     shell = find_window(windows, "shell")
     assert shell is not None
     assert shell.command == "/usr/bin/zsh"
-    assert shell.autostart_active is True
+    assert shell.active is True
 
 
-def test_top_level_windows_add_custom_role_with_autostart_active(tmp_path: Path) -> None:
+def test_top_level_windows_add_custom_role_with_active(tmp_path: Path) -> None:
     config = HopConfig(windows=(WindowConfig(role="worker", command="bin/jobs"),))
 
     windows = resolve_windows(config, build_session(tmp_path), runner=RecordingRunner())
@@ -106,18 +106,18 @@ def test_top_level_windows_add_custom_role_with_autostart_active(tmp_path: Path)
     worker = find_window(windows, "worker")
     assert worker is not None
     assert worker.command == "bin/jobs"
-    assert worker.autostart_active is True
+    assert worker.active is True
 
 
-def test_top_level_window_with_autostart_false_is_declared_but_inactive(tmp_path: Path) -> None:
-    config = HopConfig(windows=(WindowConfig(role="console", command="bin/rails console", autostart="false"),))
+def test_top_level_window_with_activate_false_is_declared_but_inactive(tmp_path: Path) -> None:
+    config = HopConfig(windows=(WindowConfig(role="console", command="bin/rails console", activate="false"),))
 
     windows = resolve_windows(config, build_session(tmp_path), runner=RecordingRunner())
 
     console = find_window(windows, "console")
     assert console is not None
     assert console.command == "bin/rails console"
-    assert console.autostart_active is False
+    assert console.active is False
 
 
 # --- layouts -------------------------------------------------------------
@@ -128,7 +128,7 @@ def test_layout_with_passing_probe_adds_its_windows(tmp_path: Path) -> None:
         layouts=(
             LayoutConfig(
                 name="rails",
-                autostart="true",
+                activate="true",
                 windows=(
                     WindowConfig(role="server", command="bin/dev"),
                     WindowConfig(role="console", command="bin/rails console"),
@@ -141,8 +141,8 @@ def test_layout_with_passing_probe_adds_its_windows(tmp_path: Path) -> None:
 
     server = find_window(windows, "server")
     console = find_window(windows, "console")
-    assert server == WindowSpec(role="server", command="bin/dev", autostart_active=True)
-    assert console == WindowSpec(role="console", command="bin/rails console", autostart_active=True)
+    assert server == WindowSpec(role="server", command="bin/dev", active=True)
+    assert console == WindowSpec(role="console", command="bin/rails console", active=True)
 
 
 def test_layout_with_failing_probe_does_not_contribute_windows(tmp_path: Path) -> None:
@@ -150,7 +150,7 @@ def test_layout_with_failing_probe_does_not_contribute_windows(tmp_path: Path) -
         layouts=(
             LayoutConfig(
                 name="rails",
-                autostart="false",
+                activate="false",
                 windows=(WindowConfig(role="server", command="bin/dev"),),
             ),
         )
@@ -161,15 +161,15 @@ def test_layout_with_failing_probe_does_not_contribute_windows(tmp_path: Path) -
     assert find_window(windows, "server") is None
 
 
-def test_layout_window_with_autostart_false_opts_out_of_matched_layout(tmp_path: Path) -> None:
+def test_layout_window_with_activate_false_opts_out_of_matched_layout(tmp_path: Path) -> None:
     config = HopConfig(
         layouts=(
             LayoutConfig(
                 name="rails",
-                autostart="true",
+                activate="true",
                 windows=(
                     WindowConfig(role="server", command="bin/dev"),
-                    WindowConfig(role="console", command="bin/rails console", autostart="false"),
+                    WindowConfig(role="console", command="bin/rails console", activate="false"),
                 ),
             ),
         )
@@ -179,8 +179,8 @@ def test_layout_window_with_autostart_false_opts_out_of_matched_layout(tmp_path:
 
     server = find_window(windows, "server")
     console = find_window(windows, "console")
-    assert server is not None and server.autostart_active is True
-    assert console is not None and console.autostart_active is False
+    assert server is not None and server.active is True
+    assert console is not None and console.active is False
 
 
 def test_multiple_matching_layouts_compose(tmp_path: Path) -> None:
@@ -188,12 +188,12 @@ def test_multiple_matching_layouts_compose(tmp_path: Path) -> None:
         layouts=(
             LayoutConfig(
                 name="rails",
-                autostart="true",
+                activate="true",
                 windows=(WindowConfig(role="server", command="bin/dev"),),
             ),
             LayoutConfig(
                 name="vite",
-                autostart="true",
+                activate="true",
                 windows=(WindowConfig(role="vite", command="bun run dev"),),
             ),
         )
@@ -211,7 +211,7 @@ def test_layout_probe_substitutes_project_root(tmp_path: Path) -> None:
         layouts=(
             LayoutConfig(
                 name="rails",
-                autostart="test -f {project_root}/bin/rails",
+                activate="test -f {project_root}/bin/rails",
                 windows=(WindowConfig(role="server", command="bin/dev"),),
             ),
         )
@@ -230,7 +230,7 @@ def test_layout_real_filesystem_probe(tmp_path: Path) -> None:
         layouts=(
             LayoutConfig(
                 name="rails",
-                autostart=f"test -f {tmp_path}/bin/rails",
+                activate=f"test -f {tmp_path}/bin/rails",
                 windows=(WindowConfig(role="server", command="bin/dev"),),
             ),
         )
@@ -256,7 +256,7 @@ def test_layout_overrides_built_in_command(tmp_path: Path) -> None:
         layouts=(
             LayoutConfig(
                 name="vim-only",
-                autostart="true",
+                activate="true",
                 windows=(WindowConfig(role="editor", command="vim"),),
             ),
         )
@@ -281,7 +281,7 @@ def test_resolve_windows_order_pins_shell_editor_then_declared_then_browser(tmp_
         layouts=(
             LayoutConfig(
                 name="rails",
-                autostart="true",
+                activate="true",
                 windows=(WindowConfig(role="server", command="bin/dev"),),
             ),
         ),
@@ -301,7 +301,7 @@ def test_resolve_windows_keeps_shell_and_editor_pinned_when_user_declares_them(t
         layouts=(
             LayoutConfig(
                 name="rails",
-                autostart="true",
+                activate="true",
                 windows=(
                     WindowConfig(role="server", command="bin/dev"),
                     WindowConfig(role="editor", command="hx"),
@@ -316,10 +316,10 @@ def test_resolve_windows_keeps_shell_and_editor_pinned_when_user_declares_them(t
     assert tuple(window.role for window in windows) == ("shell", "editor", "server", "browser")
 
 
-def test_layout_window_autostart_runs_as_shell_probe(tmp_path: Path) -> None:
-    """Window-level ``autostart`` is a shell probe — when it exits 0 the
+def test_layout_window_activate_runs_as_shell_probe(tmp_path: Path) -> None:
+    """Window-level ``activate`` is a shell probe — when it exits 0 the
     window auto-launches; non-zero opts it out (declared but inactive).
-    Same shape as the layout-level autostart probe."""
+    Same shape as the layout-level activate probe."""
     log_dir = tmp_path / "log"
     log_dir.mkdir()
     (log_dir / "dev.log").write_text("logged")
@@ -328,17 +328,17 @@ def test_layout_window_autostart_runs_as_shell_probe(tmp_path: Path) -> None:
         layouts=(
             LayoutConfig(
                 name="rails",
-                autostart="true",
+                activate="true",
                 windows=(
                     WindowConfig(
                         role="present_log",
                         command="less log/dev.log",
-                        autostart="test -s log/dev.log",
+                        activate="test -s log/dev.log",
                     ),
                     WindowConfig(
                         role="missing_log",
                         command="less log/missing.log",
-                        autostart="test -s log/missing.log",
+                        activate="test -s log/missing.log",
                     ),
                 ),
             ),
@@ -349,20 +349,20 @@ def test_layout_window_autostart_runs_as_shell_probe(tmp_path: Path) -> None:
 
     present = find_window(windows, "present_log")
     missing = find_window(windows, "missing_log")
-    assert present is not None and present.autostart_active is True
-    assert missing is not None and missing.autostart_active is False
+    assert present is not None and present.active is True
+    assert missing is not None and missing.active is False
 
 
-def test_top_level_window_autostart_runs_as_shell_probe(tmp_path: Path) -> None:
+def test_top_level_window_activate_runs_as_shell_probe(tmp_path: Path) -> None:
     sentinel = tmp_path / "sentinel"
     sentinel.write_text("present")
 
-    config = HopConfig(windows=(WindowConfig(role="conditional", command="bin/jobs", autostart="test -f sentinel"),))
+    config = HopConfig(windows=(WindowConfig(role="conditional", command="bin/jobs", activate="test -f sentinel"),))
 
     windows = resolve_windows(config, build_session(tmp_path), runner=_real_runner)
 
     conditional = find_window(windows, "conditional")
-    assert conditional is not None and conditional.autostart_active is True
+    assert conditional is not None and conditional.active is True
 
 
 def test_resolve_windows_role_declared_in_two_matching_layouts_keeps_first_position(tmp_path: Path) -> None:
@@ -373,7 +373,7 @@ def test_resolve_windows_role_declared_in_two_matching_layouts_keeps_first_posit
         layouts=(
             LayoutConfig(
                 name="rails",
-                autostart="true",
+                activate="true",
                 windows=(
                     WindowConfig(role="server", command="bin/dev"),
                     WindowConfig(role="worker", command="bin/jobs"),
@@ -381,7 +381,7 @@ def test_resolve_windows_role_declared_in_two_matching_layouts_keeps_first_posit
             ),
             LayoutConfig(
                 name="vite",
-                autostart="true",
+                activate="true",
                 windows=(WindowConfig(role="server", command="bin/vite"),),
             ),
         )
@@ -399,7 +399,7 @@ def test_resolve_windows_browser_takes_declared_position_when_user_declares_it(t
     config = HopConfig(
         windows=(
             WindowConfig(role="worker", command="bin/jobs"),
-            WindowConfig(role="browser", autostart="true"),
+            WindowConfig(role="browser", activate="true"),
             WindowConfig(role="logs", command="tail -f log/dev.log"),
         )
     )
@@ -409,15 +409,15 @@ def test_resolve_windows_browser_takes_declared_position_when_user_declares_it(t
     assert tuple(window.role for window in windows) == ("shell", "editor", "worker", "browser", "logs")
 
 
-def test_layout_with_no_autostart_field_never_matches(tmp_path: Path) -> None:
-    """A layout whose `autostart` field is None (e.g. a project-only override
+def test_layout_with_no_activate_field_never_matches(tmp_path: Path) -> None:
+    """A layout whose `activate` field is None (e.g. a project-only override
     that didn't carry the global's probe) is treated as off — safer than
     always-on."""
     config = HopConfig(
         layouts=(
             LayoutConfig(
                 name="orphan",
-                autostart=None,
+                activate=None,
                 windows=(WindowConfig(role="server", command="bin/dev"),),
             ),
         )
@@ -432,10 +432,10 @@ def test_layout_with_no_autostart_field_never_matches(tmp_path: Path) -> None:
 
 
 def test_resolver_drops_user_window_with_no_command(tmp_path: Path) -> None:
-    """A top-level window declared with only an `autostart` opt-out (no
+    """A top-level window declared with only an `activate` opt-out (no
     `command`) has no resolved command. Drop it so `hop term --role X`
     doesn't try to launch an undefined target."""
-    config = HopConfig(windows=(WindowConfig(role="ghost", autostart="false"),))
+    config = HopConfig(windows=(WindowConfig(role="ghost", activate="false"),))
 
     windows = resolve_windows(config, build_session(tmp_path), runner=RecordingRunner())
 
@@ -449,7 +449,7 @@ def test_layout_window_with_explicit_empty_command_resolves_as_shell_like(tmp_pa
         layouts=(
             LayoutConfig(
                 name="rails",
-                autostart="true",
+                activate="true",
                 windows=(WindowConfig(role="test", command=""),),
             ),
         )
@@ -460,7 +460,7 @@ def test_layout_window_with_explicit_empty_command_resolves_as_shell_like(tmp_pa
     test = find_window(windows, "test")
     assert test is not None
     assert test.command == ""
-    assert test.autostart_active is True
+    assert test.active is True
 
 
 def test_top_level_window_with_explicit_empty_command_resolves_as_shell_like(tmp_path: Path) -> None:
@@ -471,19 +471,19 @@ def test_top_level_window_with_explicit_empty_command_resolves_as_shell_like(tmp
     scratch = find_window(windows, "scratch")
     assert scratch is not None
     assert scratch.command == ""
-    assert scratch.autostart_active is True
+    assert scratch.active is True
 
 
-def test_layout_window_without_command_only_flips_autostart_on_existing_spec(tmp_path: Path) -> None:
-    """A layout window may carry just an autostart opt-out (no `command`) to
+def test_layout_window_without_command_only_flips_activate_on_existing_spec(tmp_path: Path) -> None:
+    """A layout window may carry just an activate opt-out (no `command`) to
     flip the matched layout's behavior for a role that's already been resolved
     from a prior layer (built-in, earlier layout). The command must survive."""
     config = HopConfig(
         layouts=(
             LayoutConfig(
                 name="rails",
-                autostart="true",
-                windows=(WindowConfig(role="editor", autostart="false"),),
+                activate="true",
+                windows=(WindowConfig(role="editor", activate="false"),),
             ),
         )
     )
@@ -493,7 +493,7 @@ def test_layout_window_without_command_only_flips_autostart_on_existing_spec(tmp
     editor = find_window(windows, "editor")
     assert editor is not None
     assert editor.command == "nvim"  # built-in command preserved
-    assert editor.autostart_active is False
+    assert editor.active is False
 
 
 def test_top_level_window_overrides_layout_window(tmp_path: Path) -> None:
@@ -503,11 +503,11 @@ def test_top_level_window_overrides_layout_window(tmp_path: Path) -> None:
         layouts=(
             LayoutConfig(
                 name="rails",
-                autostart="true",
+                activate="true",
                 windows=(WindowConfig(role="server", command="layout-bin/dev"),),
             ),
         ),
-        windows=(WindowConfig(role="server", autostart="false"),),
+        windows=(WindowConfig(role="server", activate="false"),),
     )
 
     windows = resolve_windows(config, build_session(tmp_path), runner=RecordingRunner())
@@ -515,4 +515,4 @@ def test_top_level_window_overrides_layout_window(tmp_path: Path) -> None:
     server = find_window(windows, "server")
     assert server is not None
     assert server.command == "layout-bin/dev"  # command from layout, no override
-    assert server.autostart_active is False  # autostart from top-level
+    assert server.active is False  # activate from top-level

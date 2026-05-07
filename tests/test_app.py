@@ -427,11 +427,11 @@ def test_execute_command_re_entry_does_not_resurrect_a_closed_editor(tmp_path: P
     assert services.neovim.ensured_sessions == []
 
 
-def test_execute_command_runs_full_autostart_when_state_is_stale_and_kitty_dead(
+def test_execute_command_runs_full_activation_when_state_is_stale_and_kitty_dead(
     tmp_path: Path,
 ) -> None:
     """A stale state file (kitty died after the last `hop kill`-less close)
-    must not skip the autostart sweep on the next bootstrap. The first-entry
+    must not skip the activation sweep on the next bootstrap. The first-entry
     gate keys on `kitty.is_alive`, so persisted state with an unreachable
     kitty is treated as a fresh cold start: shell + editor both come up."""
     project_root = tmp_path / "demo"
@@ -526,7 +526,7 @@ def test_execute_command_lists_windows_for_current_session(tmp_path: Path) -> No
             layouts=(
                 LayoutConfig(
                     name="rails",
-                    autostart="true",
+                    activate="true",
                     windows=(WindowConfig(role="server", command="bin/dev"),),
                 ),
             ),
@@ -747,7 +747,7 @@ def test_execute_command_kills_every_window_on_session_workspace(tmp_path: Path)
 def _devcontainer_config() -> BackendConfig:
     return BackendConfig(
         name="devcontainer",
-        default="test -f docker-compose.dev.yml",
+        activate="test -f docker-compose.dev.yml",
         prepare="compose up -d devcontainer",
         teardown="compose down",
         workspace="compose exec devcontainer pwd",
@@ -850,32 +850,32 @@ def test_session_base_registry_project_override_can_flip_autodetect(tmp_path: Pa
 
     from hop.app import SessionBackendRegistry
 
-    # Two backends, both with defaults that *would* succeed (test -e .).
+    # Two backends, both with activate probes that *would* succeed (test -e .).
     config = HopConfig(
         backends=(
             BackendConfig(
                 name="primary",
-                default="test -e .",  # would normally win
+                activate="test -e .",  # would normally win
                 command_prefix="primary-prefix",
             ),
             BackendConfig(
                 name="secondary",
-                default="test -e .",
+                activate="test -e .",
                 command_prefix="secondary-prefix",
             ),
         )
     )
 
-    # Project disables primary by overriding its default to false.
+    # Project disables primary by overriding its activate probe to false.
     (tmp_path / ".hop.toml").write_text(
         """
 [backends.primary]
-default = "false"
+activate = "false"
 """,
     )
 
     def runner(args: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
-        # Default probes go through `sh -c <command>`. Match on the substituted
+        # Activate probes go through `sh -c <command>`. Match on the substituted
         # command string: project-overridden "false" → returncode 1; everything
         # else (the secondary backend's "test -e .") succeeds.
         if args == ("sh", "-c", "false"):
@@ -905,7 +905,7 @@ def test_session_backend_registry_uses_project_only_backend_definition(tmp_path:
     (tmp_path / ".hop.toml").write_text(
         """
 [backends.project-only]
-default        = "true"
+activate       = "true"
 command_prefix = "my-prefix"
 """,
     )
@@ -927,8 +927,8 @@ command_prefix = "my-prefix"
 
 
 def test_session_backend_registry_project_only_backend_wins_autodetect(tmp_path: Path) -> None:
-    """A project-only backend with a `default` that succeeds wins auto-detect
-    when no global backend's default does.
+    """A project-only backend with an `activate` that succeeds wins auto-detect
+    when no global backend's activate does.
     """
     import subprocess
 
@@ -937,7 +937,7 @@ def test_session_backend_registry_project_only_backend_wins_autodetect(tmp_path:
     (tmp_path / ".hop.toml").write_text(
         """
 [backends.project-only]
-default        = "true"
+activate       = "true"
 command_prefix = "my-prefix"
 """,
     )

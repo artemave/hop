@@ -65,7 +65,7 @@ Create `${XDG_CONFIG_HOME:-~/.config}/hop/config.toml`:
 
 ```toml
 [backends.devcontainer]
-default        = "test -f docker-compose.dev.yml"
+activate       = "test -f docker-compose.dev.yml"
 prepare        = "podman-compose -f docker-compose.dev.yml up -d devcontainer"
 teardown       = "podman-compose -f docker-compose.dev.yml down"
 workspace      = "podman-compose -f docker-compose.dev.yml exec devcontainer pwd"
@@ -93,7 +93,7 @@ prepare = "docker compose -f docker-compose.dev.yml up -d devcontainer"
 # ... etc.
 ```
 
-`default` is the auto-detect probe — hop runs it in the project root and picks this backend if it exits 0. Any command works; `test -f <marker>` is the simplest. Backends without `default` aren't eligible for auto-detect; they can only be picked by name with `hop --backend <name>` or `[backend].name = "<name>"` in `.hop.toml`.
+`activate` is the auto-detect probe — hop runs it in the project root and picks this backend if it exits 0. Any command works; `test -f <marker>` is the simplest. Backends without `activate` aren't eligible for auto-detect; they can only be picked by name with `hop --backend <name>` or `[backend].name = "<name>"` in `.hop.toml`.
 
 ### 3. Verify
 
@@ -124,7 +124,7 @@ The `backend.workspace_path` field shows the value `workspace` returned (e.g. `/
 - Project entries come first in auto-detect / declaration order.
 - Same-named entries are field-merged with project fields winning. The merged entry takes the project's slot.
 
-A single project file can override one field of a global backend, force/skip a backend via its `default` probe, declare project-specific layouts and windows, and define a brand-new backend — there is no syntactic distinction between these uses:
+A single project file can override one field of a global backend, force/skip a backend via its `activate` probe, declare project-specific layouts and windows, and define a brand-new backend — there is no syntactic distinction between these uses:
 
 ```toml
 # Override one field of a global backend (this project's compose service is named "app").
@@ -133,31 +133,31 @@ command_prefix = "docker compose -f compose.dev.yml exec app"
 
 # Force a backend to win auto-detect in this project.
 # [backends.devcontainer]
-# default = "true"
+# activate = "true"
 
-# Or skip a backend by overriding its default to fail.
+# Or skip a backend by overriding its activate probe to fail.
 # [backends.other]
-# default = "false"
+# activate = "false"
 
 # A project-specific layout (e.g. one Rails project with a worker process).
 [layouts.this-project]
-autostart = "true"
+activate = "true"
 
 [layouts.this-project.windows.worker]
 command = "bin/jobs"
 
-# A top-level window that always autostarts in this project.
+# A top-level window that's always active in this project.
 [windows.log]
 command = "tail -f log/development.log"
 
 # Define a project-specific backend that doesn't exist globally.
 [backends.my-vm]
-default        = "test -f .my-vm-marker"
+activate       = "test -f .my-vm-marker"
 workspace      = "lima shell default -- pwd"
 command_prefix = "lima shell default --"
 ```
 
-To force the host backend for a project, pass `hop --backend host` once at session creation (persisted), or override every configured backend's `default` to a failing command.
+To force the host backend for a project, pass `hop --backend host` once at session creation (persisted), or override every configured backend's `activate` to a failing command.
 
 ## Per-invocation override: `--backend <name>`
 

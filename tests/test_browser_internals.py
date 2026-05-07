@@ -342,7 +342,7 @@ def test_session_browser_adapter_falls_back_to_xdg_when_no_browser_window_comman
         session_windows_for=lambda _session: (
             # Browser window declared but with empty command — fall through to
             # xdg detection rather than blindly using the empty string.
-            WindowSpec(role="browser", command="", autostart_active=False),
+            WindowSpec(role="browser", command="", active=False),
         ),
     )
 
@@ -379,7 +379,7 @@ def test_session_browser_adapter_uses_top_level_browser_window_override() -> Non
         sway=sway,
         launcher=launcher,
         session_windows_for=lambda _session: (
-            WindowSpec(role="browser", command="custom-browser --kiosk", autostart_active=True),
+            WindowSpec(role="browser", command="custom-browser --kiosk", active=True),
         ),
     )
 

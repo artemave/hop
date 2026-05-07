@@ -299,7 +299,7 @@ def execute_command(
                 # existing: a state file outlives the kitty process when
                 # the user closes windows manually, the wm crashes, or the
                 # machine reboots, and we want every cold bootstrap to run
-                # the full autostart sweep regardless of whether the file
+                # the full activation sweep regardless of whether the file
                 # is stale on disk.
                 kitty_alive = services.kitty.is_alive(session)
                 is_first_entry = not kitty_alive

@@ -96,8 +96,8 @@ File-shaped tokens that don't resolve to a real file under the source window's c
 A hop config has three named sections plus one scalar setting, all optional:
 
 - `[backends.<name>]` - backend lifecycle (`prepare` / `teardown` / `workspace` / translate helpers) plus a `command_prefix` shell snippet that wraps every command launched in that backend's environment.
-- `[layouts.<name>]` - a named layout with one required `autostart` shell-snippet probe and a list of windows that come up together when the probe matches.
-- `[windows.<role>]` - top-level windows (always autostart unless `autostart = "false"`).
+- `[layouts.<name>]` - a named layout with one required `activate` shell-snippet probe and a list of windows that come up together when the probe matches.
+- `[windows.<role>]` - top-level windows (always active unless `activate = "false"`).
 - `workspace_layout = "<mode>"` - sway workspace layout applied at first session entry. One of `splith`, `splitv`, `stacking`, `tabbed`.
 - `debug_log = true` - append a diagnostic log of backend command runs (`prepare` / `teardown` / `workspace` / translate / auto-detect probes) and kitty bootstrap stdio to `$XDG_RUNTIME_DIR/hop/debug.log`. Set to a string to use a custom path. First place to look when `hop` fails silently — especially when launched from Vicinae, where stderr is not visible.
 
@@ -111,13 +111,13 @@ Note, that nvim runs on the backend, not on the host (unless backend is the host
 
 ### Auto-detection
 
-When you enter a session (bare `hop`), hop walks the configured backends in declaration order and runs each backend's `default` probe in the project root. The first one that exits 0 wins. If none succeed, the session falls back to **host**. The chosen backend is persisted and reused for all subsequent commands against that session.
+When you enter a session (bare `hop`), hop walks the configured backends in declaration order and runs each backend's `activate` probe in the project root. The first one that exits 0 wins. If none succeed, the session falls back to **host**. The chosen backend is persisted and reused for all subsequent commands against that session.
 
 ### Backend example
 
 ```toml
 [backends.devcontainer]
-default        = "test -f docker-compose.dev.yml"
+activate       = "test -f docker-compose.dev.yml"
 prepare        = "podman-compose -f docker-compose.dev.yml --in-pod=false up -d devcontainer"
 teardown       = "podman-compose -f docker-compose.dev.yml down"
 workspace      = "podman-compose -f docker-compose.dev.yml exec devcontainer pwd"
@@ -136,7 +136,7 @@ Each command is a single string. Hop runs it through `sh -c` after substituting 
 
 Backend fields:
 
-- `default` (optional) - auto-detect probe. Backends without `default` can only be picked by name.
+- `activate` (optional) - auto-detect probe. Backends without `activate` can only be picked by name.
 - `prepare` (optional) - command run once at session creation, before launching kitty. Should be idempotent.
 - `teardown` (optional) - command run at `hop kill` after closing windows.
 - `workspace` (optional) - command whose stdout maps the backend's path back to the host project root. Used by the open_selection kitten.
@@ -154,14 +154,14 @@ Per-role launch commands live outside the backend, in `[layouts.<name>]` or `[wi
 
 ```toml
 [layouts.rails]
-autostart = "test -f bin/rails"
+activate = "test -f bin/rails"
 
 [layouts.rails.windows.server]
 command = "bin/dev"
 
 [layouts.rails.windows.console]
-command   = "bin/rails console"
-autostart = "false"
+command  = "bin/rails console"
+activate = "false"
 
 # Top-level window
 [windows.worker]
@@ -173,17 +173,17 @@ The active backend's `command_prefix` wraps each window's `command` at launch, s
 Per-window fields:
 
 - `command` (string) - the role command, **without** any backend wrap. The active backend's `command_prefix` is prepended at launch.
-- `autostart` (string, optional) - shell probe; the window auto-launches when it exits 0. Defaults to `"true"`.
+- `activate` (string, optional) - shell probe; the window auto-launches when it exits 0. Defaults to `"true"`.
 
 Built-in roles `shell`, `editor`, and `browser` ship with hop defaults:
 
-| role    | command default                         | autostart default |
-|---------|-----------------------------------------|-------------------|
-| shell   | platform default (kitty's login shell on host; `${SHELL:-sh}` falls back inside a `command_prefix`) | autostart |
-| editor  | `nvim`                                  | autostart         |
-| browser | xdg-detected default browser            | not autostart     |
+| role    | command default                         | activate default |
+|---------|-----------------------------------------|------------------|
+| shell   | platform default (kitty's login shell on host; `${SHELL:-sh}` falls back inside a `command_prefix`) | active     |
+| editor  | `nvim`                                  | active           |
+| browser | xdg-detected default browser            | inactive         |
 
-To change a built-in, declare it as a top-level window: `[windows.editor] autostart = "false"` opts out of the editor for this config; `[windows.browser] autostart = "true"` autostarts the browser; `[windows.shell] command = "/usr/bin/zsh"` overrides the shell.
+To change a built-in, declare it as a top-level window: `[windows.editor] activate = "false"` opts out of the editor for this config; `[windows.browser] activate = "true"` activates the browser; `[windows.shell] command = "/usr/bin/zsh"` overrides the shell.
 
 Multiple matching layouts compose: a Rails project that also has `vite.config.ts` activates both layouts and gets their windows.
 

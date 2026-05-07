@@ -431,7 +431,7 @@ def test_ensure_terminal_uses_base_shell_args_in_launch_payload() -> None:
 
     adapter = KittyRemoteControlAdapter(
         session_backend_for=lambda _session: FakeBackend(),  # type: ignore[arg-type]
-        session_windows_for=lambda _session: (WindowSpec(role="shell", command="/usr/bin/zsh", autostart_active=True),),
+        session_windows_for=lambda _session: (WindowSpec(role="shell", command="/usr/bin/zsh", active=True),),
         transport_factory=factory,
         launcher=StubLauncher(),
     )
@@ -475,8 +475,8 @@ def test_launch_payload_composes_command_and_shell_for_non_shell_role() -> None:
     adapter = KittyRemoteControlAdapter(
         session_backend_for=lambda _session: FakeBackend(),  # type: ignore[arg-type]
         session_windows_for=lambda _session: (
-            WindowSpec(role="shell", command="", autostart_active=True),
-            WindowSpec(role="server", command="bin/dev", autostart_active=True),
+            WindowSpec(role="shell", command="", active=True),
+            WindowSpec(role="server", command="bin/dev", active=True),
         ),
         transport_factory=factory,
         launcher=StubLauncher(),
@@ -517,8 +517,8 @@ def test_launch_payload_composes_through_backend_prefix() -> None:
     adapter = KittyRemoteControlAdapter(
         session_backend_for=lambda _session: FakeBackend(),  # type: ignore[arg-type]
         session_windows_for=lambda _session: (
-            WindowSpec(role="shell", command="", autostart_active=True),
-            WindowSpec(role="server", command="bin/dev", autostart_active=True),
+            WindowSpec(role="shell", command="", active=True),
+            WindowSpec(role="server", command="bin/dev", active=True),
         ),
         transport_factory=factory,
         launcher=StubLauncher(),
@@ -556,7 +556,7 @@ def test_launch_payload_does_not_compose_for_shell_role() -> None:
 
     adapter = KittyRemoteControlAdapter(
         session_backend_for=lambda _session: FakeBackend(),  # type: ignore[arg-type]
-        session_windows_for=lambda _session: (WindowSpec(role="shell", command="/usr/bin/zsh", autostart_active=True),),
+        session_windows_for=lambda _session: (WindowSpec(role="shell", command="/usr/bin/zsh", active=True),),
         transport_factory=factory,
         launcher=StubLauncher(),
     )
@@ -595,7 +595,7 @@ def test_bootstrap_calls_base_prepare_and_appends_shell_args_after_dash_dash() -
 
     adapter = KittyRemoteControlAdapter(
         session_backend_for=lambda _session: FakeBackend(),  # type: ignore[arg-type]
-        session_windows_for=lambda _session: (WindowSpec(role="shell", command="/usr/bin/zsh", autostart_active=True),),
+        session_windows_for=lambda _session: (WindowSpec(role="shell", command="/usr/bin/zsh", active=True),),
         transport_factory=factory,
         launcher=launcher,
         sleep=lambda _: None,

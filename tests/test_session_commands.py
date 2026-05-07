@@ -121,7 +121,7 @@ def test_enter_project_session_ensures_editor_when_one_is_supplied(tmp_path: Pat
 
 def test_enter_project_session_passes_keep_focus_false_to_editor_during_bootstrap(tmp_path: Path) -> None:
     """In sway tabbed mode, new windows are inserted right after the
-    focused tab. The bootstrap autostart sweep launches editor first,
+    focused tab. The bootstrap activation sweep launches editor first,
     then layout terminals. If the editor doesn't take focus, every
     subsequent terminal slots in between shell and editor and the editor
     walks to the end of the tab strip. Passing ``keep_focus=False``
@@ -138,9 +138,9 @@ def test_enter_project_session_passes_keep_focus_false_to_editor_during_bootstra
         terminals=StubTerminalAdapter(),
         editor=editor,
         windows=(
-            WindowSpec(role="shell", command="", autostart_active=True),
-            WindowSpec(role="editor", command="nvim", autostart_active=True),
-            WindowSpec(role="server", command="bin/dev", autostart_active=True),
+            WindowSpec(role="shell", command="", active=True),
+            WindowSpec(role="editor", command="nvim", active=True),
+            WindowSpec(role="server", command="bin/dev", active=True),
         ),
     )
 
@@ -210,7 +210,7 @@ def test_enter_project_session_does_not_touch_editor_on_re_entry(tmp_path: Path)
     assert editor.ensured == []
 
 
-def test_enter_project_session_autostarts_active_windows_in_declaration_order(tmp_path: Path) -> None:
+def test_enter_project_session_activates_windows_in_declaration_order(tmp_path: Path) -> None:
     """First entry with a resolved windows tuple: shell + editor + server (active)
     + console (inactive) ensures shell, editor, and server but not console."""
     project_root = tmp_path / "demo"
@@ -228,10 +228,10 @@ def test_enter_project_session_autostarts_active_windows_in_declaration_order(tm
         editor=editor,
         browser=browser,
         windows=(
-            WindowSpec(role="shell", command="zsh", autostart_active=True),
-            WindowSpec(role="editor", command="nvim", autostart_active=True),
-            WindowSpec(role="server", command="bin/dev", autostart_active=True),
-            WindowSpec(role="console", command="bin/rails console", autostart_active=False),
+            WindowSpec(role="shell", command="zsh", active=True),
+            WindowSpec(role="editor", command="nvim", active=True),
+            WindowSpec(role="server", command="bin/dev", active=True),
+            WindowSpec(role="console", command="bin/rails console", active=False),
         ),
     )
 
@@ -243,8 +243,8 @@ def test_enter_project_session_autostarts_active_windows_in_declaration_order(tm
     assert browser.calls == []
 
 
-def test_enter_project_session_skips_autostart_sweep_on_re_entry(tmp_path: Path) -> None:
-    """Re-entry (editor=None) ensures only the shell window — autostart-active
+def test_enter_project_session_skips_activation_sweep_on_re_entry(tmp_path: Path) -> None:
+    """Re-entry (editor=None) ensures only the shell window — active
     server / browser entries are NOT launched."""
     project_root = tmp_path / "demo"
     project_root.mkdir()
@@ -260,9 +260,9 @@ def test_enter_project_session_skips_autostart_sweep_on_re_entry(tmp_path: Path)
         editor=None,
         browser=browser,
         windows=(
-            WindowSpec(role="shell", command="zsh", autostart_active=True),
-            WindowSpec(role="server", command="bin/dev", autostart_active=True),
-            WindowSpec(role="browser", command="firefox", autostart_active=True),
+            WindowSpec(role="shell", command="zsh", active=True),
+            WindowSpec(role="server", command="bin/dev", active=True),
+            WindowSpec(role="browser", command="firefox", active=True),
         ),
     )
 
@@ -286,8 +286,8 @@ def test_enter_project_session_dispatches_browser_role_to_browser_adapter(tmp_pa
         editor=editor,
         browser=browser,
         windows=(
-            WindowSpec(role="shell", command="zsh", autostart_active=True),
-            WindowSpec(role="browser", command="firefox", autostart_active=True),
+            WindowSpec(role="shell", command="zsh", active=True),
+            WindowSpec(role="browser", command="firefox", active=True),
         ),
     )
 
@@ -314,8 +314,8 @@ def test_enter_project_session_skips_browser_role_when_no_browser_adapter(tmp_pa
         editor=editor,
         browser=None,
         windows=(
-            WindowSpec(role="shell", command="zsh", autostart_active=True),
-            WindowSpec(role="browser", command="firefox", autostart_active=True),
+            WindowSpec(role="shell", command="zsh", active=True),
+            WindowSpec(role="browser", command="firefox", active=True),
         ),
     )
 
@@ -325,9 +325,9 @@ def test_enter_project_session_skips_browser_role_when_no_browser_adapter(tmp_pa
 
 
 def test_enter_project_session_skips_inactive_window(tmp_path: Path) -> None:
-    """A window with autostart_active=False (resolver output for a layout
-    whose probe failed, or an explicit autostart="false") is skipped from
-    the autostart sweep — declared but not auto-launched."""
+    """A window with active=False (resolver output for a layout
+    whose probe failed, or an explicit activate="false") is skipped from
+    the activation sweep — declared but not auto-launched."""
     project_root = tmp_path / "demo"
     project_root.mkdir()
 
@@ -343,12 +343,12 @@ def test_enter_project_session_skips_inactive_window(tmp_path: Path) -> None:
         editor=editor,
         browser=browser,
         windows=(
-            WindowSpec(role="shell", command="zsh", autostart_active=True),
-            WindowSpec(role="server", command="bin/dev", autostart_active=False),
+            WindowSpec(role="shell", command="zsh", active=True),
+            WindowSpec(role="server", command="bin/dev", active=False),
         ),
     )
 
-    # Shell was ensured; server window was skipped because autostart_active is False.
+    # Shell was ensured; server window was skipped because active is False.
     assert terminals.ensured_terminals == [("demo", "shell", project_root)]
 
 
@@ -376,7 +376,7 @@ def test_enter_project_session_sets_workspace_layout_before_launching_windows(tm
 
 
 def test_enter_project_session_focuses_shell_window_after_sweep(tmp_path: Path) -> None:
-    """Each kitty launch steals focus, so after the autostart sweep the
+    """Each kitty launch steals focus, so after the activation sweep the
     last-launched window is focused. enter_project_session refocuses the
     shell so the session lands on a sensible starting point — and in a
     tabbed workspace, makes the shell the visible tab."""

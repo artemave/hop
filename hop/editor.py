@@ -258,7 +258,7 @@ class SharedNeovimEditorAdapter:
         # or whether resurrecting the editor was the whole job.
         #
         # The bootstrap path passes ``keep_focus=False`` so that the
-        # autostart sweep's subsequent terminal launches tab in *after*
+        # activation sweep's subsequent terminal launches tab in *after*
         # the editor in sway's tabbed layout (sway inserts new tabs after
         # the focused one). With ``keep_focus=True`` the shell would stay
         # focused, terminals would slot in between shell and editor, and

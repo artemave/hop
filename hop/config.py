@@ -21,10 +21,10 @@ PLACEHOLDER_PORT = "{port}"
 
 # Reserved backend name — refers to the implicit host backend, never a
 # configured one. Auto-detect always falls back to host when no configured
-# backend's `default` command succeeds.
+# backend's `activate` command succeeds.
 HOST_BACKEND_NAME = "host"
 
-# Built-in roles. shell + editor autostart by default; browser does not.
+# Built-in roles. shell + editor activate by default; browser does not.
 SHELL_ROLE = "shell"
 EDITOR_ROLE = "editor"
 BROWSER_ROLE = "browser"
@@ -40,28 +40,28 @@ _WORKSPACE_LAYOUTS = frozenset({"splith", "splitv", "stacking", "tabbed"})
 class WindowConfig:
     """A `[layouts.<name>.windows.<role>]` or top-level `[windows.<role>]` entry.
 
-    ``command`` and ``autostart`` are both optional at the config layer so
+    ``command`` and ``activate`` are both optional at the config layer so
     project entries can override only the field they care about. Defaults
     are filled in by the resolver.
     """
 
     role: str
     command: str | None = None
-    autostart: str | None = None
+    activate: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class LayoutConfig:
     """A named `[layouts.<name>]` entry.
 
-    ``autostart`` is required — the layout's gate probe, run via ``sh -c``
+    ``activate`` is required — the layout's gate probe, run via ``sh -c``
     in the project root at session entry. Each declared window inherits
-    the layout's gate; per-window ``autostart = "false"`` opts a single
+    the layout's gate; per-window ``activate = "false"`` opts a single
     window out of the matched layout (declared but not auto-launched).
     """
 
     name: str
-    autostart: str | None = None
+    activate: str | None = None
     windows: tuple[WindowConfig, ...] = ()
 
 
@@ -76,8 +76,8 @@ class BackendConfig:
     Per-role launch commands live in top-level ``[layouts.<name>]`` and
     ``[windows.<role>]`` declarations, not on the backend.
 
-    ``default`` is the auto-detect probe. Hop runs it in the project root
-    and selects this backend when it exits 0. Backends without ``default``
+    ``activate`` is the auto-detect probe. Hop runs it in the project root
+    and selects this backend when it exits 0. Backends without ``activate``
     are not eligible for auto-detect — they can only be picked by name
     (``hop --backend``).
 
@@ -86,7 +86,7 @@ class BackendConfig:
     """
 
     name: str
-    default: str | None = None
+    activate: str | None = None
     prepare: str | None = None
     teardown: str | None = None
     workspace: str | None = None
@@ -213,7 +213,7 @@ def merge_windows(project: HopConfig, global_: HopConfig) -> tuple[WindowConfig,
 def _merge_backend_pair(project: BackendConfig, global_: BackendConfig) -> BackendConfig:
     return BackendConfig(
         name=project.name,
-        default=project.default if project.default is not None else global_.default,
+        activate=project.activate if project.activate is not None else global_.activate,
         prepare=project.prepare if project.prepare is not None else global_.prepare,
         teardown=project.teardown if project.teardown is not None else global_.teardown,
         workspace=project.workspace if project.workspace is not None else global_.workspace,
@@ -226,7 +226,7 @@ def _merge_backend_pair(project: BackendConfig, global_: BackendConfig) -> Backe
 def _merge_layout_pair(project: LayoutConfig, global_: LayoutConfig) -> LayoutConfig:
     return LayoutConfig(
         name=project.name,
-        autostart=project.autostart if project.autostart is not None else global_.autostart,
+        activate=project.activate if project.activate is not None else global_.activate,
         windows=_merge_layout_windows(project.windows, global_.windows),
     )
 
@@ -253,12 +253,12 @@ def _merge_window_pair(project: WindowConfig, global_: WindowConfig) -> WindowCo
     return WindowConfig(
         role=project.role,
         command=project.command if project.command is not None else global_.command,
-        autostart=project.autostart if project.autostart is not None else global_.autostart,
+        activate=project.activate if project.activate is not None else global_.activate,
     )
 
 
 _BACKEND_FIELDS = (
-    "default",
+    "activate",
     "prepare",
     "teardown",
     "workspace",
@@ -266,8 +266,8 @@ _BACKEND_FIELDS = (
     "host_translate",
     "command_prefix",
 )
-_LAYOUT_FIELDS = ("autostart", "windows")
-_WINDOW_FIELDS = ("command", "autostart")
+_LAYOUT_FIELDS = ("activate", "windows")
+_WINDOW_FIELDS = ("command", "activate")
 _LEGACY_FLAT_BACKEND_FIELDS = ("shell", "editor")
 _LEGACY_BACKEND_WINDOWS_FIELD = "windows"
 _TOP_LEVEL_KEYS = ("backends", "layouts", "windows", "workspace_layout", "debug_log")
@@ -371,7 +371,7 @@ def _parse_backend(name: str, table: dict[str, Any], *, source: Path) -> Backend
         raise HopConfigError(msg)
     return BackendConfig(
         name=name,
-        default=_parse_command(table, key="default", context=f"backend {name!r}", source=source),
+        activate=_parse_command(table, key="activate", context=f"backend {name!r}", source=source),
         prepare=_parse_command(table, key="prepare", context=f"backend {name!r}", source=source),
         teardown=_parse_command(table, key="teardown", context=f"backend {name!r}", source=source),
         workspace=_parse_command(table, key="workspace", context=f"backend {name!r}", source=source),
@@ -402,9 +402,9 @@ def _parse_layout(name: str, table: dict[str, Any], *, source: Path) -> LayoutCo
     if unknown:
         msg = f"{source}: layout {name!r} has unknown field {unknown[0]!r}"
         raise HopConfigError(msg)
-    autostart = _parse_command(table, key="autostart", context=f"layout {name!r}", source=source)
+    activate = _parse_command(table, key="activate", context=f"layout {name!r}", source=source)
     windows = _parse_layout_windows(table.get("windows"), layout=name, source=source)
-    return LayoutConfig(name=name, autostart=autostart, windows=windows)
+    return LayoutConfig(name=name, activate=activate, windows=windows)
 
 
 def _parse_layout_windows(
@@ -464,8 +464,8 @@ def _parse_window(role: str, table: dict[str, Any], *, context: str, source: Pat
         msg = f"{source}: {context} has unknown field {unknown[0]!r}"
         raise HopConfigError(msg)
     command = _parse_command(table, key="command", context=context, source=source, allow_empty=True)
-    autostart_raw = _parse_command(table, key="autostart", context=context, source=source)
-    return WindowConfig(role=role, command=command, autostart=autostart_raw)
+    activate_raw = _parse_command(table, key="activate", context=context, source=source)
+    return WindowConfig(role=role, command=command, activate=activate_raw)
 
 
 def _parse_command(

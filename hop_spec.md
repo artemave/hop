@@ -101,46 +101,46 @@ workspace_layout = "tabbed"
 
 Per-role launch commands live outside the backend, in two top-level config sections:
 
-- `[layouts.<name>]` — a named layout with one required `autostart` shell-snippet probe and a list of `[layouts.<name>.windows.<role>]` declarations. When the probe exits 0 in the project root, all of the layout's windows are queued for autostart. Multiple layouts can match in the same session; their windows compose.
-- `[windows.<role>]` — top-level windows, outside any layout. Always autostart unless individually opted out via `autostart = "false"`.
+- `[layouts.<name>]` — a named layout with one required `activate` shell-snippet probe and a list of `[layouts.<name>.windows.<role>]` declarations. When the probe exits 0 in the project root, all of the layout's windows are queued for activation. Multiple layouts can match in the same session; their windows compose.
+- `[windows.<role>]` — top-level windows, outside any layout. Always active unless individually opted out via `activate = "false"`.
 
 Each window declaration carries:
 
 - `command` (string) — the role command. **No backend wrap inside this string** — the active backend's `command_prefix` is prepended at launch time. For built-in roles, hop ships a default; the user can override.
-- `autostart` (`"true"` or `"false"`, optional) — opt-in / opt-out only. No probe at the per-window level; the gate is whatever the window's container decides:
-  - **Built-in window** (shell / editor / browser) with no top-level override: hop's default (true for shell/editor, false for browser).
-  - **Top-level window**: defaults true unless the entry sets `autostart = "false"`.
-  - **Layout window**: gated by the layout's `autostart` probe; the window can carry `autostart = "false"` to opt out of even the matched layout (declared but not auto-launched).
+- `activate` (`"true"` or `"false"`, optional) — opt-in / opt-out only. No probe at the per-window level; the gate is whatever the window's container decides:
+  - **Built-in window** (shell / editor / browser) with no top-level override: hop's default (active for shell/editor, inactive for browser).
+  - **Top-level window**: defaults active unless the entry sets `activate = "false"`.
+  - **Layout window**: gated by the layout's `activate` probe; the window can carry `activate = "false"` to opt out of even the matched layout (declared but not auto-launched).
 
 Built-in defaults:
 
-| role     | command default                      | autostart default | runtime adapter         |
-|----------|--------------------------------------|-------------------|-------------------------|
-| shell    | `""` (kitty's platform default shell on host; `${SHELL:-sh}` falls back inside a `command_prefix`) | autostart | kitty terminal |
-| editor   | `nvim`                               | autostart         | shared nvim adapter     |
-| browser  | xdg-detected default browser         | not autostart     | session browser adapter |
+| role     | command default                      | activate default | runtime adapter         |
+|----------|--------------------------------------|------------------|-------------------------|
+| shell    | `""` (kitty's platform default shell on host; `${SHELL:-sh}` falls back inside a `command_prefix`) | active | kitty terminal |
+| editor   | `nvim`                               | active           | shared nvim adapter     |
+| browser  | xdg-detected default browser         | inactive         | session browser adapter |
 
-For user-defined roles (anything other than shell / editor / browser), top-level windows default to autostart-on (the always-on rule above). To declare a user role for `hop term --role <name>` without auto-launching it on entry, either set `autostart = "false"` on the top-level entry, or move it into a layout whose probe is the gate.
+For user-defined roles (anything other than shell / editor / browser), top-level windows default to active (the always-on rule above). To declare a user role for `hop term --role <name>` without auto-launching it on entry, either set `activate = "false"` on the top-level entry, or move it into a layout whose probe is the gate.
 
 Window resolution at session entry, layered with later sources overriding earlier ones for the same role:
 
 1. Built-in defaults (shell, editor, browser).
-2. Each layout in declaration order whose `autostart` probe exits 0, contributing its windows in declaration order.
+2. Each layout in declaration order whose `activate` probe exits 0, contributing its windows in declaration order.
 3. Top-level `[windows.<role>]` entries in declaration order.
 
-On first session entry, hop ensures the shell window unconditionally (regardless of autostart), then dispatches every remaining autostart-active window to its runtime adapter (editor → nvim, browser → session browser, everything else → kitty terminal). Re-entry from another workspace ensures only the shell window — the autostart sweep never re-fires for a still-live session.
+On first session entry, hop ensures the shell window unconditionally (regardless of activate), then dispatches every remaining active window to its runtime adapter (editor → nvim, browser → session browser, everything else → kitty terminal). Re-entry from another workspace ensures only the shell window — the activation sweep never re-fires for a still-live session.
 
 Backend selection (below) is independent of layouts: any session's backend wraps every layout/top-level window's command through `command_prefix`.
 
 Backend selection at session creation:
 
 1. `hop --backend <name>` on the bare `hop` entry pins the named backend (or `"host"` to opt out). Pinning a name that isn't configured (and isn't `"host"`) raises `UnknownBackendError`.
-2. Otherwise auto-detect walks `[backends.<name>]` tables in global-config declaration order, running each backend's `default` command in the project root; the first that exits 0 wins. Backends without a `default` command are skipped during auto-detect.
+2. Otherwise auto-detect walks `[backends.<name>]` tables in global-config declaration order, running each backend's `activate` command in the project root; the first that exits 0 wins. Backends without an `activate` command are skipped during auto-detect.
 3. Fall back to **host** when nothing matches.
 
 Project config at `<project_root>/.hop.toml` uses the **same `[backends.<name>]` schema** as the global file. Hop merges both files when resolving the session backend: project entries come first in auto-detect order; same-named entries are field-merged with project fields winning; the merged entry takes the project's slot in the order. A backend whose merged fields lack `shell` or `editor` is unusable and dropped silently. The reserved name `"host"` cannot be defined in either file.
 
-Overriding `default` in a project file changes which backend wins auto-detect: a `"true"` override forces this backend to match; a `"false"` override skips it. There is no separate "pin a backend" knob in the project file — `default` overrides cover both selection and exclusion.
+Overriding `activate` in a project file changes which backend wins auto-detect: a `"true"` override forces this backend to match; a `"false"` override skips it. There is no separate "pin a backend" knob in the project file — `activate` overrides cover both selection and exclusion.
 
 The name `"host"` is reserved for the implicit fallback. An explicit `[backends.host]` table in either config file is ignored.
 
@@ -245,7 +245,7 @@ hop windows
 Behavior:
 
 - resolve the session from the caller's current working directory
-- run the same window resolver that bootstrap uses (built-in defaults + active layouts + top-level windows), evaluating layout `autostart` probes against the project root
+- run the same window resolver that bootstrap uses (built-in defaults + active layouts + top-level windows), evaluating layout `activate` probes against the project root
 - print each resolved role on its own line, in resolution order (built-ins, then active-layout windows, then top-level windows)
 
 Intended for launchers (rofi, fuzzel) to enumerate the focusable / launchable windows for the focused session workspace and dispatch to `hop edit` (editor), `hop browser` (browser), or `hop term --role <name>` (any other role). The vicinae integration consumes the same resolver via the `hopd` daemon (see "Vicinae integration daemon" below) — it does not invoke `hop windows` directly because it has the resolver in-process.

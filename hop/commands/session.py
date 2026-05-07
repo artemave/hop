@@ -81,7 +81,7 @@ def enter_project_session(
     terminals.ensure_terminal(session, role=SHELL_TERMINAL_ROLE)
     if editor is None:
         # Re-entry path: caller signals "shell only" by omitting the editor
-        # adapter. The autostart sweep is gated on the same signal.
+        # adapter. The activation sweep is gated on the same signal.
         return session
     if not windows:
         # No resolved windows (legacy callers/tests): fall back to bringing
@@ -92,7 +92,7 @@ def enter_project_session(
         for window in windows:
             if window.role == SHELL_ROLE:
                 continue
-            if not window.autostart_active:
+            if not window.active:
                 continue
             if window.role == EDITOR_ROLE:
                 editor.ensure(session, keep_focus=False)
@@ -102,7 +102,7 @@ def enter_project_session(
             else:
                 terminals.ensure_terminal(session, role=window.role)
     # Each kitty `launch` IPC steals focus by default, so after the
-    # autostart sweep the focused window is whichever role landed last
+    # activation sweep the focused window is whichever role landed last
     # (typically the editor or a layout window). Refocus the shell so the
     # session lands on a sensible starting point — and in a tabbed
     # workspace, makes the shell the visible tab.

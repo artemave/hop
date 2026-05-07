@@ -24,7 +24,7 @@ class StubSway:
 
 
 def _windows(*roles_and_commands: tuple[str, str]) -> tuple[WindowSpec, ...]:
-    return tuple(WindowSpec(role=role, command=command, autostart_active=False) for role, command in roles_and_commands)
+    return tuple(WindowSpec(role=role, command=command, active=False) for role, command in roles_and_commands)
 
 
 def _builtin_windows() -> tuple[WindowSpec, ...]:
