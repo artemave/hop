@@ -138,6 +138,18 @@ def test_log_command_omits_empty_stdout_and_stderr(tmp_path: Path) -> None:
     assert "exit: 0" in contents
 
 
+def test_log_command_omits_cwd_line_when_cwd_is_none(tmp_path: Path) -> None:
+    target = tmp_path / "debug.log"
+    debug.configure(str(target))
+
+    result = subprocess.CompletedProcess(args=["true"], returncode=0, stdout="", stderr="")
+    debug.log_command(("true",), None, result)
+
+    contents = target.read_text()
+    assert "cwd:" not in contents
+    assert "exit: 0" in contents
+
+
 def test_log_command_is_noop_when_disabled(tmp_path: Path) -> None:
     target = tmp_path / "debug.log"
     debug.configure(None)

@@ -225,6 +225,22 @@ def test_daemon_does_not_create_log_when_debug_log_disabled(
     assert len(regen_recorder) == 1
 
 
+def test_daemon_exits_when_global_config_is_invalid(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A malformed `~/.config/hop/config.toml` aborts hopd before sway IPC
+    setup. The error surfaces to stderr so sway's log captures it."""
+    config_path = tmp_path / "xdg-config" / "hop" / "config.toml"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text("[backends.bad]\nunknown_field = 1\n")
+
+    exit_code = daemon.main([])
+
+    assert exit_code == 1
+    assert "hopd: failed to load config:" in capsys.readouterr().err
+
+
 def test_sweep_stale_persisted_sessions_forgets_sessions_with_no_live_workspace(
     tmp_path: Path,
 ) -> None:
