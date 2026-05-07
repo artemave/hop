@@ -99,6 +99,7 @@ A hop config has three named sections plus one scalar setting, all optional:
 - `[layouts.<name>]` - a named layout with one required `autostart` shell-snippet probe and a list of windows that come up together when the probe matches.
 - `[windows.<role>]` - top-level windows (always autostart unless `autostart = "false"`).
 - `workspace_layout = "<mode>"` - sway workspace layout applied at first session entry. One of `splith`, `splitv`, `stacking`, `tabbed`.
+- `debug_log = true` - append a diagnostic log of backend command runs (`prepare` / `teardown` / `workspace` / translate / auto-detect probes) and kitty bootstrap stdio to `$XDG_RUNTIME_DIR/hop/debug.log`. Set to a string to use a custom path. First place to look when `hop` fails silently — especially when launched from Vicinae, where stderr is not visible.
 
 Configs live in `~/.config/hop/config.toml` or a project's `.hop.toml`.
 

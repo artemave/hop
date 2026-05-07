@@ -10,6 +10,7 @@ from pathlib import Path
 from tempfile import gettempdir
 from typing import Any, Callable, Mapping, Protocol, Sequence, cast
 
+from hop import debug
 from hop.backends import SHELL_FALLBACK, HostBackend, SessionBackend
 from hop.config import SHELL_ROLE
 from hop.errors import HopError
@@ -494,14 +495,30 @@ def _default_transport_factory(listen_on: str | None) -> KittyTransport:
 
 
 def _default_launcher(args: Sequence[str], env: Mapping[str, str]) -> None:
-    subprocess.Popen(
-        list(args),
-        env=dict(env),
-        start_new_session=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        stdin=subprocess.DEVNULL,
-    )
+    log_path = debug.log_path()
+    if log_path is None:
+        stdout: int | Any = subprocess.DEVNULL
+        stderr: int | Any = subprocess.DEVNULL
+    else:
+        debug.log(f"kitty launch: {' '.join(args)}")
+        # The detached kitty inherits these fds for its lifetime, so opening
+        # the log directly (rather than tee-ing) is the cheap way to capture
+        # everything kitty + its bootstrap shell child print to its stdio.
+        log_fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+        stdout = log_fd
+        stderr = log_fd
+    try:
+        subprocess.Popen(
+            list(args),
+            env=dict(env),
+            start_new_session=True,
+            stdout=stdout,
+            stderr=stderr,
+            stdin=subprocess.DEVNULL,
+        )
+    finally:
+        if log_path is not None:
+            os.close(log_fd)
 
 
 def _encode_command(

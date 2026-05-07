@@ -301,6 +301,52 @@ def test_merge_configs_workspace_layout_inherits_from_global() -> None:
     assert merge_configs(project, global_).workspace_layout == "stacking"
 
 
+def test_load_global_config_parses_debug_log_true(tmp_path: Path) -> None:
+    config_file = write(tmp_path / "config.toml", "debug_log = true\n")
+
+    assert load_global_config(config_file).debug_log is True
+
+
+def test_load_global_config_parses_debug_log_string_path(tmp_path: Path) -> None:
+    config_file = write(tmp_path / "config.toml", 'debug_log = "/tmp/hop.log"\n')
+
+    assert load_global_config(config_file).debug_log == "/tmp/hop.log"
+
+
+def test_load_global_config_debug_log_omitted_is_none(tmp_path: Path) -> None:
+    config_file = write(tmp_path / "config.toml", "# nothing\n")
+
+    assert load_global_config(config_file).debug_log is None
+
+
+def test_load_global_config_rejects_non_bool_or_string_debug_log(tmp_path: Path) -> None:
+    config_file = write(tmp_path / "config.toml", "debug_log = 42\n")
+
+    with pytest.raises(HopConfigError, match="must be a boolean or a string path"):
+        load_global_config(config_file)
+
+
+def test_load_global_config_rejects_empty_debug_log_string(tmp_path: Path) -> None:
+    config_file = write(tmp_path / "config.toml", 'debug_log = "   "\n')
+
+    with pytest.raises(HopConfigError, match="must not be empty"):
+        load_global_config(config_file)
+
+
+def test_merge_configs_debug_log_project_wins() -> None:
+    project = HopConfig(debug_log="/proj/log")
+    global_ = HopConfig(debug_log=True)
+
+    assert merge_configs(project, global_).debug_log == "/proj/log"
+
+
+def test_merge_configs_debug_log_inherits_from_global() -> None:
+    project = HopConfig()
+    global_ = HopConfig(debug_log=True)
+
+    assert merge_configs(project, global_).debug_log is True
+
+
 def test_load_global_config_rejects_unknown_top_level_key(tmp_path: Path) -> None:
     config_file = write(
         tmp_path / "config.toml",

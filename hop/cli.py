@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
+from hop import debug
 from hop.app import build_default_services, execute_command
 from hop.commands import (
     BrowserCommand,
@@ -20,6 +21,7 @@ from hop.commands import (
     TermCommand,
 )
 from hop.commands.run import DEFAULT_RUN_ROLE
+from hop.config import load_global_config
 from hop.errors import HopError
 
 
@@ -112,6 +114,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     command = parse_command(argv)
 
     try:
+        debug.configure(load_global_config().debug_log)
         return execute_command(
             command,
             cwd=Path.cwd(),

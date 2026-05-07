@@ -178,6 +178,17 @@ So starting `bin/dev` in `server` and `curl localhost:3000` from `shell` works e
 
 ## Troubleshooting
 
+### `hop` fails silently (especially from Vicinae)
+
+When `hop` is launched from a Vicinae action, its stderr is discarded; even from a terminal, kitty's bootstrap shell child runs detached with stdout/stderr sent to `/dev/null` by default. Turn on the debug log to see what's happening:
+
+```toml
+# ~/.config/hop/config.toml
+debug_log = true
+```
+
+That appends every backend lifecycle command (cmd, exit, stdout, stderr) and the kitty bootstrap launcher's argv + stdio to `$XDG_RUNTIME_DIR/hop/debug.log` (or set `debug_log = "/some/path"` for a custom path). Re-run the failing `hop` invocation, then `tail -n 200 $XDG_RUNTIME_DIR/hop/debug.log`.
+
 ### `hop edit` opens nvim but file-open calls do nothing
 
 Hop drives the in-container nvim by writing keystrokes (`<C-\><C-n>:exec 'drop '.fnameescape(...)<CR>`) into the kitty window's pty. If the dispatch doesn't open the file, the most common causes are:

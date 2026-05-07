@@ -12,7 +12,17 @@ from hop.sway import SwaySubscriptionError
 def isolate_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Stop the daemon main from touching the user's real filesystem."""
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
     monkeypatch.setenv("HOP_SESSIONS_DIR", str(tmp_path / "sessions"))
+
+
+@pytest.fixture(autouse=True)
+def reset_debug() -> Iterator[None]:
+    from hop import debug as _debug
+
+    _debug.configure(None)
+    yield
+    _debug.configure(None)
 
 
 @pytest.fixture
@@ -143,6 +153,76 @@ def test_daemon_runs_regen_against_real_tmp_scripts_dir(
     # `hop-create` entry (the second-search create-or-attach script).
     assert scripts_dir.is_dir()
     assert [path.name for path in scripts_dir.iterdir()] == ["hop-create"]
+
+
+def test_daemon_logs_unhandled_exception_to_debug_log(
+    monkeypatch: pytest.MonkeyPatch,
+    stub_sessions: None,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from hop import debug as _debug
+
+    log_path = tmp_path / "debug.log"
+    config_path = tmp_path / "xdg-config" / "hop" / "config.toml"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(f'debug_log = "{log_path}"\n')
+
+    def boom(**_kwargs: Any) -> None:
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(daemon, "regenerate", boom)
+    monkeypatch.setattr(daemon, "SwayIpcAdapter", lambda: StubSubscribingSway())
+
+    exit_code = daemon.main([])
+
+    assert exit_code == 1
+    assert _debug.is_enabled() is True
+    contents = log_path.read_text()
+    assert "hopd: starting" in contents
+    assert "hopd: unhandled exception" in contents
+    assert "RuntimeError: kaboom" in contents
+    # The traceback also still goes to stderr so the parent process can see it.
+    assert "kaboom" in capsys.readouterr().err
+
+
+def test_daemon_logs_hop_error_to_debug_log(
+    monkeypatch: pytest.MonkeyPatch,
+    stub_sessions: None,
+    tmp_path: Path,
+) -> None:
+    log_path = tmp_path / "debug.log"
+    config_path = tmp_path / "xdg-config" / "hop" / "config.toml"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(f'debug_log = "{log_path}"\n')
+
+    def boom(**_kwargs: Any) -> None:
+        raise HopError("initial regen failed")
+
+    monkeypatch.setattr(daemon, "regenerate", boom)
+    monkeypatch.setattr(daemon, "SwayIpcAdapter", lambda: StubSubscribingSway())
+
+    exit_code = daemon.main([])
+
+    assert exit_code == 1
+    assert "initial regen failed" in log_path.read_text()
+
+
+def test_daemon_does_not_create_log_when_debug_log_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+    regen_recorder: list[None],
+    stub_sessions: None,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(daemon, "SwayIpcAdapter", lambda: StubSubscribingSway())
+
+    log_path = tmp_path / "debug.log"
+
+    exit_code = daemon.main([])
+
+    assert exit_code == 1
+    assert not log_path.exists()
+    assert len(regen_recorder) == 1
 
 
 def test_sweep_stale_persisted_sessions_forgets_sessions_with_no_live_workspace(

@@ -334,7 +334,12 @@ def test_default_transport_factory_constructs_socket_transport() -> None:
 
 
 def test_default_launcher_invokes_subprocess_popen(monkeypatch: pytest.MonkeyPatch) -> None:
+    import subprocess as _subprocess
+
+    from hop import debug
     from hop.kitty import _default_launcher
+
+    debug.configure(None)
 
     captured_args: list[Sequence[str]] = []
     captured_kwargs: list[Mapping[str, object]] = []
@@ -351,6 +356,39 @@ def test_default_launcher_invokes_subprocess_popen(monkeypatch: pytest.MonkeyPat
     assert captured_args == [["kitty", "--listen-on", "unix:@hop-demo"]]
     assert captured_kwargs[0]["env"] == {"HOP_SESSION": "demo"}
     assert captured_kwargs[0]["start_new_session"] is True
+    assert captured_kwargs[0]["stdout"] is _subprocess.DEVNULL
+    assert captured_kwargs[0]["stderr"] is _subprocess.DEVNULL
+
+
+def test_default_launcher_redirects_stdio_to_debug_log_when_enabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from hop import debug
+    from hop.kitty import _default_launcher
+
+    target = tmp_path / "debug.log"
+    debug.configure(str(target))
+    try:
+        captured_kwargs: list[Mapping[str, object]] = []
+
+        class FakePopen:
+            def __init__(self, args: Sequence[str], **kwargs: object) -> None:
+                captured_kwargs.append(kwargs)
+
+        monkeypatch.setattr("subprocess.Popen", FakePopen)
+
+        _default_launcher(("kitty", "--listen-on", "unix:@hop-demo"), {})
+
+        stdout_fd = captured_kwargs[0]["stdout"]
+        stderr_fd = captured_kwargs[0]["stderr"]
+        assert isinstance(stdout_fd, int)
+        assert stdout_fd == stderr_fd
+
+        contents = target.read_text()
+        assert "kitty launch: kitty --listen-on unix:@hop-demo" in contents
+    finally:
+        debug.configure(None)
 
 
 def test_session_name_from_listen_on_returns_none_for_non_unix_prefix() -> None:

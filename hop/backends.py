@@ -9,6 +9,7 @@ from tempfile import gettempdir
 from typing import Callable, Protocol, Sequence
 from urllib.parse import urlsplit, urlunsplit
 
+from hop import debug
 from hop.config import (
     HOST_BACKEND_NAME,
     PLACEHOLDER_PORT,
@@ -149,7 +150,9 @@ class CommandBackend:
     def prepare(self, session: ProjectSession) -> None:
         if self.prepare_command is None:
             return
-        result = self.runner(_flock_sh(self.prepare_command, session=session), session.project_root)
+        argv = _flock_sh(self.prepare_command, session=session)
+        result = self.runner(argv, session.project_root)
+        debug.log_command(argv, session.project_root, result)
         if result.returncode != 0:
             stderr = (result.stderr or result.stdout).strip()
             msg = f"backend {self.name!r} prepare failed for {session.session_name!r}: {stderr}"
@@ -250,7 +253,9 @@ class CommandBackend:
         kind: str,
     ) -> str:
         substituted = _substitute_translate(command, session=session, port=port)
-        result = self.runner(_sh_c(substituted), session.project_root)
+        argv = _sh_c(substituted)
+        result = self.runner(argv, session.project_root)
+        debug.log_command(argv, session.project_root, result)
         if result.returncode != 0:
             stderr = (result.stderr or result.stdout).strip()
             msg = f"backend {self.name!r} {kind} failed for {session.session_name!r}: {stderr}"
@@ -264,7 +269,9 @@ class CommandBackend:
     def teardown(self, session: ProjectSession) -> None:
         if self.teardown_command is None:
             return
-        result = self.runner(_flock_sh(self.teardown_command, session=session), session.project_root)
+        argv = _flock_sh(self.teardown_command, session=session)
+        result = self.runner(argv, session.project_root)
+        debug.log_command(argv, session.project_root, result)
         if result.returncode != 0:
             stderr = (result.stderr or result.stdout).strip()
             msg = f"backend {self.name!r} teardown failed for {session.session_name!r}: {stderr}"
@@ -295,7 +302,9 @@ class CommandBackend:
         if self.workspace_command is None:
             return None
         substituted = _substitute(self.workspace_command, session=session)
-        result = self.runner(_sh_c(substituted), session.project_root)
+        argv = _sh_c(substituted)
+        result = self.runner(argv, session.project_root)
+        debug.log_command(argv, session.project_root, result)
         if result.returncode != 0:
             stderr = (result.stderr or result.stdout).strip()
             msg = f"backend {self.name!r} workspace discovery failed for {session.session_name!r}: {stderr}"
@@ -343,7 +352,9 @@ def select_backend(
         if candidate.default is None:
             continue
         substituted = _substitute(candidate.default, session=session)
-        result = runner(_sh_c(substituted), session.project_root)
+        argv = _sh_c(substituted)
+        result = runner(argv, session.project_root)
+        debug.log_command(argv, session.project_root, result)
         if result.returncode == 0:
             return candidate
     return None

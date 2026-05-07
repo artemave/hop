@@ -106,12 +106,18 @@ class HopConfig:
     ``workspace_layout`` is the sway workspace layout mode hop sets on a
     session's workspace at first entry — one of ``splith`` / ``splitv`` /
     ``stacking`` / ``tabbed``. ``None`` leaves sway's default behavior alone.
+
+    ``debug_log`` opts the process into appending a diagnostic log of
+    backend command runs and kitty bootstrap output. ``True`` uses the
+    default path (``$XDG_RUNTIME_DIR/hop/debug.log``); a string is taken
+    as a custom path. ``None`` leaves debug logging disabled.
     """
 
     backends: tuple[BackendConfig, ...] = ()
     layouts: tuple[LayoutConfig, ...] = ()
     windows: tuple[WindowConfig, ...] = ()
     workspace_layout: str | None = None
+    debug_log: bool | str | None = None
 
 
 def default_global_config_path() -> Path:
@@ -140,6 +146,7 @@ def merge_configs(project: HopConfig, global_: HopConfig) -> HopConfig:
         workspace_layout=(
             project.workspace_layout if project.workspace_layout is not None else global_.workspace_layout
         ),
+        debug_log=(project.debug_log if project.debug_log is not None else global_.debug_log),
     )
 
 
@@ -263,7 +270,7 @@ _LAYOUT_FIELDS = ("autostart", "windows")
 _WINDOW_FIELDS = ("command", "autostart")
 _LEGACY_FLAT_BACKEND_FIELDS = ("shell", "editor")
 _LEGACY_BACKEND_WINDOWS_FIELD = "windows"
-_TOP_LEVEL_KEYS = ("backends", "layouts", "windows", "workspace_layout")
+_TOP_LEVEL_KEYS = ("backends", "layouts", "windows", "workspace_layout", "debug_log")
 
 
 def _load_config_file(path: Path) -> HopConfig:
@@ -284,12 +291,28 @@ def _parse_top_level(data: dict[str, Any], *, source: Path) -> HopConfig:
     layouts = _parse_layouts(data.get("layouts"), source=source)
     windows = _parse_top_level_windows(data.get("windows"), source=source)
     workspace_layout = _parse_workspace_layout(data.get("workspace_layout"), source=source)
+    debug_log = _parse_debug_log(data.get("debug_log"), source=source)
     return HopConfig(
         backends=backends,
         layouts=layouts,
         windows=windows,
         workspace_layout=workspace_layout,
+        debug_log=debug_log,
     )
+
+
+def _parse_debug_log(raw: object, *, source: Path) -> bool | str | None:
+    if raw is None:
+        return None
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, str):
+        if not raw.strip():
+            msg = f"{source}: top-level 'debug_log' string must not be empty"
+            raise HopConfigError(msg)
+        return raw
+    msg = f"{source}: top-level 'debug_log' must be a boolean or a string path, got {type(raw).__name__}"
+    raise HopConfigError(msg)
 
 
 def _parse_workspace_layout(raw: object, *, source: Path) -> str | None:
