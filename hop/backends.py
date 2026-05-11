@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shlex
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import gettempdir
@@ -59,7 +60,13 @@ CommandRunner = Callable[[Sequence[str], Path], subprocess.CompletedProcess[str]
 
 
 def default_runner(args: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
-    """Default ``CommandRunner`` — runs ``args`` in ``cwd`` and captures stdio.
+    """Default ``CommandRunner`` — runs ``args`` in ``cwd``.
+
+    Stdout is always captured so callers that consume it (``discover_workspace``,
+    translate helpers) keep working. Stderr is inherited from the parent when
+    invoked interactively, so the user sees backend command output live during
+    slow operations like ``docker compose up``; otherwise stderr is captured
+    and surfaced through the debug log and error messages.
 
     Exposed publicly so other modules (e.g. ``hop.app``) can pass it to
     helpers that take a ``CommandRunner`` argument when no override is
@@ -69,7 +76,8 @@ def default_runner(args: Sequence[str], cwd: Path) -> subprocess.CompletedProces
     return subprocess.run(
         list(args),
         cwd=str(cwd),
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=None if sys.stderr.isatty() else subprocess.PIPE,
         text=True,
         check=False,
     )
@@ -154,7 +162,7 @@ class CommandBackend:
         result = self.runner(argv, session.project_root)
         debug.log_command(argv, session.project_root, result)
         if result.returncode != 0:
-            stderr = (result.stderr or result.stdout).strip()
+            stderr = (result.stderr or result.stdout or "").strip()
             msg = f"backend {self.name!r} prepare failed for {session.session_name!r}: {stderr}"
             raise SessionBackendError(msg)
 
@@ -257,7 +265,7 @@ class CommandBackend:
         result = self.runner(argv, session.project_root)
         debug.log_command(argv, session.project_root, result)
         if result.returncode != 0:
-            stderr = (result.stderr or result.stdout).strip()
+            stderr = (result.stderr or result.stdout or "").strip()
             msg = f"backend {self.name!r} {kind} failed for {session.session_name!r}: {stderr}"
             raise SessionBackendError(msg)
         stdout = result.stdout.strip()
@@ -273,7 +281,7 @@ class CommandBackend:
         result = self.runner(argv, session.project_root)
         debug.log_command(argv, session.project_root, result)
         if result.returncode != 0:
-            stderr = (result.stderr or result.stdout).strip()
+            stderr = (result.stderr or result.stdout or "").strip()
             msg = f"backend {self.name!r} teardown failed for {session.session_name!r}: {stderr}"
             raise SessionBackendError(msg)
 
@@ -306,7 +314,7 @@ class CommandBackend:
         result = self.runner(argv, session.project_root)
         debug.log_command(argv, session.project_root, result)
         if result.returncode != 0:
-            stderr = (result.stderr or result.stdout).strip()
+            stderr = (result.stderr or result.stdout or "").strip()
             msg = f"backend {self.name!r} workspace discovery failed for {session.session_name!r}: {stderr}"
             raise SessionBackendError(msg)
         return result.stdout.strip() or None

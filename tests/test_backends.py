@@ -525,3 +525,48 @@ def test_default_runner_invokes_subprocess_run(tmp_path: Path, monkeypatch: pyte
     backend = backend_from_config(make_backend(prepare="true"))
 
     backend.prepare(build_session(tmp_path))
+
+
+def test_default_runner_inherits_stderr_when_interactive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """When stderr is a tty, hop streams backend command output live to the
+    user's terminal. Verify that default_runner asks subprocess.run to
+    inherit stderr (stderr=None) rather than capture it."""
+    import sys
+
+    from hop.backends import default_runner
+
+    monkeypatch.setattr(sys.stderr, "isatty", lambda: True)
+    captured: dict[str, object] = {}
+
+    def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        captured.update(kwargs)
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr=None)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    default_runner(["true"], tmp_path)
+
+    assert captured["stderr"] is None
+    assert captured["stdout"] is subprocess.PIPE
+
+
+def test_default_runner_captures_stderr_when_non_interactive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Off a tty (Vicinae, scripts, CI), capture stderr so it can be surfaced
+    in error messages and the debug log."""
+    import sys
+
+    from hop.backends import default_runner
+
+    monkeypatch.setattr(sys.stderr, "isatty", lambda: False)
+    captured: dict[str, object] = {}
+
+    def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        captured.update(kwargs)
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    default_runner(["true"], tmp_path)
+
+    assert captured["stderr"] is subprocess.PIPE
+    assert captured["stdout"] is subprocess.PIPE
