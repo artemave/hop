@@ -165,6 +165,55 @@ def test_kill_session_runs_teardown_after_window_close(tmp_path: Path) -> None:
     assert events == ["close-7", "close-8", "teardown", "forget-demo"]
 
 
+def test_kill_session_resolves_backend_before_closing_windows(tmp_path: Path) -> None:
+    """hopd's stale-state sweep races with the window-close loop: closing the
+    session's last window destroys its workspace, hopd sees the event and
+    forgets the persisted state file. If kill_session were to look up the
+    backend AFTER closing windows, it would now read no state file and get
+    a no-op HostBackend — silently skipping the user's `compose down`.
+    Resolve the backend up-front to survive the race."""
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+    workspace_name = f"p:{project_root.name}"
+
+    events: list[str] = []
+
+    class TrackingSway(StubSwayAdapter):
+        def close_window(self, window_id: int) -> None:
+            events.append(f"close-{window_id}")
+            super().close_window(window_id)
+
+    class CommandTeardownBackend:
+        def teardown(self, _session: ProjectSession) -> None:
+            events.append("command-teardown")
+
+    class HostNoopBackend:
+        def teardown(self, _session: ProjectSession) -> None:
+            events.append("host-teardown")
+
+    # Returns the real backend on first call (early in kill_session), then a
+    # noop host backend on any subsequent call — simulating hopd having
+    # wiped the state file by the time a late lookup would happen.
+    queued: list[object] = [CommandTeardownBackend()]
+
+    def session_backend_for(_session: ProjectSession) -> object:
+        events.append("resolve")
+        return queued.pop(0) if queued else HostNoopBackend()
+
+    sway = TrackingSway(windows=(_session_window(id=7, workspace=workspace_name),))
+
+    kill_session(
+        project_root,
+        sway=sway,
+        session_backend_for=session_backend_for,  # type: ignore[arg-type]
+        forget=lambda _name: None,
+    )
+
+    assert events.index("resolve") < events.index("close-7")
+    assert "command-teardown" in events
+    assert "host-teardown" not in events
+
+
 def test_kill_session_uses_host_backend_by_default(tmp_path: Path) -> None:
     project_root = tmp_path / "demo"
     project_root.mkdir()

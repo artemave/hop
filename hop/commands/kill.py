@@ -32,6 +32,15 @@ def kill_session(
 ) -> ProjectSession:
     session = resolve_project_session(cwd)
 
+    # Capture the backend reference now, before windows close. The daemon
+    # (hopd) sweeps stale persisted state on every workspace event; closing
+    # the session's last window destroys its workspace, fires that event,
+    # and races our window-close wait loop. By the time we'd otherwise look
+    # up the backend, the state file could already be gone — for_session
+    # would fall back to HostBackend whose teardown is a no-op, silently
+    # skipping `compose down` (or whatever the user configured).
+    backend = session_backend_for(session)
+
     browser_mark = f"{DEFAULT_BROWSER_MARK_PREFIX}{session.session_name}"
     editor_mark = f"{EDITOR_MARK_PREFIX}{session.session_name}"
 
@@ -67,7 +76,7 @@ def kill_session(
             break
         sleep(WINDOW_CLOSE_POLL_INTERVAL_SECONDS)
 
-    session_backend_for(session).teardown(session)
+    backend.teardown(session)
 
     forget(session.session_name)
 
