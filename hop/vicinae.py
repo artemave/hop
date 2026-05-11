@@ -28,6 +28,10 @@ WINDOW_FILENAME_PREFIX = "hop-window-"
 SWITCH_FILENAME_PREFIX = "hop-switch-"
 KILL_FILENAME = "hop-kill"
 CREATE_FILENAME = "hop-create"
+# Leading-underscore suffix keeps this entry from colliding with sanitized
+# session names (which derive from path basenames and don't start with `_`).
+DAEMON_DOWN_FILENAME = "hop-_daemon-down"
+_DAEMON_DOWN_DESCRIPTION_MAX = 200
 
 
 class VicinaeSwayAdapter(Protocol):
@@ -309,6 +313,53 @@ def _render_kill(*, title: str, description: str, package_name: str, project_roo
         "    exec hop kill\n"
         "'\n"
     )
+
+
+def write_daemon_down_script(scripts_dir: Path, *, error: BaseException) -> None:
+    """Replace the hop-* script set with a single "daemon stopped" entry.
+
+    Called from ``hopd``'s exception handler so the user sees a clear
+    "click to restart" entry in vicinae instead of a stale hop-* set
+    that silently reflects whatever state the daemon last computed.
+
+    Picking the entry runs ``setsid -f hopd`` to detach a fresh daemon
+    process — works whether or not the user has systemd-style supervision
+    (systemd will adopt the child if the unit is alive).
+    """
+
+    scripts_dir.mkdir(parents=True, exist_ok=True)
+
+    for existing in scripts_dir.iterdir():
+        if existing.name.startswith(SCRIPT_FILENAME_PREFIX):
+            existing.unlink()
+
+    description = _describe_daemon_down_error(error)
+    content = (
+        "#!/usr/bin/env bash\n"
+        "# @vicinae.schemaVersion 1\n"
+        "# @vicinae.title Hop daemon stopped — restart\n"
+        f"# @vicinae.description {description}\n"
+        "# @vicinae.packageName \n"
+        "# @vicinae.mode silent\n"
+        "\n"
+        "exec setsid -f hopd </dev/null >/dev/null 2>&1\n"
+    )
+    _atomic_write(scripts_dir / DAEMON_DOWN_FILENAME, content)
+
+
+def _describe_daemon_down_error(error: BaseException) -> str:
+    """One-line summary suitable for the vicinae description header.
+
+    Collapses whitespace so multi-line exception messages don't break
+    the line-oriented header parser, and truncates at a fixed budget so
+    the launcher's description column stays readable.
+    """
+
+    message = f"{type(error).__name__}: {error}".strip() or type(error).__name__
+    message = " ".join(message.split())
+    if len(message) > _DAEMON_DOWN_DESCRIPTION_MAX:
+        message = message[: _DAEMON_DOWN_DESCRIPTION_MAX - 3] + "..."
+    return message
 
 
 def _atomic_write(path: Path, content: str) -> None:

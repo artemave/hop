@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import sys
 import traceback
+from pathlib import Path
 from typing import Callable, Sequence
 
 from hop import debug
@@ -18,11 +19,16 @@ from hop.config import load_global_config
 from hop.errors import HopError
 from hop.state import SessionState, forget_session, load_sessions
 from hop.sway import SwayIpcAdapter
-from hop.vicinae import default_scripts_dir, regenerate
+from hop.vicinae import default_scripts_dir, regenerate, write_daemon_down_script
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     del argv
+    # Resolve scripts_dir up-front so the load-config error path can still
+    # surface a "daemon stopped" entry — that's the most common crash cause
+    # right after a config edit.
+    scripts_dir = default_scripts_dir()
+
     try:
         debug.configure(load_global_config().debug_log)
     except HopError as error:
@@ -31,12 +37,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         # configure() call had succeeded.
         debug.log(f"hopd: failed to load config: {error}")
         print(f"hopd: failed to load config: {error}", file=sys.stderr)
+        _signal_daemon_down(scripts_dir, error)
         return 1
 
     debug.log("hopd: starting")
     sway = SwayIpcAdapter()
     registry = SessionBackendRegistry()
-    scripts_dir = default_scripts_dir()
 
     def sessions_loader() -> Sequence[SessionListing]:
         return list_sessions(sway=sway)
@@ -63,19 +69,37 @@ def main(argv: Sequence[str] | None = None) -> int:
     except HopError as error:
         debug.log(f"hopd: {error}")
         print(str(error), file=sys.stderr)
+        _signal_daemon_down(scripts_dir, error)
         return 1
-    except Exception:
+    except Exception as error:
         # Unhandled exceptions otherwise vanish into sway's stderr (often
         # /dev/null), leaving the daemon dead with no trace. Mirror the
         # traceback to the debug log when configured so the next `tail
         # $XDG_RUNTIME_DIR/hop/debug.log` shows what happened.
         debug.log(f"hopd: unhandled exception\n{traceback.format_exc()}")
         traceback.print_exc()
+        _signal_daemon_down(scripts_dir, error)
         return 1
 
     debug.log("hopd: Sway IPC subscription ended")
     print("hopd: Sway IPC subscription ended", file=sys.stderr)
+    _signal_daemon_down(scripts_dir, RuntimeError("Sway IPC subscription ended"))
     return 1
+
+
+def _signal_daemon_down(scripts_dir: Path, error: BaseException) -> None:
+    """Best-effort: surface the crash through the vicinae script set.
+
+    Replaces every ``hop-*`` entry with a single "daemon stopped — restart"
+    entry. Any failure in the rewrite (missing dir, permission error, disk
+    full) is logged but suppressed — the outer exception is the real signal
+    and we don't want to mask it by raising on top.
+    """
+
+    try:
+        write_daemon_down_script(scripts_dir, error=error)
+    except OSError as write_err:
+        debug.log(f"hopd: failed to write daemon-down entry: {write_err}")
 
 
 def sweep_stale_persisted_sessions(

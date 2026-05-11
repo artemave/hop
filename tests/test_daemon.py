@@ -139,9 +139,24 @@ def test_daemon_runs_regen_against_real_tmp_scripts_dir(
     tmp_path: Path,
 ) -> None:
     """End-to-end check: regen actually invokes sessions_loader (the closure
-    in daemon.main) and writes against the real scripts_dir. Replacing only
-    the sway adapter and `list_sessions` exercises the rest of the path."""
+    in daemon.main) and writes against the real scripts_dir.
 
+    The subscription-end path then replaces those entries with the
+    "daemon stopped — restart" entry, since hopd is no longer running by
+    the time the function returns. The test still exercises the full regen
+    chain — the assertion below just looks at the *intermediate* state
+    inside `regenerate` via a one-shot capture before the exit path
+    overwrites the dir."""
+
+    captured: list[set[str]] = []
+
+    real_regenerate = daemon.regenerate
+
+    def regenerate_then_capture(**kwargs: Any) -> None:
+        real_regenerate(**kwargs)
+        captured.append({p.name for p in kwargs["scripts_dir"].iterdir()})
+
+    monkeypatch.setattr(daemon, "regenerate", regenerate_then_capture)
     monkeypatch.setattr(daemon, "SwayIpcAdapter", lambda: StubSubscribingSway())
     scripts_dir = tmp_path / "vicinae" / "scripts"
     monkeypatch.setattr(daemon, "default_scripts_dir", lambda: scripts_dir)
@@ -149,10 +164,11 @@ def test_daemon_runs_regen_against_real_tmp_scripts_dir(
     exit_code = daemon.main([])
 
     assert exit_code == 1
-    # No focused session and no sessions → just the always-present
-    # `hop-create` entry (the second-search create-or-attach script).
-    assert scripts_dir.is_dir()
-    assert [path.name for path in scripts_dir.iterdir()] == ["hop-create"]
+    # The intermediate state — what regen wrote — is just `hop-create`
+    # (no focused session, no sessions). After the subscription ends,
+    # daemon-down rewrite replaces it.
+    assert captured == [{"hop-create"}]
+    assert {p.name for p in scripts_dir.iterdir()} == {"hop-_daemon-down"}
 
 
 def test_daemon_logs_unhandled_exception_to_debug_log(
@@ -268,3 +284,140 @@ def test_sweep_stale_persisted_sessions_forgets_sessions_with_no_live_workspace(
     )
 
     assert forgotten == ["stale"]
+
+
+# --- daemon-down signaling ------------------------------------------------
+
+
+def test_daemon_writes_daemon_down_entry_when_config_load_fails(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A malformed global config aborts hopd before sway setup. The user
+    should see "daemon stopped — restart" in vicinae instead of stale
+    hop-* entries from the previous successful run."""
+    config_path = tmp_path / "xdg-config" / "hop" / "config.toml"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text("[backends.bad]\nunknown_field = 1\n")
+
+    # Pre-existing hop-* entries from a previous successful run.
+    scripts_dir = tmp_path / "xdg" / "vicinae" / "scripts"
+    scripts_dir.mkdir(parents=True)
+    (scripts_dir / "hop-switch-old").write_text("stale")
+
+    exit_code = daemon.main([])
+
+    assert exit_code == 1
+    remaining = sorted(p.name for p in scripts_dir.iterdir())
+    assert remaining == ["hop-_daemon-down"]
+    content = (scripts_dir / "hop-_daemon-down").read_text()
+    assert "unknown_field" in content
+    # stderr still carries the error for sway's log.
+    assert "hopd: failed to load config:" in capsys.readouterr().err
+
+
+def test_daemon_writes_daemon_down_entry_on_hop_error_during_subscription(
+    monkeypatch: pytest.MonkeyPatch,
+    regen_recorder: list[None],
+    stub_sessions: None,
+    tmp_path: Path,
+) -> None:
+    sway = StubSubscribingSway(
+        events=(),
+        raise_on_subscribe=SwaySubscriptionError("Sway refused subscription"),
+    )
+    monkeypatch.setattr(daemon, "SwayIpcAdapter", lambda: sway)
+
+    scripts_dir = tmp_path / "xdg" / "vicinae" / "scripts"
+    scripts_dir.mkdir(parents=True)
+    (scripts_dir / "hop-kill").write_text("stale")
+
+    exit_code = daemon.main([])
+
+    assert exit_code == 1
+    remaining = sorted(p.name for p in scripts_dir.iterdir())
+    assert remaining == ["hop-_daemon-down"]
+    assert "Sway refused subscription" in (scripts_dir / "hop-_daemon-down").read_text()
+    # Initial regen still ran before the subscription raised — fixture
+    # captures regen attempts independently.
+    assert len(regen_recorder) == 1
+
+
+def test_daemon_writes_daemon_down_entry_on_unhandled_exception(
+    monkeypatch: pytest.MonkeyPatch,
+    stub_sessions: None,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Non-HopError crashes also trigger the daemon-down entry, with a
+    short error message in the description (no full traceback)."""
+
+    def boom(**_kwargs: Any) -> None:
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(daemon, "regenerate", boom)
+    monkeypatch.setattr(daemon, "SwayIpcAdapter", lambda: StubSubscribingSway())
+
+    scripts_dir = tmp_path / "xdg" / "vicinae" / "scripts"
+
+    exit_code = daemon.main([])
+
+    assert exit_code == 1
+    assert scripts_dir.is_dir()
+    content = (scripts_dir / "hop-_daemon-down").read_text()
+    assert "RuntimeError: kaboom" in content
+    # Sanity: traceback still goes to stderr.
+    assert "kaboom" in capsys.readouterr().err
+
+
+def test_daemon_writes_daemon_down_entry_when_subscription_returns(
+    monkeypatch: pytest.MonkeyPatch,
+    regen_recorder: list[None],
+    stub_sessions: None,
+    tmp_path: Path,
+) -> None:
+    """Sway's subscription generator can return cleanly (rare, but it
+    happens on a controlled sway exit). The daemon-down entry still shows
+    up so the user knows hopd needs restarting."""
+    monkeypatch.setattr(daemon, "SwayIpcAdapter", lambda: StubSubscribingSway(events=()))
+
+    scripts_dir = tmp_path / "xdg" / "vicinae" / "scripts"
+
+    exit_code = daemon.main([])
+
+    assert exit_code == 1
+    content = (scripts_dir / "hop-_daemon-down").read_text()
+    assert "Sway IPC subscription ended" in content
+    # Initial regen ran (= regen_recorder records exactly one call).
+    assert len(regen_recorder) == 1
+
+
+def test_daemon_swallows_daemon_down_write_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    stub_sessions: None,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """If the daemon-down rewrite itself fails (read-only filesystem,
+    permission error), swallow the error so we don't mask the original
+    exception. The crash still surfaces through stderr and the debug log."""
+
+    def boom(**_kwargs: Any) -> None:
+        raise RuntimeError("original failure")
+
+    def raise_on_write(scripts_dir: Path, *, error: BaseException) -> None:
+        del scripts_dir, error
+        raise OSError("read-only filesystem")
+
+    monkeypatch.setattr(daemon, "regenerate", boom)
+    monkeypatch.setattr(daemon, "write_daemon_down_script", raise_on_write)
+    monkeypatch.setattr(daemon, "SwayIpcAdapter", lambda: StubSubscribingSway())
+
+    exit_code = daemon.main([])
+
+    # The original exception still drives the exit code; the suppressed
+    # write error doesn't change anything else.
+    assert exit_code == 1
+    stderr = capsys.readouterr().err
+    assert "kaboom" not in stderr  # different message — sanity check
+    assert "original failure" in stderr

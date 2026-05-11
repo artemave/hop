@@ -384,3 +384,103 @@ def test_script_filename_prefix_is_reserved_namespace() -> None:
 
     for script in scripts:
         assert script.filename.startswith(SCRIPT_FILENAME_PREFIX)
+
+
+# --- write_daemon_down_script ---------------------------------------------
+
+
+def test_write_daemon_down_script_writes_single_restart_entry(tmp_path: Path) -> None:
+    from hop.vicinae import DAEMON_DOWN_FILENAME, write_daemon_down_script
+
+    write_daemon_down_script(tmp_path, error=RuntimeError("the daemon died"))
+
+    entries = [p.name for p in tmp_path.iterdir()]
+    assert entries == [DAEMON_DOWN_FILENAME]
+
+    content = (tmp_path / DAEMON_DOWN_FILENAME).read_text()
+    assert "# @vicinae.title Hop daemon stopped — restart" in content
+    assert "RuntimeError: the daemon died" in content
+    # The action detaches a fresh hopd so vicinae closing its UI doesn't
+    # take the new daemon down with it.
+    assert "setsid -f hopd" in content
+
+
+def test_write_daemon_down_script_clears_existing_hop_scripts(tmp_path: Path) -> None:
+    """Pre-existing hop-* entries are deleted so the user sees only the
+    "daemon stopped" entry — no stale hop-switch-* / hop-kill / hop-window-*
+    misleading them into thinking the daemon is alive."""
+    from hop.vicinae import write_daemon_down_script
+
+    (tmp_path / "hop-kill").write_text("stale")
+    (tmp_path / "hop-switch-rails").write_text("stale")
+    (tmp_path / "hop-window-shell").write_text("stale")
+
+    write_daemon_down_script(tmp_path, error=RuntimeError("boom"))
+
+    remaining = sorted(p.name for p in tmp_path.iterdir())
+    assert remaining == ["hop-_daemon-down"]
+
+
+def test_write_daemon_down_script_preserves_non_hop_files(tmp_path: Path) -> None:
+    """Unrelated files in the scripts dir (other vicinae scripts the user
+    or other tools installed) must be left untouched."""
+    from hop.vicinae import write_daemon_down_script
+
+    (tmp_path / "unrelated-script").write_text("not hop")
+    (tmp_path / "hop-switch-foo").write_text("hop")
+
+    write_daemon_down_script(tmp_path, error=RuntimeError("boom"))
+
+    remaining = sorted(p.name for p in tmp_path.iterdir())
+    assert remaining == ["hop-_daemon-down", "unrelated-script"]
+    assert (tmp_path / "unrelated-script").read_text() == "not hop"
+
+
+def test_write_daemon_down_script_creates_scripts_dir(tmp_path: Path) -> None:
+    """If the scripts dir doesn't exist yet (fresh installs, never-launched
+    vicinae), the entry write still succeeds."""
+    from hop.vicinae import write_daemon_down_script
+
+    target = tmp_path / "vicinae" / "scripts"
+    assert not target.exists()
+
+    write_daemon_down_script(target, error=RuntimeError("boom"))
+
+    assert target.is_dir()
+    assert (target / "hop-_daemon-down").exists()
+
+
+def test_write_daemon_down_script_collapses_multiline_errors(tmp_path: Path) -> None:
+    """Vicinae's description header is line-oriented; newlines in the error
+    message would break parsing or split the description. Collapse to a
+    single line."""
+    from hop.vicinae import write_daemon_down_script
+
+    write_daemon_down_script(tmp_path, error=RuntimeError("first line\nsecond line\nthird"))
+
+    content = (tmp_path / "hop-_daemon-down").read_text()
+    # Every @vicinae.* header sits on its own line; description must not
+    # introduce extra ones.
+    description_line = next(line for line in content.splitlines() if line.startswith("# @vicinae.description"))
+    assert "first line second line third" in description_line
+
+
+def test_write_daemon_down_script_truncates_long_descriptions(tmp_path: Path) -> None:
+    """Vicinae renders descriptions in a fixed-width column. A 5KB
+    traceback-style error would be unreadable — truncate at the budget."""
+    from hop.vicinae import write_daemon_down_script
+
+    long_message = "x" * 5000
+    write_daemon_down_script(tmp_path, error=RuntimeError(long_message))
+
+    description_line = next(
+        line
+        for line in (tmp_path / "hop-_daemon-down").read_text().splitlines()
+        if line.startswith("# @vicinae.description")
+    )
+    # Should end with `...` after truncation.
+    assert description_line.endswith("...")
+    # The header overhead (`# @vicinae.description ` — 23 chars including
+    # the trailing space) plus the 200-char budget for the value itself.
+    header_prefix = "# @vicinae.description "
+    assert len(description_line) <= len(header_prefix) + 200
