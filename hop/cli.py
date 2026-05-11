@@ -22,6 +22,7 @@ from hop.commands import (
 )
 from hop.commands.run import DEFAULT_RUN_ROLE
 from hop.config import load_global_config
+from hop.daemon_lock import installed_version, read_status
 from hop.errors import HopError
 
 
@@ -112,6 +113,7 @@ def parse_command(argv: Sequence[str] | None = None) -> Command:
 
 def main(argv: Sequence[str] | None = None) -> int:
     command = parse_command(argv)
+    _warn_if_hopd_version_stale()
 
     try:
         debug.configure(load_global_config().debug_log)
@@ -123,3 +125,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     except HopError as error:
         print(str(error), file=sys.stderr)
         return 1
+
+
+def _warn_if_hopd_version_stale() -> None:
+    """If a hopd is running an older hop version than the CLI, hint to the
+    user that they should restart it. The vicinae script set and any
+    behavior changes baked into the daemon won't apply until then."""
+    status = read_status()
+    if status is None:
+        # No daemon running, or status file unreadable — nothing to warn
+        # about. The CLI works fine without hopd; some users may not use
+        # the vicinae integration at all.
+        return
+    current = installed_version()
+    if status.version == current:
+        return
+    print(
+        f"note: hopd is running an older hop version ({status.version} → {current}); "
+        "run `hopd --restart` to apply the upgrade",
+        file=sys.stderr,
+    )

@@ -89,3 +89,54 @@ def test_backend_flag_rejected_on_term_with_role() -> None:
 def test_backend_flag_rejected_on_other_subcommands(argv: list[str]) -> None:
     with pytest.raises(ValueError, match="--backend"):
         parse_command(argv)
+
+
+# --- hopd version-mismatch hint -------------------------------------------
+
+
+def test_warn_if_hopd_version_stale_prints_note_on_mismatch(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from hop import cli
+    from hop.daemon_lock import HopdStatus
+
+    monkeypatch.setattr(cli, "read_status", lambda: HopdStatus(pid=999, version="0.0.1"))
+    monkeypatch.setattr(cli, "installed_version", lambda: "0.0.2")
+
+    cli._warn_if_hopd_version_stale()  # pyright: ignore[reportPrivateUsage]
+
+    stderr = capsys.readouterr().err
+    assert "0.0.1" in stderr
+    assert "0.0.2" in stderr
+    assert "hopd --restart" in stderr
+
+
+def test_warn_if_hopd_version_stale_silent_when_versions_match(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from hop import cli
+    from hop.daemon_lock import HopdStatus
+
+    monkeypatch.setattr(cli, "read_status", lambda: HopdStatus(pid=999, version="1.2.3"))
+    monkeypatch.setattr(cli, "installed_version", lambda: "1.2.3")
+
+    cli._warn_if_hopd_version_stale()  # pyright: ignore[reportPrivateUsage]
+
+    assert capsys.readouterr().err == ""
+
+
+def test_warn_if_hopd_version_stale_silent_when_no_status_file(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No running hopd → nothing to warn about. Plenty of hop users don't
+    run the vicinae integration at all."""
+    from hop import cli
+
+    monkeypatch.setattr(cli, "read_status", lambda: None)
+
+    cli._warn_if_hopd_version_stale()  # pyright: ignore[reportPrivateUsage]
+
+    assert capsys.readouterr().err == ""

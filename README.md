@@ -44,6 +44,16 @@ Or, as an editable pip package:
 python3 -m pip install -e .
 ```
 
+### Upgrading
+
+After re-running `uv tool install --reinstall .` (or `pip install -U`), the running `hopd` is still the old version. Restart it to apply the upgrade:
+
+```bash
+hopd --restart
+```
+
+If you forget, the `hop` CLI prints a note on its next invocation telling you the running daemon's version differs from the installed one. `hopd` enforces single-instance via an flock; a second startup without `--restart` will refuse to run and tell you the existing daemon's PID.
+
 ## Usage
 
 Day-to-day, [Vicinae](https://www.vicinae.com/) is the primary surface. Turn on seamless Vicinae integration with this line to your Sway config:

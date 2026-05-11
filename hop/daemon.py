@@ -7,6 +7,8 @@ reloads, so a single instance covers the whole sway session).
 
 from __future__ import annotations
 
+import argparse
+import os
 import sys
 import traceback
 from pathlib import Path
@@ -16,6 +18,14 @@ from hop import debug
 from hop.app import SessionBackendRegistry
 from hop.commands.session import SESSION_WORKSPACE_PREFIX, SessionListing, list_sessions
 from hop.config import load_global_config
+from hop.daemon_lock import (
+    HopdAlreadyRunning,
+    acquire_lock,
+    clear_status,
+    installed_version,
+    signal_running_hopd_to_stop,
+    write_status,
+)
 from hop.errors import HopError
 from hop.state import SessionState, forget_session, load_sessions
 from hop.sway import SwayIpcAdapter
@@ -23,12 +33,53 @@ from hop.vicinae import default_scripts_dir, regenerate, write_daemon_down_scrip
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    del argv
+    parser = argparse.ArgumentParser(prog="hopd")
+    parser.add_argument(
+        "--restart",
+        action="store_true",
+        help=(
+            "SIGTERM any running hopd and wait for it to exit before starting a new "
+            "instance. Use after upgrading the hop package so the daemon picks up the "
+            "new code."
+        ),
+    )
+    args = parser.parse_args(list(argv) if argv is not None else None)
+
     # Resolve scripts_dir up-front so the load-config error path can still
     # surface a "daemon stopped" entry — that's the most common crash cause
     # right after a config edit.
     scripts_dir = default_scripts_dir()
 
+    if args.restart:
+        try:
+            signaled = signal_running_hopd_to_stop()
+        except HopdAlreadyRunning as error:
+            debug.log(f"hopd: --restart could not stop existing daemon: {error}")
+            print(f"hopd: --restart could not stop existing daemon: {error}", file=sys.stderr)
+            return 1
+        if signaled:
+            debug.log("hopd: --restart stopped previous daemon")
+
+    try:
+        lock_fd = acquire_lock()
+    except HopdAlreadyRunning as error:
+        debug.log(f"hopd: {error}; refusing to start a second instance")
+        print(f"hopd: {error}; pass --restart to replace it", file=sys.stderr)
+        return 1
+
+    write_status(pid=os.getpid(), version=installed_version())
+
+    try:
+        return _run_main_loop(scripts_dir)
+    finally:
+        # Best-effort cleanup. The lock itself releases when the fd
+        # closes (or the process exits), but the status file would
+        # otherwise outlive us and falsely claim the daemon is alive.
+        clear_status()
+        os.close(lock_fd)
+
+
+def _run_main_loop(scripts_dir: Path) -> int:
     try:
         debug.configure(load_global_config().debug_log)
     except HopError as error:

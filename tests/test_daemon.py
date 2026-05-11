@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -14,6 +15,9 @@ def isolate_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
     monkeypatch.setenv("HOP_SESSIONS_DIR", str(tmp_path / "sessions"))
+    # Lock + status file live under XDG_RUNTIME_DIR/hop/. Point it at
+    # tmp_path so daemon-main tests don't collide with a real hopd.
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
 
 
 @pytest.fixture(autouse=True)
@@ -421,3 +425,158 @@ def test_daemon_swallows_daemon_down_write_errors(
     stderr = capsys.readouterr().err
     assert "kaboom" not in stderr  # different message — sanity check
     assert "original failure" in stderr
+
+
+# --- single-instance + restart --------------------------------------------
+
+
+def test_daemon_refuses_to_start_when_another_hopd_holds_the_lock(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """If another hopd already holds the lock, the new instance exits 1
+    with a message hinting at ``--restart``. The new instance must not
+    proceed into the sway IPC setup."""
+    from hop.daemon_lock import HopdAlreadyRunning
+
+    def raise_running(*_args: Any, **_kwargs: Any) -> int:
+        raise HopdAlreadyRunning(holder_pid=12345)
+
+    monkeypatch.setattr(daemon, "acquire_lock", raise_running)
+    # SwayIpcAdapter shouldn't even be instantiated; raise loudly if it is.
+    monkeypatch.setattr(
+        daemon,
+        "SwayIpcAdapter",
+        lambda: (_ for _ in ()).throw(AssertionError("should not be reached")),
+    )
+
+    exit_code = daemon.main([])
+
+    assert exit_code == 1
+    stderr = capsys.readouterr().err
+    assert "another hopd is already running" in stderr
+    assert "--restart" in stderr
+
+
+def test_daemon_writes_status_with_current_pid_and_version(
+    monkeypatch: pytest.MonkeyPatch,
+    stub_sessions: None,
+    tmp_path: Path,
+) -> None:
+    """At startup hopd writes its pid and version to the status file so
+    ``hopd --restart`` and the CLI's mismatch hint can locate it."""
+    captured: dict[str, object] = {}
+
+    def fake_write_status(*, pid: int, version: str) -> None:
+        captured["pid"] = pid
+        captured["version"] = version
+
+    monkeypatch.setattr(daemon, "write_status", fake_write_status)
+    monkeypatch.setattr(daemon, "SwayIpcAdapter", lambda: StubSubscribingSway())
+
+    daemon.main([])
+
+    assert captured["pid"] == os.getpid()
+    # Whatever the installed version is, hopd should be writing it
+    # verbatim — no synthesis.
+    from hop.daemon_lock import installed_version
+
+    assert captured["version"] == installed_version()
+
+
+def test_daemon_clears_status_on_exit_even_when_main_loop_raises(
+    monkeypatch: pytest.MonkeyPatch,
+    stub_sessions: None,
+    tmp_path: Path,
+) -> None:
+    """Whether hopd exits cleanly or via exception, the status file must
+    not outlive the process — otherwise the CLI would keep warning the
+    user about a daemon that's no longer running."""
+
+    def boom(**_kwargs: Any) -> None:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(daemon, "regenerate", boom)
+    monkeypatch.setattr(daemon, "SwayIpcAdapter", lambda: StubSubscribingSway())
+
+    daemon.main([])
+
+    from hop.daemon_lock import read_status
+
+    assert read_status() is None
+
+
+def test_daemon_restart_signals_existing_then_starts_fresh(
+    monkeypatch: pytest.MonkeyPatch,
+    regen_recorder: list[None],
+    stub_sessions: None,
+) -> None:
+    """``hopd --restart`` calls ``signal_running_hopd_to_stop`` before
+    acquiring the lock, then proceeds normally."""
+    call_log: list[str] = []
+
+    def fake_signal(**_kwargs: Any) -> bool:
+        call_log.append("signal")
+        return True
+
+    real_acquire = daemon.acquire_lock
+
+    def tracked_acquire() -> int:
+        call_log.append("acquire")
+        return real_acquire()
+
+    monkeypatch.setattr(daemon, "signal_running_hopd_to_stop", fake_signal)
+    monkeypatch.setattr(daemon, "acquire_lock", tracked_acquire)
+    monkeypatch.setattr(daemon, "SwayIpcAdapter", lambda: StubSubscribingSway())
+
+    exit_code = daemon.main(["--restart"])
+
+    assert exit_code == 1  # subscription-ended path returns 1
+    assert call_log == ["signal", "acquire"]
+    # Regen still happened — full bootstrap, not just signal-and-exit.
+    assert len(regen_recorder) == 1
+
+
+def test_daemon_restart_proceeds_even_when_no_previous_daemon_was_running(
+    monkeypatch: pytest.MonkeyPatch,
+    regen_recorder: list[None],
+    stub_sessions: None,
+) -> None:
+    """``--restart`` with no prior daemon is allowed — it just behaves
+    like a normal startup. The signal helper returns False; lock acquire
+    proceeds; regen runs."""
+
+    def fake_signal(**_kwargs: Any) -> bool:
+        return False
+
+    monkeypatch.setattr(daemon, "signal_running_hopd_to_stop", fake_signal)
+    monkeypatch.setattr(daemon, "SwayIpcAdapter", lambda: StubSubscribingSway())
+
+    exit_code = daemon.main(["--restart"])
+
+    assert exit_code == 1
+    assert len(regen_recorder) == 1
+
+
+def test_daemon_restart_exits_when_signal_helper_cannot_stop_existing(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """If ``--restart`` can't take over (e.g., the existing daemon
+    ignored SIGTERM), surface the error and don't try to grab the lock."""
+    from hop.daemon_lock import HopdAlreadyRunning
+
+    def fake_signal(**_kwargs: Any) -> bool:
+        raise HopdAlreadyRunning(holder_pid=4242)
+
+    monkeypatch.setattr(daemon, "signal_running_hopd_to_stop", fake_signal)
+    monkeypatch.setattr(
+        daemon,
+        "acquire_lock",
+        lambda: (_ for _ in ()).throw(AssertionError("should not be reached")),
+    )
+
+    exit_code = daemon.main(["--restart"])
+
+    assert exit_code == 1
+    assert "could not stop existing daemon" in capsys.readouterr().err
