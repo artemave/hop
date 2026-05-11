@@ -803,3 +803,123 @@ def test_is_alive_returns_false_when_session_socket_is_unreachable() -> None:
     adapter = KittyRemoteControlAdapter(transport_factory=factory, launcher=StubLauncher())
 
     assert adapter.is_alive(build_session()) is False
+
+
+# --- get_focused_window_cwd ----------------------------------------------
+
+
+def _focused_window_payload(*, cwd: str | None, kitty_id: int = 17) -> dict[str, object]:
+    return {
+        "ok": True,
+        "data": [
+            {
+                "tabs": [
+                    {
+                        "windows": [
+                            {
+                                "id": kitty_id - 1,
+                                "is_focused": False,
+                                "cwd": "/somewhere/else",
+                            },
+                            {
+                                "id": kitty_id,
+                                "is_focused": True,
+                                **({"cwd": cwd} if cwd is not None else {}),
+                            },
+                        ]
+                    }
+                ]
+            }
+        ],
+    }
+
+
+def test_get_focused_window_cwd_returns_cwd_for_focused_window() -> None:
+    from hop.kitty import get_focused_window_cwd
+
+    factory = StubKittyFactory([_focused_window_payload(cwd="/workspace/src")])
+
+    cwd = get_focused_window_cwd("demo", transport_factory=factory)
+
+    assert cwd == Path("/workspace/src")
+    assert factory.calls == [(SESSION_SOCKET, "ls", {"output_format": "json"})]
+
+
+def test_get_focused_window_cwd_returns_none_when_no_window_is_focused() -> None:
+    from hop.kitty import get_focused_window_cwd
+
+    factory = StubKittyFactory(
+        [
+            {
+                "ok": True,
+                "data": [
+                    {
+                        "tabs": [
+                            {
+                                "windows": [
+                                    {"id": 17, "is_focused": False, "cwd": "/x"},
+                                ]
+                            }
+                        ]
+                    }
+                ],
+            }
+        ]
+    )
+
+    assert get_focused_window_cwd("demo", transport_factory=factory) is None
+
+
+def test_get_focused_window_cwd_returns_none_on_ipc_failure() -> None:
+    from hop.kitty import get_focused_window_cwd
+
+    factory = StubKittyFactory([KittyConnectionError("Could not talk to Kitty")])
+
+    assert get_focused_window_cwd("demo", transport_factory=factory) is None
+
+
+def test_get_focused_window_cwd_returns_none_when_payload_is_not_a_list() -> None:
+    from hop.kitty import get_focused_window_cwd
+
+    # Kitty's ls normally returns a list at the top level; a malformed
+    # response (here: a bare dict) is a defensive guard against future
+    # kitty changes — we'd rather fall back than crash the kitten.
+    factory = StubKittyFactory([{"ok": True, "data": {"unexpected": True}}])
+
+    assert get_focused_window_cwd("demo", transport_factory=factory) is None
+
+
+def test_get_focused_window_cwd_skips_malformed_entries() -> None:
+    from hop.kitty import get_focused_window_cwd
+
+    factory = StubKittyFactory(
+        [
+            {
+                "ok": True,
+                "data": [
+                    "not a mapping",
+                    {"tabs": ["bad tab"]},
+                    {
+                        "tabs": [
+                            {
+                                "windows": [
+                                    "bad window",
+                                    {"id": 42, "is_focused": True, "cwd": "/right/place"},
+                                ]
+                            }
+                        ]
+                    },
+                ],
+            }
+        ]
+    )
+
+    assert get_focused_window_cwd("demo", transport_factory=factory) == Path("/right/place")
+
+
+def test_get_focused_window_cwd_returns_none_when_focused_window_has_no_cwd() -> None:
+    from hop.kitty import get_focused_window_cwd
+
+    factory = StubKittyFactory([_focused_window_payload(cwd=None)])
+
+    assert get_focused_window_cwd("demo", transport_factory=factory) is None

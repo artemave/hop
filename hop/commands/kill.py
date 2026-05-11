@@ -4,7 +4,7 @@ import time
 from pathlib import Path
 from typing import Callable, Protocol, Sequence
 
-from hop.backends import HostBackend, SessionBackend
+from hop.backends import CommandBackend, SessionBackend
 from hop.browser import DEFAULT_BROWSER_MARK_PREFIX
 from hop.editor import EDITOR_MARK_PREFIX
 from hop.session import ProjectSession, resolve_project_session
@@ -13,6 +13,8 @@ from hop.sway import SwayWindow
 
 WINDOW_CLOSE_TIMEOUT_SECONDS = 5.0
 WINDOW_CLOSE_POLL_INTERVAL_SECONDS = 0.05
+
+_BUILTIN_HOST_BACKEND = CommandBackend(name="host", interactive_prefix="", noninteractive_prefix="")
 
 
 class KillSwayAdapter(Protocol):
@@ -25,7 +27,7 @@ def kill_session(
     cwd: Path | str,
     *,
     sway: KillSwayAdapter,
-    session_backend_for: Callable[[ProjectSession], SessionBackend] = lambda _session: HostBackend(),
+    session_backend_for: Callable[[ProjectSession], SessionBackend] = lambda _session: _BUILTIN_HOST_BACKEND,
     forget: Callable[[str], None] = forget_session,
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
@@ -37,8 +39,8 @@ def kill_session(
     # the session's last window destroys its workspace, fires that event,
     # and races our window-close wait loop. By the time we'd otherwise look
     # up the backend, the state file could already be gone — for_session
-    # would fall back to HostBackend whose teardown is a no-op, silently
-    # skipping `compose down` (or whatever the user configured).
+    # would fall back to the built-in host backend whose teardown is a no-op,
+    # silently skipping `compose down` (or whatever the user configured).
     backend = session_backend_for(session)
 
     browser_mark = f"{DEFAULT_BROWSER_MARK_PREFIX}{session.session_name}"

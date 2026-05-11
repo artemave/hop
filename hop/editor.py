@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import time
-from pathlib import Path
 from typing import Any, Callable, Mapping, Protocol, Sequence, cast
 
-from hop.backends import SHELL_FALLBACK, HostBackend, SessionBackend
+from hop.backends import SHELL_FALLBACK, CommandBackend, SessionBackend
 from hop.config import EDITOR_ROLE as _EDITOR_ROLE_CONST
 from hop.config import SHELL_ROLE
 from hop.errors import HopError
@@ -33,6 +32,11 @@ _CR = "\r"
 
 SessionBackendFactory = Callable[[ProjectSession], SessionBackend]
 SessionWindowsFactory = Callable[[ProjectSession], Sequence[WindowSpec]]
+
+
+# Default backend handed to ad-hoc callers that don't supply a session
+# backend factory. Empty prefixes mean "run on host, unwrapped".
+_BUILTIN_HOST_BACKEND = CommandBackend(name="host", interactive_prefix="", noninteractive_prefix="")
 
 
 class NeovimError(HopError):
@@ -240,7 +244,9 @@ class SharedNeovimEditorAdapter:
     ) -> None:
         self._sway: EditorSwayAdapter = sway or SwayIpcAdapter()
         self._kitty_io: KittyEditorIO = kitty_io or IpcKittyEditorIO()
-        self._session_backend_for: SessionBackendFactory = session_backend_for or (lambda _session: HostBackend())
+        self._session_backend_for: SessionBackendFactory = session_backend_for or (
+            lambda _session: _BUILTIN_HOST_BACKEND
+        )
         # Resolves the session's window list so the launch path can pick up
         # user overrides for editor / shell commands. Default returns no
         # windows so the built-in nvim + ${SHELL:-sh} fallback applies.
@@ -283,22 +289,14 @@ class SharedNeovimEditorAdapter:
         self._sway.focus_window(window.id)
 
     def open_target(self, session: ProjectSession, *, target: str) -> None:
+        # ``target`` is in the active backend's namespace already (the kitten
+        # resolves candidates against the source window's in-shell cwd via
+        # OSC 7, and the open path filter runs through ``backend.paths_exist``
+        # without translating namespaces). Pass it through unchanged.
         window, _ = self._ensure_editor(session, keep_focus=True)
         self._sway.focus_window(window.id)
-        path_text, line_number = _split_target(self._translate_target(session, target))
-        self._kitty_io.send_text_to_editor(session, _build_open_keystrokes(path_text, line_number))
-
-    def _translate_target(self, session: ProjectSession, target: str) -> str:
-        # `target` is a host path (optionally with `:line`). For backends whose
-        # nvim runs in a different filesystem namespace (e.g. devcontainer),
-        # rewrite the path to its in-backend location so `:drop <path>` finds
-        # the file. The line suffix is reattached unchanged.
         path_text, line_number = _split_target(target)
-        backend = self._session_backend_for(session)
-        translated = backend.translate_host_path(session, Path(path_text))
-        if line_number is None:
-            return str(translated)
-        return f"{translated}:{line_number}"
+        self._kitty_io.send_text_to_editor(session, _build_open_keystrokes(path_text, line_number))
 
     def _ensure_editor(self, session: ProjectSession, *, keep_focus: bool) -> tuple[SwayWindow, bool]:
         existing = self._find_editor_window(session)

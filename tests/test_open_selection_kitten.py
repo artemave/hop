@@ -1,8 +1,31 @@
 from pathlib import Path
+from typing import Iterable
 
 import pytest
 
 from kittens.open_selection import main
+
+
+@pytest.fixture(autouse=True)
+def _stub_focused_paths_exist(monkeypatch: pytest.MonkeyPatch) -> None:  # pyright: ignore[reportUnusedFunction]
+    """Replace ``focused_paths_exist`` with a deterministic local-filesystem
+    check against the test's cwd. The real implementation queries sway +
+    kitty IPC to find the focused hop session; in a dev environment where
+    sway is running, it would consult whichever session the user is currently
+    in, ignoring the test's tmp_path."""
+
+    def fake_paths_exist(candidates: Iterable[str]) -> set[str]:
+        from hop.targets import ResolvedFileTarget, resolve_visible_output_target
+
+        base = Path.cwd()
+        result: set[str] = set()
+        for candidate in candidates:
+            target = resolve_visible_output_target(candidate, terminal_cwd=base)
+            if isinstance(target, ResolvedFileTarget) and target.path.exists():
+                result.add(candidate)
+        return result
+
+    monkeypatch.setattr(main, "focused_paths_exist", fake_paths_exist)
 
 
 def test_mark_finds_supported_visible_output_targets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

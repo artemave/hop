@@ -9,7 +9,7 @@ from typing import Sequence
 import pytest
 
 from hop.backends import (
-    HostBackend,
+    CommandBackend,
     SessionBackendError,
     UnknownBackendError,
     backend_from_config,
@@ -17,6 +17,11 @@ from hop.backends import (
 )
 from hop.config import BackendConfig
 from hop.session import ProjectSession
+
+
+def host_backend() -> CommandBackend:
+    """Construct hop's built-in 'host' backend instance for tests."""
+    return CommandBackend(name="host", interactive_prefix="", noninteractive_prefix="")
 
 
 def build_session(project_root: Path) -> ProjectSession:
@@ -32,10 +37,16 @@ class RecordingRunner:
     returncode: int = 0
     stdout: str = ""
     stderr: str = ""
-    calls: list[tuple[tuple[str, ...], Path]] = field(default_factory=lambda: [])
+    calls: list[tuple[tuple[str, ...], Path, str | None]] = field(default_factory=lambda: [])
 
-    def __call__(self, args: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
-        self.calls.append((tuple(args), cwd))
+    def __call__(
+        self,
+        args: Sequence[str],
+        cwd: Path,
+        *,
+        stdin: str | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        self.calls.append((tuple(args), cwd, stdin))
         return subprocess.CompletedProcess(
             args=list(args),
             returncode=self.returncode,
@@ -50,51 +61,55 @@ def make_backend(**kwargs: object) -> BackendConfig:
         "activate": "test -f docker-compose.dev.yml",
         "prepare": "compose up -d devcontainer",
         "teardown": "compose down",
-        "workspace": "compose exec devcontainer pwd",
-        "command_prefix": "compose exec devcontainer",
+        "interactive_prefix": "compose exec devcontainer",
+        "noninteractive_prefix": "compose exec devcontainer",
     }
     defaults.update(kwargs)
     return BackendConfig(**defaults)  # type: ignore[arg-type]
 
 
-# --- HostBackend ---------------------------------------------------------
+# --- Built-in host backend (CommandBackend with empty prefixes) ---------
 
 
-def test_host_backend_command_prefix_is_none() -> None:
-    assert HostBackend().command_prefix is None
+def test_host_backend_interactive_prefix_is_empty_string() -> None:
+    assert host_backend().interactive_prefix == ""
 
 
 def test_host_backend_wrap_empty_returns_empty_argv(tmp_path: Path) -> None:
-    """Empty command on host means "let kitty pick the default shell" — the
-    launch path passes empty args so kitty falls through to /etc/passwd."""
-    assert HostBackend().wrap("", build_session(tmp_path)) == ()
+    """Empty command + empty prefix means "let kitty pick the default shell" —
+    the launch path passes empty args so kitty falls through to /etc/passwd."""
+    assert host_backend().wrap("", build_session(tmp_path)) == ()
 
 
 def test_host_backend_wrap_substitutes_command(tmp_path: Path) -> None:
-    args = HostBackend().wrap("cd {project_root} && pwd", build_session(tmp_path))
+    args = host_backend().wrap("cd {project_root} && pwd", build_session(tmp_path))
     assert args == ("sh", "-c", f"cd {shlex.quote(str(tmp_path))} && pwd")
 
 
 def test_host_backend_inline_substitutes_without_sh_wrapping(tmp_path: Path) -> None:
-    inlined = HostBackend().inline("nvim", build_session(tmp_path))
+    inlined = host_backend().inline("nvim", build_session(tmp_path))
     assert inlined == "nvim"
-
-
-def test_host_backend_translate_terminal_cwd_is_identity(tmp_path: Path) -> None:
-    session = build_session(tmp_path)
-    cwd = tmp_path / "subdir"
-    assert HostBackend().translate_terminal_cwd(session, cwd) == cwd
-
-
-def test_host_backend_translate_host_path_is_identity(tmp_path: Path) -> None:
-    session = build_session(tmp_path)
-    host_path = tmp_path / "lib" / "foo.py"
-    assert HostBackend().translate_host_path(session, host_path) == host_path
 
 
 def test_host_backend_translate_localhost_url_is_identity(tmp_path: Path) -> None:
     session = build_session(tmp_path)
-    assert HostBackend().translate_localhost_url(session, "http://localhost:3000/foo") == "http://localhost:3000/foo"
+    assert host_backend().translate_localhost_url(session, "http://localhost:3000/foo") == "http://localhost:3000/foo"
+
+
+def test_host_backend_paths_exist_runs_loop_unwrapped(tmp_path: Path) -> None:
+    """With empty prefixes the synthesized command is just ``sh -c '<loop>'``
+    which runs locally — same answer as Path.exists, just via subprocess."""
+    existing = tmp_path / "exists.txt"
+    existing.write_text("")
+    missing = tmp_path / "missing.txt"
+
+    result = host_backend().paths_exist(build_session(tmp_path), (existing, missing))
+
+    assert result == {existing}
+
+
+def test_host_backend_paths_exist_empty_input_returns_empty(tmp_path: Path) -> None:
+    assert host_backend().paths_exist(build_session(tmp_path), ()) == set()
 
 
 # --- CommandBackend wrap / inline ----------------------------------------
@@ -109,7 +124,7 @@ def test_command_backend_wrap_prepends_prefix_to_command(tmp_path: Path) -> None
 
 
 def test_command_backend_wrap_substitutes_project_root(tmp_path: Path) -> None:
-    backend = backend_from_config(make_backend(command_prefix="ssh host cd {project_root} &&"))
+    backend = backend_from_config(make_backend(interactive_prefix="ssh host cd {project_root} &&"))
 
     args = backend.wrap("exec zsh", build_session(tmp_path))
 
@@ -132,8 +147,8 @@ def test_command_backend_wrap_empty_falls_back_to_shell_via_prefix(tmp_path: Pat
     assert args == ("sh", "-c", "compose exec devcontainer ${SHELL:-sh}")
 
 
-def test_command_backend_wrap_without_prefix_returns_substituted_command(tmp_path: Path) -> None:
-    backend = backend_from_config(make_backend(command_prefix=None))
+def test_command_backend_wrap_with_empty_prefix_returns_substituted_command(tmp_path: Path) -> None:
+    backend = backend_from_config(make_backend(interactive_prefix="", noninteractive_prefix=""))
 
     args = backend.wrap("nvim", build_session(tmp_path))
 
@@ -151,8 +166,8 @@ def test_command_backend_inline_returns_prefix_plus_command(tmp_path: Path) -> N
     assert inlined == "compose exec devcontainer nvim"
 
 
-def test_command_backend_inline_without_prefix_is_identity_substituted(tmp_path: Path) -> None:
-    backend = backend_from_config(make_backend(command_prefix=None))
+def test_command_backend_inline_with_empty_prefix_is_identity_substituted(tmp_path: Path) -> None:
+    backend = backend_from_config(make_backend(interactive_prefix="", noninteractive_prefix=""))
 
     assert backend.inline("nvim", build_session(tmp_path)) == "nvim"
 
@@ -160,62 +175,12 @@ def test_command_backend_inline_without_prefix_is_identity_substituted(tmp_path:
 def test_command_backend_substitutes_path_with_spaces_safely(tmp_path: Path) -> None:
     weird = tmp_path / "name with spaces"
     weird.mkdir()
-    backend = backend_from_config(make_backend(command_prefix=None))
+    backend = backend_from_config(make_backend(interactive_prefix="", noninteractive_prefix=""))
 
     args = backend.wrap("cd {project_root} && pwd", build_session(weird))
 
     completed = subprocess.run(args, capture_output=True, text=True, check=True)
     assert completed.stdout.strip() == str(weird)
-
-
-# --- translate helpers ----------------------------------------------------
-
-
-def test_command_backend_translate_terminal_cwd_uses_workspace_path(tmp_path: Path) -> None:
-    backend = backend_from_config(make_backend(), workspace_path="/workspace")
-    session = build_session(tmp_path)
-
-    container_path = Path("/workspace/lib/foo.py")
-
-    assert backend.translate_terminal_cwd(session, container_path) == tmp_path / "lib" / "foo.py"
-
-
-def test_command_backend_translate_terminal_cwd_identity_without_workspace(tmp_path: Path) -> None:
-    backend = backend_from_config(make_backend(), workspace_path=None)
-    other = Path("/elsewhere")
-
-    assert backend.translate_terminal_cwd(build_session(tmp_path), other) == other
-
-
-def test_command_backend_translate_terminal_cwd_passes_through_unrelated_paths(tmp_path: Path) -> None:
-    """A cwd that isn't under workspace_path is identity-translated; the
-    relative_to call raises ValueError and the backend returns it as-is."""
-    backend = backend_from_config(make_backend(), workspace_path="/workspace")
-    other = Path("/elsewhere")
-
-    assert backend.translate_terminal_cwd(build_session(tmp_path), other) == other
-
-
-def test_command_backend_translate_host_path_identity_without_workspace(tmp_path: Path) -> None:
-    """No workspace_path → no rewrite, even for paths under the project root."""
-    backend = backend_from_config(make_backend(), workspace_path=None)
-    host_path = tmp_path / "lib" / "foo.py"
-
-    assert backend.translate_host_path(build_session(tmp_path), host_path) == host_path
-
-
-def test_command_backend_translate_host_path_rewrites_under_project_root(tmp_path: Path) -> None:
-    backend = backend_from_config(make_backend(), workspace_path="/workspace")
-    session = build_session(tmp_path)
-
-    host_path = tmp_path / "lib" / "foo.py"
-    assert backend.translate_host_path(session, host_path) == Path("/workspace/lib/foo.py")
-
-
-def test_command_backend_translate_host_path_identity_outside_project(tmp_path: Path) -> None:
-    backend = backend_from_config(make_backend(), workspace_path="/workspace")
-    other = Path("/etc/hosts")
-    assert backend.translate_host_path(build_session(tmp_path), other) == other
 
 
 # --- prepare / teardown ---------------------------------------------------
@@ -229,7 +194,7 @@ def test_command_backend_prepare_runs_prepare_command(tmp_path: Path, monkeypatc
     backend.prepare(build_session(tmp_path))
 
     lock = tmp_path / "hop" / f"backend-{tmp_path.name}.lock"
-    assert runner.calls == [(("flock", str(lock), "sh", "-c", "compose up -d devcontainer"), tmp_path)]
+    assert runner.calls == [(("flock", str(lock), "sh", "-c", "compose up -d devcontainer"), tmp_path, None)]
 
 
 def test_command_backend_prepare_is_noop_without_command(tmp_path: Path) -> None:
@@ -257,7 +222,7 @@ def test_command_backend_teardown_runs_teardown_command(tmp_path: Path, monkeypa
     backend.teardown(build_session(tmp_path))
 
     lock = tmp_path / "hop" / f"backend-{tmp_path.name}.lock"
-    assert runner.calls == [(("flock", str(lock), "sh", "-c", "compose down"), tmp_path)]
+    assert runner.calls == [(("flock", str(lock), "sh", "-c", "compose down"), tmp_path, None)]
 
 
 def test_command_backend_teardown_raises_on_failure(tmp_path: Path) -> None:
@@ -277,46 +242,79 @@ def test_command_backend_teardown_is_noop_without_command(tmp_path: Path) -> Non
     assert runner.calls == []
 
 
-# --- workspace discovery / with_workspace_path ---------------------------
+# --- paths_exist ----------------------------------------------------------
 
 
-def test_command_backend_discover_workspace_returns_stdout(tmp_path: Path) -> None:
-    runner = RecordingRunner(stdout="/workspace\n")
+def test_command_backend_paths_exist_runs_loop_with_noninteractive_prefix(tmp_path: Path) -> None:
+    """When `noninteractive_prefix` is set, the synthesized command
+    starts with it (not `interactive_prefix`). The recorded stdin is the newline-
+    joined paths; stdout names which exist."""
+    runner = RecordingRunner(stdout="/abs/exists.rb\n")
+    backend = backend_from_config(
+        make_backend(noninteractive_prefix="compose exec -T devcontainer"),
+        runner=runner,
+    )
+
+    existing = backend.paths_exist(
+        build_session(tmp_path),
+        (Path("/abs/exists.rb"), Path("/abs/missing.rb")),
+    )
+
+    assert existing == {Path("/abs/exists.rb")}
+    assert len(runner.calls) == 1
+    argv, _, stdin = runner.calls[0]
+    assert argv[:2] == ("sh", "-c")
+    composed = argv[2]
+    assert composed.startswith("compose exec -T devcontainer sh -c ")
+    assert "while IFS= read -r p" in composed
+    assert stdin == "/abs/exists.rb\n/abs/missing.rb\n"
+
+
+def test_command_backend_paths_exist_with_empty_prefix_runs_loop_unwrapped(tmp_path: Path) -> None:
+    """With empty noninteractive_prefix (the built-in host case),
+    the synthesized command is just ``sh -c '<loop>'`` — runs locally."""
+    runner = RecordingRunner(stdout="/abs/exists.rb\n")
+    backend = backend_from_config(
+        make_backend(interactive_prefix="", noninteractive_prefix=""),
+        runner=runner,
+    )
+
+    backend.paths_exist(build_session(tmp_path), (Path("/abs/exists.rb"),))
+
+    argv = runner.calls[0][0]
+    assert argv[2].startswith("sh -c ")
+    assert "compose" not in argv[2]
+
+
+def test_backend_from_config_requires_both_prefixes() -> None:
+    """A partial backend declaration (missing one of the prefixes) is
+    rejected at session entry with an actionable error."""
+    from hop.errors import HopError
+
+    with pytest.raises(HopError, match="interactive_prefix"):
+        backend_from_config(make_backend(interactive_prefix=None))
+
+    with pytest.raises(HopError, match="noninteractive_prefix"):
+        backend_from_config(make_backend(noninteractive_prefix=None))
+
+
+def test_command_backend_paths_exist_empty_input_skips_subprocess(tmp_path: Path) -> None:
+    runner = RecordingRunner()
     backend = backend_from_config(make_backend(), runner=runner)
 
-    workspace = backend.discover_workspace(build_session(tmp_path))
-
-    assert workspace == "/workspace"
-    assert runner.calls == [(("sh", "-c", "compose exec devcontainer pwd"), tmp_path)]
-
-
-def test_command_backend_discover_workspace_returns_none_without_command(tmp_path: Path) -> None:
-    runner = RecordingRunner()
-    backend = backend_from_config(make_backend(workspace=None), runner=runner)
-
-    assert backend.discover_workspace(build_session(tmp_path)) is None
+    assert backend.paths_exist(build_session(tmp_path), ()) == set()
     assert runner.calls == []
 
 
-def test_command_backend_discover_workspace_raises_on_failure(tmp_path: Path) -> None:
-    runner = RecordingRunner(returncode=3, stderr="bad")
-    backend = backend_from_config(make_backend(), runner=runner)
-
-    with pytest.raises(SessionBackendError, match="workspace discovery failed"):
-        backend.discover_workspace(build_session(tmp_path))
-
-
-def test_command_backend_with_workspace_path_preserves_prefix_and_translate(tmp_path: Path) -> None:
+def test_command_backend_paths_exist_raises_on_failure(tmp_path: Path) -> None:
+    runner = RecordingRunner(returncode=1, stderr="container is gone")
     backend = backend_from_config(
-        make_backend(port_translate="echo 1234", host_translate="echo myhost"),
+        make_backend(noninteractive_prefix="compose exec -T devcontainer"),
+        runner=runner,
     )
 
-    bound = backend.with_workspace_path("/workspace")
-
-    assert bound.workspace_path == "/workspace"
-    assert bound.command_prefix == "compose exec devcontainer"
-    assert bound.port_translate_command == "echo 1234"
-    assert bound.host_translate_command == "echo myhost"
+    with pytest.raises(SessionBackendError, match="paths_exist failed"):
+        backend.paths_exist(build_session(tmp_path), (Path("/abs/foo"),))
 
 
 # --- localhost URL translation -------------------------------------------
@@ -376,7 +374,7 @@ def test_command_backend_translate_localhost_url_replaces_port(tmp_path: Path) -
     )
 
     assert translated == "http://localhost:35231/path?q=1#frag"
-    assert runner.calls == [(("sh", "-c", "compose port devcontainer 3000"), tmp_path)]
+    assert runner.calls == [(("sh", "-c", "compose port devcontainer 3000"), tmp_path, None)]
 
 
 def test_command_backend_translate_localhost_url_replaces_host(tmp_path: Path) -> None:
@@ -442,6 +440,22 @@ def test_command_backend_translate_localhost_url_preserves_userinfo(tmp_path: Pa
     assert translated == "http://user:pw@localhost:35231/foo"
 
 
+# --- backend_from_config wiring -------------------------------------------
+
+
+def test_backend_from_config_carries_both_prefixes() -> None:
+    backend = backend_from_config(
+        make_backend(
+            interactive_prefix="compose exec devcontainer",
+            noninteractive_prefix="compose exec -T devcontainer",
+        ),
+    )
+
+    assert isinstance(backend, CommandBackend)
+    assert backend.interactive_prefix == "compose exec devcontainer"
+    assert backend.noninteractive_prefix == "compose exec -T devcontainer"
+
+
 # --- backend selection ----------------------------------------------------
 
 
@@ -456,7 +470,7 @@ def test_select_backend_returns_first_activate_to_succeed(tmp_path: Path) -> Non
 
     assert chosen is not None
     assert chosen.name == "a"
-    assert runner.calls == [(("sh", "-c", "a-activate"), tmp_path)]
+    assert runner.calls == [(("sh", "-c", "a-activate"), tmp_path, None)]
 
 
 def test_select_backend_walks_until_activate_succeeds(tmp_path: Path) -> None:
@@ -465,7 +479,14 @@ def test_select_backend_walks_until_activate_succeeds(tmp_path: Path) -> None:
         scripts: list[int]
         calls: list[tuple[tuple[str, ...], Path]] = field(default_factory=lambda: [])
 
-        def __call__(self, args: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+        def __call__(
+            self,
+            args: Sequence[str],
+            cwd: Path,
+            *,
+            stdin: str | None = None,
+        ) -> subprocess.CompletedProcess[str]:
+            del stdin
             self.calls.append((tuple(args), cwd))
             code = self.scripts.pop(0)
             return subprocess.CompletedProcess(args=list(args), returncode=code, stdout="", stderr="")
@@ -494,23 +515,41 @@ def test_select_backend_skips_backends_without_activate(tmp_path: Path) -> None:
 
     assert chosen is not None
     assert chosen.name == "b"
-    assert runner.calls == [(("sh", "-c", "b-activate"), tmp_path)]
+    assert runner.calls == [(("sh", "-c", "b-activate"), tmp_path, None)]
 
 
-def test_select_backend_returns_none_when_no_activate_succeeds(tmp_path: Path) -> None:
+def test_select_backend_raises_when_no_activate_succeeds_and_no_host_fallback(tmp_path: Path) -> None:
+    """In production the merged backend list always includes hop's built-in
+    ``host`` entry with ``activate = "true"``. Bypassing the merge means
+    auto-detect can fail to match anything — surface that as an error."""
     runner = RecordingRunner(returncode=1)
     backends = (
         make_backend(name="a", activate="a-activate"),
         make_backend(name="b", activate="b-activate"),
     )
 
-    assert select_backend(build_session(tmp_path), backends, runner=runner) is None
+    with pytest.raises(UnknownBackendError):
+        select_backend(build_session(tmp_path), backends, runner=runner)
 
 
-def test_select_backend_pinned_host_returns_none(tmp_path: Path) -> None:
-    backends = (make_backend(),)
+def test_select_backend_picks_host_when_listed(tmp_path: Path) -> None:
+    """The merged list ends with the built-in ``host`` (activate='true').
+    Verify select_backend honors that entry."""
+    runner = RecordingRunner()
+    backends = (
+        make_backend(name="a", activate=None),
+        BackendConfig(
+            name="host",
+            activate="true",
+            interactive_prefix="",
+            noninteractive_prefix="",
+        ),
+    )
 
-    assert select_backend(build_session(tmp_path), backends, pinned_name="host") is None
+    chosen = select_backend(build_session(tmp_path), backends, runner=runner)
+
+    assert chosen is not None
+    assert chosen.name == "host"
 
 
 def test_select_backend_pinned_unknown_name_raises(tmp_path: Path) -> None:
@@ -570,3 +609,23 @@ def test_default_runner_captures_stderr_when_non_interactive(tmp_path: Path, mon
 
     assert captured["stderr"] is subprocess.PIPE
     assert captured["stdout"] is subprocess.PIPE
+
+
+def test_default_runner_pipes_stdin_when_provided(tmp_path: Path) -> None:
+    """End-to-end: paths_exist uses the default runner to pipe stdin into
+    a real subprocess. The shell loop echoes inputs whose paths exist."""
+    from hop.backends import default_runner
+
+    existing = tmp_path / "exists.txt"
+    existing.write_text("")
+    missing = tmp_path / "missing.txt"
+    payload = f"{existing}\n{missing}\n"
+
+    result = default_runner(
+        ["sh", "-c", 'while IFS= read -r p; do test -e "$p" && printf "%s\\n" "$p"; :; done'],
+        tmp_path,
+        stdin=payload,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [str(existing)]

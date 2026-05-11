@@ -20,7 +20,8 @@ if "kitty.fast_data_types" in sys.modules:
 
 from hop.app import build_kitten_services  # noqa: E402
 from hop.commands.open_selection import open_selection_in_window  # noqa: E402
-from hop.targets import VISIBLE_OUTPUT_TARGET_PATTERN, resolve_visible_output_target  # noqa: E402
+from hop.focused import paths_exist as focused_paths_exist  # noqa: E402
+from hop.targets import VISIBLE_OUTPUT_TARGET_PATTERN  # noqa: E402
 
 LOGGER_NAME = "hop.open_selection"
 
@@ -46,10 +47,10 @@ def _configure_logger() -> logging.Logger:
 
 
 def mark(text: Any, args: Any, Mark: Any, extra_cli_args: Any, *unused_args: Any) -> Any:
-    # The kitten subprocess inherits kitty's cwd; for hop sessions kitty is
-    # launched with --directory <project_root>, so this is the project root.
-    base_cwd = Path.cwd()
-    index = 0
+    # The kitten is a thin shell: extract candidates, ask hop which exist for
+    # the focused session, yield marks for the survivors. Session, backend,
+    # cwd, and IPC live behind hop.focused.paths_exist.
+    matches: list[tuple[int, int, str]] = []
     for match in VISIBLE_OUTPUT_TARGET_PATTERN.finditer(text):
         for group_name in ("url", "rails", "rails_bare", "file"):
             group_value = match.group(group_name)
@@ -59,17 +60,24 @@ def mark(text: Any, args: Any, Mark: Any, extra_cli_args: Any, *unused_args: Any
         else:
             continue
         selected_text = group_value.replace("\0", "").replace("\n", "")
-        if (
-            resolve_visible_output_target(
-                selected_text,
-                terminal_cwd=base_cwd,
-                project_root=base_cwd,
-            )
-            is None
-        ):
-            continue
+        matches.append((start, end, selected_text))
+
+    if not matches:
+        return
+
+    # URLs always highlight — existence is a filesystem concept and doesn't
+    # apply. Files are filtered through the focused-session backend.
+    file_candidates = [text_ for _, _, text_ in matches if not _looks_like_url(text_)]
+    existing_files: set[str] = focused_paths_exist(file_candidates) if file_candidates else set()
+
+    for index, (start, end, selected_text) in enumerate(
+        (entry for entry in matches if _looks_like_url(entry[2]) or entry[2] in existing_files),
+    ):
         yield Mark(index, start, end, selected_text, {})
-        index += 1
+
+
+def _looks_like_url(text: str) -> bool:
+    return text.startswith(("http://", "https://"))
 
 
 def handle_result(  # noqa: PLR0913

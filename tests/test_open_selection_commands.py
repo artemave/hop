@@ -1,5 +1,6 @@
 import logging
 from pathlib import Path
+from typing import Sequence
 
 import pytest
 
@@ -76,7 +77,10 @@ def test_open_selection_in_window_routes_urls_to_session_browser(tmp_path: Path)
     assert neovim.opened_targets == []
 
 
-def test_open_selection_in_window_ignores_unresolvable_matches(tmp_path: Path) -> None:
+def test_open_selection_in_window_ignores_files_that_do_not_exist(tmp_path: Path) -> None:
+    """Default ``session_backend_for`` returns hop's built-in host backend
+    which runs the existence check locally — a file that doesn't exist on
+    disk is filtered out and the dispatch is suppressed."""
     project_root = tmp_path / "demo"
     terminal_cwd = project_root / "src"
     terminal_cwd.mkdir(parents=True)
@@ -154,7 +158,30 @@ def test_open_selection_in_window_logs_when_source_cwd_missing(
     assert any("source window has no cwd" in record.message for record in caplog.records)
 
 
-def test_open_selection_in_window_logs_when_target_does_not_resolve(
+def test_open_selection_in_window_logs_when_selection_does_not_parse(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    project_root = tmp_path / "demo"
+    terminal_cwd = project_root / "src"
+    terminal_cwd.mkdir(parents=True)
+
+    with caplog.at_level(logging.INFO, logger="hop.open_selection"):
+        result = open_selection_in_window(
+            "   ",  # whitespace-only selection — resolve_visible_output_target returns None
+            source_cwd=terminal_cwd.resolve(),
+            listen_on=session_socket_address("demo"),
+            neovim=StubNeovimAdapter(),
+            browser=StubBrowserAdapter(),
+            sessions_loader=lambda: {
+                "demo": SessionState(name="demo", project_root=project_root.resolve()),
+            },
+        )
+
+    assert result is None
+    assert any("could not parse" in record.message for record in caplog.records)
+
+
+def test_open_selection_in_window_logs_when_file_does_not_exist_on_backend(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     project_root = tmp_path / "demo"
@@ -174,29 +201,34 @@ def test_open_selection_in_window_logs_when_target_does_not_resolve(
         )
 
     assert result is None
-    assert any("could not resolve" in record.message for record in caplog.records)
+    assert any("does not exist in backend" in record.message for record in caplog.records)
 
 
-def test_open_selection_in_window_translates_terminal_cwd_via_base(tmp_path: Path) -> None:
+def test_open_selection_in_window_dispatches_path_unchanged_to_nvim(tmp_path: Path) -> None:
+    """The kitten resolves candidates against the source window's in-shell
+    cwd before they get here; this command must hand the resolved path to
+    nvim without further translation (no host-path↔backend-path rewrite)."""
     project_root = tmp_path / "demo"
-    selected_file = project_root / "src" / "lib" / "foo.py"
+    terminal_cwd = project_root / "src"
+    selected_file = terminal_cwd / "app/models/user.rb"
     selected_file.parent.mkdir(parents=True)
-    selected_file.write_text("print('hello')\n")
+    selected_file.write_text("class User\nend\n")
 
     neovim = StubNeovimAdapter()
-    browser = StubBrowserAdapter()
 
     class FakeBackend:
-        def translate_terminal_cwd(self, _session: ProjectSession, cwd: Path) -> Path:
-            # Container path /workspace/src maps to <project_root>/src.
-            return project_root.resolve() / "src"
+        def paths_exist(self, _session: ProjectSession, paths: Sequence[Path]) -> set[Path]:
+            return {p for p in paths if p.exists()}
+
+        def translate_localhost_url(self, _session: ProjectSession, url: str) -> str:
+            return url
 
     session = open_selection_in_window(
-        "lib/foo.py",
-        source_cwd=Path("/workspace/src"),
+        "app/models/user.rb",
+        source_cwd=terminal_cwd.resolve(),
         listen_on=session_socket_address("demo"),
         neovim=neovim,
-        browser=browser,
+        browser=StubBrowserAdapter(),
         sessions_loader=lambda: {
             "demo": SessionState(name="demo", project_root=project_root.resolve()),
         },
@@ -214,8 +246,8 @@ def test_open_selection_in_window_translates_localhost_url_via_backend(tmp_path:
     browser = StubBrowserAdapter()
 
     class FakeBackend:
-        def translate_terminal_cwd(self, _session: ProjectSession, cwd: Path) -> Path:
-            return cwd
+        def paths_exist(self, _session: ProjectSession, paths: Sequence[Path]) -> set[Path]:
+            return set()
 
         def translate_localhost_url(self, _session: ProjectSession, url: str) -> str:
             assert url == "http://localhost:3000/foo"
@@ -244,8 +276,8 @@ def test_open_selection_in_window_logs_translated_url_on_dispatch(
     project_root.mkdir(parents=True)
 
     class FakeBackend:
-        def translate_terminal_cwd(self, _session: ProjectSession, cwd: Path) -> Path:
-            return cwd
+        def paths_exist(self, _session: ProjectSession, paths: Sequence[Path]) -> set[Path]:
+            return set()
 
         def translate_localhost_url(self, _session: ProjectSession, _url: str) -> str:
             return "http://localhost:35231/"

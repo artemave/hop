@@ -43,11 +43,11 @@ def test_load_global_config_parses_full_backend(tmp_path: Path) -> None:
         tmp_path / "config.toml",
         """
 [backends.devcontainer]
-activate       = "test -f docker-compose.dev.yml"
-prepare        = "podman-compose -f docker-compose.dev.yml up -d devcontainer"
-teardown       = "podman-compose -f docker-compose.dev.yml down"
-workspace      = "podman-compose -f docker-compose.dev.yml exec devcontainer pwd"
-command_prefix = "podman-compose -f docker-compose.dev.yml exec devcontainer"
+activate                       = "test -f docker-compose.dev.yml"
+prepare                        = "podman-compose -f docker-compose.dev.yml up -d devcontainer"
+teardown                       = "podman-compose -f docker-compose.dev.yml down"
+interactive_prefix                 = "podman-compose -f docker-compose.dev.yml exec devcontainer"
+noninteractive_prefix  = "podman-compose -f docker-compose.dev.yml exec -T devcontainer"
 """,
     )
 
@@ -57,10 +57,29 @@ command_prefix = "podman-compose -f docker-compose.dev.yml exec devcontainer"
             activate="test -f docker-compose.dev.yml",
             prepare="podman-compose -f docker-compose.dev.yml up -d devcontainer",
             teardown="podman-compose -f docker-compose.dev.yml down",
-            workspace="podman-compose -f docker-compose.dev.yml exec devcontainer pwd",
-            command_prefix="podman-compose -f docker-compose.dev.yml exec devcontainer",
+            interactive_prefix="podman-compose -f docker-compose.dev.yml exec devcontainer",
+            noninteractive_prefix="podman-compose -f docker-compose.dev.yml exec -T devcontainer",
         ),
     )
+
+
+def test_load_global_config_rejects_legacy_workspace_field(tmp_path: Path) -> None:
+    config_file = write(
+        tmp_path / "config.toml",
+        """
+[backends.devcontainer]
+interactive_prefix = "compose exec devcontainer"
+workspace      = "compose exec devcontainer pwd"
+""",
+    )
+
+    with pytest.raises(HopConfigError) as exc:
+        load_global_config(config_file)
+
+    message = str(exc.value)
+    assert "workspace" in message
+    assert "removed" in message
+    assert "noninteractive_prefix" in message
 
 
 def test_load_global_config_rejects_legacy_flat_shell_field(tmp_path: Path) -> None:
@@ -74,7 +93,7 @@ def test_load_global_config_rejects_legacy_flat_shell_field(tmp_path: Path) -> N
 
     message = str(exc.value)
     assert "removed" in message
-    assert "command_prefix" in message
+    assert "interactive_prefix" in message
     assert "[windows.shell]" in message
 
 
@@ -109,14 +128,33 @@ command = "zsh"
     assert "[windows.<role>]" in message
 
 
-def test_load_global_config_rejects_explicit_host_backend(tmp_path: Path) -> None:
+def test_load_global_config_accepts_explicit_host_backend_override(tmp_path: Path) -> None:
+    """``[backends.host]`` is no longer reserved — users can override hop's
+    built-in host backend to wrap host shells through a sandbox/launcher.
+    After merge, the user's host fields win over the built-in defaults and
+    the entry keeps its global-declared slot in the auto-detect order."""
     config_file = write(
         tmp_path / "config.toml",
-        '[backends.host]\ncommand_prefix = "nope"\n',
+        """
+[backends.host]
+interactive_prefix                = "firejail --net=none"
+noninteractive_prefix = "firejail --net=none"
+""",
     )
 
-    with pytest.raises(HopConfigError, match="reserved"):
-        load_global_config(config_file)
+    config = load_global_config(config_file)
+    [host] = [b for b in config.backends if b.name == "host"]
+    assert host.interactive_prefix == "firejail --net=none"
+    assert host.noninteractive_prefix == "firejail --net=none"
+
+    merged = merge_configs(HopConfig(), config)
+    [merged_host] = [b for b in merged.backends if b.name == "host"]
+    # User-declared fields survive the merge with the built-in.
+    assert merged_host.interactive_prefix == "firejail --net=none"
+    # Built-in fields the user didn't override (activate="true") are inherited.
+    assert merged_host.activate == "true"
+    # host keeps its single slot in the merged list — no duplicate from the builtin.
+    assert sum(1 for b in merged.backends if b.name == "host") == 1
 
 
 def test_load_global_config_rejects_unknown_backend_field(tmp_path: Path) -> None:
@@ -132,13 +170,13 @@ prepar = "typo"
         load_global_config(config_file)
 
 
-def test_load_global_config_rejects_empty_command_prefix(tmp_path: Path) -> None:
+def test_load_global_config_rejects_empty_interactive_prefix(tmp_path: Path) -> None:
     config_file = write(
         tmp_path / "config.toml",
-        '[backends.devcontainer]\ncommand_prefix = "   "\n',
+        '[backends.devcontainer]\ninteractive_prefix = "   "\n',
     )
 
-    with pytest.raises(HopConfigError, match="field 'command_prefix' must not be empty"):
+    with pytest.raises(HopConfigError, match="field 'interactive_prefix' must not be empty"):
         load_global_config(config_file)
 
 
@@ -350,7 +388,7 @@ def test_merge_configs_debug_log_inherits_from_global() -> None:
 def test_load_global_config_rejects_unknown_top_level_key(tmp_path: Path) -> None:
     config_file = write(
         tmp_path / "config.toml",
-        '[bakends.devcontainer]\ncommand_prefix = "x"\n',
+        '[bakends.devcontainer]\ninteractive_prefix = "x"\n',
     )
 
     with pytest.raises(HopConfigError, match="unknown top-level key 'bakends'"):
@@ -529,7 +567,7 @@ def test_project_config_supports_identical_schema(tmp_path: Path) -> None:
         tmp_path / ".hop.toml",
         """
 [backends.lima]
-command_prefix = "lima shell default --"
+interactive_prefix = "lima shell default --"
 
 [layouts.rails]
 activate = "test -f bin/rails"
@@ -544,7 +582,7 @@ command = "bin/jobs"
 
     config = load_project_config(tmp_path)
 
-    assert config.backends == (BackendConfig(name="lima", command_prefix="lima shell default --"),)
+    assert config.backends == (BackendConfig(name="lima", interactive_prefix="lima shell default --"),)
     assert config.layouts == (
         LayoutConfig(
             name="rails",
@@ -564,7 +602,7 @@ def _backend(name: str, **fields: object) -> BackendConfig:
 
 def test_merge_backends_appends_global_only_after_project() -> None:
     project = HopConfig()
-    global_ = HopConfig(backends=(_backend("alpha", command_prefix="a-prefix"),))
+    global_ = HopConfig(backends=(_backend("alpha", interactive_prefix="a-prefix"),))
 
     merged = merge_backends(project, global_)
 
@@ -574,7 +612,7 @@ def test_merge_backends_appends_global_only_after_project() -> None:
 def test_merge_backends_field_merges_per_field() -> None:
     project = HopConfig(backends=(_backend("alpha", activate="true"),))
     global_ = HopConfig(
-        backends=(_backend("alpha", command_prefix="prefix", activate="test -f marker", prepare="prep"),)
+        backends=(_backend("alpha", interactive_prefix="prefix", activate="test -f marker", prepare="prep"),)
     )
 
     merged = merge_backends(project, global_)
@@ -582,7 +620,7 @@ def test_merge_backends_field_merges_per_field() -> None:
     assert merged == (
         _backend(
             "alpha",
-            command_prefix="prefix",  # inherited
+            interactive_prefix="prefix",  # inherited
             activate="true",  # project wins
             prepare="prep",  # inherited
         ),
@@ -662,14 +700,15 @@ def test_merge_configs_combines_all_three_sections() -> None:
         windows=(WindowConfig(role="worker", command="bin/jobs"),),
     )
     global_ = HopConfig(
-        backends=(_backend("alpha", command_prefix="prefix"),),
+        backends=(_backend("alpha", interactive_prefix="prefix"),),
         layouts=(LayoutConfig(name="vite", activate="test -f vite.config.ts"),),
         windows=(WindowConfig(role="editor", activate="false"),),
     )
 
     merged = merge_configs(project, global_)
 
-    assert tuple(b.name for b in merged.backends) == ("alpha",)
+    # Hop's built-in ``host`` always rides at the bottom of the merged list.
+    assert tuple(b.name for b in merged.backends) == ("alpha", "host")
     assert tuple(layout.name for layout in merged.layouts) == ("rails", "vite")
     assert tuple(window.role for window in merged.windows) == ("worker", "editor")
 

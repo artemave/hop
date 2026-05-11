@@ -11,7 +11,7 @@ from tempfile import gettempdir
 from typing import Any, Callable, Mapping, Protocol, Sequence, cast
 
 from hop import debug
-from hop.backends import SHELL_FALLBACK, HostBackend, SessionBackend
+from hop.backends import SHELL_FALLBACK, CommandBackend, SessionBackend
 from hop.config import SHELL_ROLE
 from hop.errors import HopError
 from hop.layouts import WindowSpec, find_window
@@ -31,6 +31,12 @@ KITTY_BOOTSTRAP_TIMEOUT_SECONDS = 5.0
 KITTY_BOOTSTRAP_POLL_INTERVAL_SECONDS = 0.1
 SESSION_SOCKET_FILENAME_PREFIX = "kitty-"
 SESSION_SOCKET_FILENAME_SUFFIX = ".sock"
+
+
+# Default backend handed to ad-hoc callers that don't supply a session
+# backend factory — same shape hop.app's SessionBackendRegistry uses for
+# unbootstrapped sessions. Empty prefixes mean "run on host, unwrapped".
+_BUILTIN_HOST_BACKEND = CommandBackend(name="host", interactive_prefix="", noninteractive_prefix="")
 
 
 class KittyError(HopError):
@@ -101,6 +107,48 @@ def session_name_from_listen_on(listen_on: str) -> str | None:
     return name[len(SESSION_SOCKET_FILENAME_PREFIX) : -len(SESSION_SOCKET_FILENAME_SUFFIX)]
 
 
+def get_focused_window_cwd(
+    session_name: str,
+    *,
+    transport_factory: "TransportFactory | None" = None,
+) -> Path | None:
+    """Return the focused window's in-shell cwd for a hop session.
+
+    Connects to the session's kitty socket and asks for the focused window.
+    Reads ``cwd_of_child`` from the response, which reflects OSC 7 updates
+    pushed by the in-shell prompt (so it's the *in-shell* cwd, not the
+    spawning process's cwd).
+
+    Returns ``None`` on any IPC failure or when no window is focused —
+    callers fall back to a host-side default.
+    """
+
+    addr = session_socket_address(session_name)
+    factory = transport_factory or _default_transport_factory
+    transport = factory(addr)
+    try:
+        response = transport.send_command("ls", {"output_format": "json"})
+    except (KittyConnectionError, KittyCommandError):
+        return None
+    payload = _coerce_response_data(response)
+    if not isinstance(payload, list):
+        return None
+
+    for os_window in cast(list[Any], payload):
+        if not isinstance(os_window, Mapping):
+            continue
+        for tab in cast(Any, os_window).get("tabs", ()):
+            if not isinstance(tab, Mapping):
+                continue
+            for window_entry in cast(Any, tab).get("windows", ()):
+                if not isinstance(window_entry, Mapping):
+                    continue
+                if not cast(Any, window_entry).get("is_focused"):
+                    continue
+                return _path_from_text(_window_cwd_text(cast(Any, window_entry)))
+    return None
+
+
 class KittyRemoteControlAdapter:
     def __init__(
         self,
@@ -113,7 +161,9 @@ class KittyRemoteControlAdapter:
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
-        self._session_backend_for: SessionBackendFactory = session_backend_for or (lambda _session: HostBackend())
+        self._session_backend_for: SessionBackendFactory = session_backend_for or (
+            lambda _session: _BUILTIN_HOST_BACKEND
+        )
         # Resolves the window list for this session — used by `_launch_payload`
         # to pick the role's command. Default returns no windows so ad-hoc
         # roles fall through to the empty-shell sentinel (host default shell).

@@ -25,8 +25,8 @@ def make_backend(**kwargs: object) -> BackendConfig:
         "activate": "test -f docker-compose.dev.yml",
         "prepare": "compose up -d devcontainer",
         "teardown": "compose down",
-        "workspace": "compose exec devcontainer pwd",
-        "command_prefix": "compose exec devcontainer",
+        "interactive_prefix": "compose exec devcontainer",
+        "noninteractive_prefix": "compose exec devcontainer",
     }
     defaults.update(kwargs)
     return BackendConfig(**defaults)  # type: ignore[arg-type]
@@ -46,8 +46,14 @@ class StaticRunner:
         self.stdout = stdout
         self.stderr = stderr
 
-    def __call__(self, args: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
-        del cwd
+    def __call__(
+        self,
+        args: Sequence[str],
+        cwd: Path,
+        *,
+        stdin: str | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        del cwd, stdin
         return subprocess.CompletedProcess(
             args=list(args),
             returncode=self.returncode,

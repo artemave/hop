@@ -1,9 +1,13 @@
 from pathlib import Path
 
-from hop.backends import HostBackend
+from hop.backends import CommandBackend
 from hop.commands.kill import kill_session
 from hop.session import ProjectSession
 from hop.sway import SwayWindow
+
+
+def host_backend() -> CommandBackend:
+    return CommandBackend(name="host", interactive_prefix="", noninteractive_prefix="")
 
 
 class StubSwayAdapter:
@@ -170,7 +174,7 @@ def test_kill_session_resolves_backend_before_closing_windows(tmp_path: Path) ->
     session's last window destroys its workspace, hopd sees the event and
     forgets the persisted state file. If kill_session were to look up the
     backend AFTER closing windows, it would now read no state file and get
-    a no-op HostBackend — silently skipping the user's `compose down`.
+    a no-op CommandBackend — silently skipping the user's `compose down`.
     Resolve the backend up-front to survive the race."""
     project_root = tmp_path / "demo"
     project_root.mkdir()
@@ -221,7 +225,7 @@ def test_kill_session_uses_host_backend_by_default(tmp_path: Path) -> None:
     kill_session(
         project_root,
         sway=StubSwayAdapter(),
-        session_backend_for=lambda _session: HostBackend(),
+        session_backend_for=lambda _session: host_backend(),
     )
 
 

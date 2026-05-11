@@ -89,17 +89,17 @@ The picker scans visible terminal output and dispatches supported selections to 
 - `https://example.com`
 - `Processing UsersController#index`
 
-File-shaped tokens that don't resolve to a real file under the source window's cwd are not highlighted.
+File-shaped tokens that don't exist (per the focused session's backend) are not highlighted. The kitten asks `hop.focused.paths_exist`, which queries the focused session's backend through `noninteractive_prefix` — so paths inside a devcontainer or remote ssh host are checked in the right namespace.
 
 ## Configuration
 
 A hop config has three named sections plus one scalar setting, all optional:
 
-- `[backends.<name>]` - backend lifecycle (`prepare` / `teardown` / `workspace` / translate helpers) plus a `command_prefix` shell snippet that wraps every command launched in that backend's environment.
+- `[backends.<name>]` - backend lifecycle (`prepare` / `teardown` / translate helpers) plus two prefixes: `interactive_prefix` for interactive launches and `noninteractive_prefix` for hop's piped queries (file-existence checks).
 - `[layouts.<name>]` - a named layout with one required `activate` shell-snippet probe and a list of windows that come up together when the probe matches.
 - `[windows.<role>]` - top-level windows (always active unless `activate = "false"`).
 - `workspace_layout = "<mode>"` - sway workspace layout applied at first session entry. One of `splith`, `splitv`, `stacking`, `tabbed`.
-- `debug_log = true` - append a diagnostic log of backend command runs (`prepare` / `teardown` / `workspace` / translate / auto-detect probes) and kitty bootstrap stdio to `$XDG_RUNTIME_DIR/hop/debug.log`. Set to a string to use a custom path. First place to look when `hop` fails silently — especially when launched from Vicinae, where stderr is not visible.
+- `debug_log = true` - append a diagnostic log of backend command runs (`prepare` / `teardown` / translate / auto-detect probes) and kitty bootstrap stdio to `$XDG_RUNTIME_DIR/hop/debug.log`. Set to a string to use a custom path. First place to look when `hop` fails silently — especially when launched from Vicinae, where stderr is not visible.
 
 Configs live in `~/.config/hop/config.toml` or a project's `.hop.toml`.
 
@@ -117,11 +117,10 @@ When you enter a session (bare `hop`), hop walks the configured backends in decl
 
 ```toml
 [backends.devcontainer]
-activate       = "test -f docker-compose.dev.yml"
-prepare        = "podman-compose -f docker-compose.dev.yml --in-pod=false up -d devcontainer"
-teardown       = "podman-compose -f docker-compose.dev.yml down"
-workspace      = "podman-compose -f docker-compose.dev.yml exec devcontainer pwd"
-port_translate = """
+activate              = "test -f docker-compose.dev.yml"
+prepare               = "podman-compose -f docker-compose.dev.yml --in-pod=false up -d devcontainer"
+teardown              = "podman-compose -f docker-compose.dev.yml down"
+port_translate        = """
   podman ps -q \\
     --filter label=io.podman.compose.project=$(basename {project_root}) \\
     --filter label=io.podman.compose.service=devcontainer \\
@@ -129,7 +128,8 @@ port_translate = """
     | xargs -r -I@ podman port @ {port} \\
     | cut -d: -f2
 """
-command_prefix = "podman-compose -f docker-compose.dev.yml exec devcontainer"
+interactive_prefix    = "podman-compose -f docker-compose.dev.yml exec devcontainer"
+noninteractive_prefix = "podman-compose -f docker-compose.dev.yml exec -T devcontainer"
 ```
 
 Each command is a single string. Hop runs it through `sh -c` after substituting placeholders, so pipes, redirects, and `$(...)` all work - write the value the way you'd type it at a terminal. Use TOML triple-quoted strings (`"""…"""`) for multi-line pipelines. Placeholder values are shell-quoted before insertion, so paths with spaces substitute safely.
@@ -139,10 +139,10 @@ Backend fields:
 - `activate` (optional) - auto-detect probe. Backends without `activate` can only be picked by name.
 - `prepare` (optional) - command run once at session creation, before launching kitty. Should be idempotent.
 - `teardown` (optional) - command run at `hop kill` after closing windows.
-- `workspace` (optional) - command whose stdout maps the backend's path back to the host project root. Used by the open_selection kitten.
 - `port_translate` (optional) - command run lazily by the open_selection kitten when it dispatches a `localhost` / `127.0.0.1` / `0.0.0.0` URL. Stdout is the host-reachable port that should replace the URL's port. `{port}` is substituted with the URL's original port.
 - `host_translate` (optional) - command run lazily for the same set of localhost URLs. Stdout is the hostname that should replace `localhost` / `127.0.0.1` / `0.0.0.0` in the URL.
-- `command_prefix` (optional) - shell snippet prepended to every window command launched in this backend's environment. Empty for the implicit host backend.
+- `interactive_prefix` (required) - shell snippet prepended to every window command launched in this backend's environment. Empty for the implicit host backend.
+- `noninteractive_prefix` (required) - prefix hop uses for non-interactive backend operations like file-existence checks. Backends that allocate a TTY by default (podman-compose exec) must set the no-TTY variant (e.g. `... exec -T devcontainer`); backends that don't (ssh) pass the same string as `interactive_prefix`. The implicit `host` backend ships with both prefixes set to `""` (empty).
 
 Supported placeholders: `{project_root}` (anywhere), and `{port}` (in `port_translate` / `host_translate` only).
 
@@ -168,18 +168,18 @@ activate = "false"
 command = "bin/jobs"
 ```
 
-The active backend's `command_prefix` wraps each window's `command` at launch, so the same Rails layout works in both a host session (runs `bin/dev` directly) and a devcontainer session (runs `podman-compose exec devcontainer bin/dev`).
+The active backend's `interactive_prefix` wraps each window's `command` at launch, so the same Rails layout works in both a host session (runs `bin/dev` directly) and a devcontainer session (runs `podman-compose exec devcontainer bin/dev`).
 
 Per-window fields:
 
-- `command` (string) - the role command, **without** any backend wrap. The active backend's `command_prefix` is prepended at launch.
+- `command` (string) - the role command, **without** any backend wrap. The active backend's `interactive_prefix` is prepended at launch.
 - `activate` (string, optional) - shell probe; the window auto-launches when it exits 0. Defaults to `"true"`.
 
 Built-in roles `shell`, `editor`, and `browser` ship with hop defaults:
 
 | role    | command default                         | activate default |
 |---------|-----------------------------------------|------------------|
-| shell   | platform default (kitty's login shell on host; `${SHELL:-sh}` falls back inside a `command_prefix`) | active     |
+| shell   | platform default (kitty's login shell on host; `${SHELL:-sh}` falls back inside a `interactive_prefix`) | active     |
 | editor  | `nvim`                                  | active           |
 | browser | xdg-detected default browser            | inactive         |
 

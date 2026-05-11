@@ -6,8 +6,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
-# Permissive on purpose: any path-shaped token may match. The disk-existence
-# check in `_resolve_file_candidate` is what filters real targets from noise.
+# Permissive on purpose: any path-shaped token may match. Existence filtering
+# happens outside this module (via ``backend.paths_exist`` from the focused
+# hop session) so the regex stays generous and the resolver stays pure.
 VISIBLE_OUTPUT_TARGET_PATTERN = re.compile(
     r"""
     (?P<url>https?://[^\s<>"'`)\]}]+)
@@ -59,8 +60,15 @@ def resolve_visible_output_target(
     selection: str,
     *,
     terminal_cwd: Path | str,
-    project_root: Path | str,
 ) -> ResolvedTarget | None:
+    """Parse a selection from terminal output into a structured target.
+
+    Returns ``None`` only for empty or unparseable input. Existence of the
+    resolved file path is **not** checked here — that filtering happens
+    upstream via ``hop.focused.paths_exist`` (which routes through the
+    focused session's backend). This module just shapes paths and URLs.
+    """
+
     cleaned_selection = selection.strip()
     if not cleaned_selection:
         return None
@@ -70,29 +78,18 @@ def resolve_visible_output_target(
         return ResolvedUrlTarget(url=url)
 
     terminal_directory = Path(terminal_cwd).expanduser().resolve(strict=False)
-    project_directory = Path(project_root).expanduser().resolve(strict=False)
 
     rails_target = _rails_reference_target(cleaned_selection)
     if rails_target is not None:
-        resolved_path = _resolve_file_candidate(
-            rails_target,
-            terminal_cwd=terminal_directory,
-            project_root=project_directory,
+        return ResolvedFileTarget(
+            path=_resolve_file_candidate(rails_target, terminal_cwd=terminal_directory),
         )
-        if resolved_path is None:
-            return None
-        return ResolvedFileTarget(path=resolved_path)
 
     path_text, line_number = _split_file_target(cleaned_selection)
-    resolved_path = _resolve_file_candidate(
-        path_text,
-        terminal_cwd=terminal_directory,
-        project_root=project_directory,
+    return ResolvedFileTarget(
+        path=_resolve_file_candidate(path_text, terminal_cwd=terminal_directory),
+        line_number=line_number,
     )
-    if resolved_path is None:
-        return None
-
-    return ResolvedFileTarget(path=resolved_path, line_number=line_number)
 
 
 def _normalize_url(selection: str) -> str | None:
@@ -137,22 +134,18 @@ def _resolve_file_candidate(
     candidate: str,
     *,
     terminal_cwd: Path,
-    project_root: Path,
-) -> Path | None:
+) -> Path:
+    """Return the absolute path the candidate string would resolve to.
+
+    Existence is intentionally not checked here — the caller asks the active
+    backend (via ``hop.focused.paths_exist``) which of its candidates exist.
+    """
+
     normalized_candidate = _normalize_file_candidate(candidate)
     expanded_candidate = Path(os.path.expanduser(normalized_candidate))
-    path_candidates: list[Path] = []
     if expanded_candidate.is_absolute():
-        path_candidates.append(expanded_candidate)
-    else:
-        path_candidates.append(terminal_cwd / expanded_candidate)
-        path_candidates.append(project_root / expanded_candidate)
-
-    for path_candidate in path_candidates:
-        resolved_candidate = path_candidate.resolve(strict=False)
-        if resolved_candidate.exists():
-            return resolved_candidate
-    return None
+        return expanded_candidate.resolve(strict=False)
+    return (terminal_cwd / expanded_candidate).resolve(strict=False)
 
 
 def _normalize_file_candidate(candidate: str) -> str:

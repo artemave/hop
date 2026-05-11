@@ -7,12 +7,11 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import gettempdir
-from typing import Callable, Protocol, Sequence
+from typing import Protocol, Sequence
 from urllib.parse import urlsplit, urlunsplit
 
 from hop import debug
 from hop.config import (
-    HOST_BACKEND_NAME,
     PLACEHOLDER_PORT,
     PLACEHOLDER_PROJECT_ROOT,
     BackendConfig,
@@ -26,11 +25,19 @@ from hop.session import ProjectSession
 LOCALHOST_HOSTS = frozenset({"localhost", "127.0.0.1", "0.0.0.0"})
 
 # Fallback shell snippet used when wrapping an empty command through a
-# command_prefix. The outer sh expands ${SHELL:-sh} before the prefix exec
+# interactive_prefix. The outer sh expands ${SHELL:-sh} before the prefix exec
 # runs, so the resulting binary is whatever path the user's host shell
 # resolves to — which works as long as the same path exists in the backend's
 # environment (the typical case for container-backed dev setups).
 SHELL_FALLBACK = "${SHELL:-sh}"
+
+# Inner shell loop hop wraps in `<noninteractive_prefix> sh -c '...'` to ask
+# a backend which of a set of paths exists. Reads newline-separated paths
+# from stdin and writes the existing ones, newline-separated, to stdout.
+# IFS= preserves leading whitespace; -r disables backslash interpretation.
+# Trailing `:` keeps the loop's exit code at 0 — a missing file in the last
+# iteration would otherwise leak through as the shell's overall exit.
+_PATH_EXISTS_LOOP = 'while IFS= read -r p; do test -e "$p" && printf "%s\\n" "$p"; :; done'
 
 
 class SessionBackendError(HopError):
@@ -38,8 +45,15 @@ class SessionBackendError(HopError):
 
 
 class SessionBackend(Protocol):
+    """Public Protocol implemented by ``CommandBackend``.
+
+    Kept as a Protocol so tests can pass minimal fakes and adapter call
+    sites stay structural about their dependencies; production code only
+    has one implementer.
+    """
+
     @property
-    def command_prefix(self) -> str | None: ...
+    def interactive_prefix(self) -> str: ...
 
     def prepare(self, session: ProjectSession) -> None: ...
 
@@ -47,26 +61,40 @@ class SessionBackend(Protocol):
 
     def inline(self, command: str, session: ProjectSession) -> str: ...
 
-    def translate_terminal_cwd(self, session: ProjectSession, cwd: Path) -> Path: ...
-
-    def translate_host_path(self, session: ProjectSession, host_path: Path) -> Path: ...
-
     def translate_localhost_url(self, session: ProjectSession, url: str) -> str: ...
+
+    def paths_exist(self, session: ProjectSession, paths: Sequence[Path]) -> set[Path]: ...
 
     def teardown(self, session: ProjectSession) -> None: ...
 
 
-CommandRunner = Callable[[Sequence[str], Path], subprocess.CompletedProcess[str]]
+class CommandRunner(Protocol):
+    def __call__(
+        self,
+        args: Sequence[str],
+        cwd: Path,
+        *,
+        stdin: str | None = None,
+    ) -> subprocess.CompletedProcess[str]: ...
 
 
-def default_runner(args: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+def default_runner(
+    args: Sequence[str],
+    cwd: Path,
+    *,
+    stdin: str | None = None,
+) -> subprocess.CompletedProcess[str]:
     """Default ``CommandRunner`` — runs ``args`` in ``cwd``.
 
-    Stdout is always captured so callers that consume it (``discover_workspace``,
-    translate helpers) keep working. Stderr is inherited from the parent when
+    Stdout is always captured so callers that consume it (translate helpers,
+    ``paths_exist``) keep working. Stderr is inherited from the parent when
     invoked interactively, so the user sees backend command output live during
     slow operations like ``docker compose up``; otherwise stderr is captured
     and surfaced through the debug log and error messages.
+
+    ``stdin`` is forwarded to ``subprocess.run`` as the ``input`` kwarg when
+    provided. The default ``None`` leaves stdin closed, matching prior
+    behavior for callers that don't need to pipe.
 
     Exposed publicly so other modules (e.g. ``hop.app``) can pass it to
     helpers that take a ``CommandRunner`` argument when no override is
@@ -76,6 +104,7 @@ def default_runner(args: Sequence[str], cwd: Path) -> subprocess.CompletedProces
     return subprocess.run(
         list(args),
         cwd=str(cwd),
+        input=stdin,
         stdout=subprocess.PIPE,
         stderr=None if sys.stderr.isatty() else subprocess.PIPE,
         text=True,
@@ -90,67 +119,37 @@ _default_runner = default_runner
 
 
 @dataclass(frozen=True, slots=True)
-class HostBackend:
-    @property
-    def command_prefix(self) -> str | None:
-        return None
-
-    def prepare(self, session: ProjectSession) -> None:
-        return None
-
-    def wrap(self, command: str, session: ProjectSession) -> Sequence[str]:
-        if not command:
-            # Empty sentinel: caller delegates shell choice to the platform.
-            # Returning empty argv lets kitty's launch path pass no exec args
-            # so kitty picks the user's login shell from /etc/passwd.
-            return ()
-        return ("sh", "-c", _substitute(command, session=session))
-
-    def inline(self, command: str, session: ProjectSession) -> str:
-        return _substitute(command, session=session)
-
-    def translate_terminal_cwd(self, session: ProjectSession, cwd: Path) -> Path:
-        return cwd
-
-    def translate_host_path(self, session: ProjectSession, host_path: Path) -> Path:
-        return host_path
-
-    def translate_localhost_url(self, session: ProjectSession, url: str) -> str:
-        return url
-
-    def teardown(self, session: ProjectSession) -> None:
-        return None
-
-
-@dataclass(frozen=True, slots=True)
 class CommandBackend:
-    """A SessionBackend whose lifecycle is described by shell command strings.
+    """A session backend described entirely by shell command strings.
 
-    Lifecycle commands (``prepare`` / ``teardown`` / ``workspace`` / translate
-    helpers) and ``command_prefix`` are shell snippets hop runs via ``sh -c``
-    after substituting placeholders. The values come straight from the config
-    file: whatever you would type at a terminal, including pipes and ``$(...)``.
+    Lifecycle commands (``prepare`` / ``teardown`` / translate helpers) and
+    the two prefixes are shell snippets hop runs via ``sh -c`` after
+    substituting placeholders. The values come straight from the config file:
+    whatever you would type at a terminal, including pipes and ``$(...)``.
     Placeholder values are shell-quoted before insertion.
 
-    ``command_prefix`` is the shell snippet that wraps every window's command
-    launched in this backend's environment (e.g. ``podman-compose -f
-    docker-compose.dev.yml exec devcontainer``). Hop joins it with the window's
-    command via a single space at launch time. Per-role launch commands
-    themselves live in top-level ``[layouts.<name>]`` and ``[windows.<role>]``
-    config sections, not on the backend.
+    ``interactive_prefix`` wraps every window's command launched in this backend's
+    environment (e.g. ``podman-compose -f docker-compose.dev.yml exec
+    devcontainer``). Hop joins it with the window's command via a single space
+    at launch time. Per-role launch commands themselves live in top-level
+    ``[layouts.<name>]`` and ``[windows.<role>]`` config sections, not on the
+    backend.
 
-    ``workspace_path`` is captured at session creation by running the backend's
-    ``workspace`` command and is used to translate terminal cwds back to host
-    paths in the open_selection kitten dispatch. When ``workspace_path`` is
-    ``None`` (no ``workspace`` command configured), translation is identity.
+    ``noninteractive_prefix`` is the prefix hop uses for non-interactive
+    backend operations like the file-existence check that drives the
+    open-selection kitten. Backends that allocate a TTY by default
+    (podman-compose exec) must set this to the no-TTY variant
+    (``... exec -T devcontainer``); backends that don't (ssh) can pass the
+    same string as ``interactive_prefix``. Both prefixes may be the empty string
+    for an "in-place" backend (e.g. hop's built-in ``host``), in which case
+    commands run unwrapped against the host.
     """
 
     name: str
-    command_prefix: str | None = None
+    interactive_prefix: str
+    noninteractive_prefix: str
     prepare_command: str | None = None
     teardown_command: str | None = None
-    workspace_command: str | None = None
-    workspace_path: str | None = None
     port_translate_command: str | None = None
     host_translate_command: str | None = None
     runner: CommandRunner = field(default=_default_runner)
@@ -167,12 +166,14 @@ class CommandBackend:
             raise SessionBackendError(msg)
 
     def wrap(self, command: str, session: ProjectSession) -> Sequence[str]:
+        if not command and not self.interactive_prefix:
+            # In-place (host-equivalent) backend with no shell override:
+            # let kitty pick the user's login shell from /etc/passwd by
+            # returning empty argv. Any other empty-command case has a
+            # backend prefix to honor, so we still need to exec *something*
+            # inside the backend; fall back to ${SHELL:-sh}.
+            return ()
         if not command:
-            # Empty sentinel: a built-in shell window with no override. With
-            # no prefix this means "kitty default shell" (handled at the host
-            # branch in HostBackend.wrap). With a prefix, we still need to
-            # exec *something* inside the backend — fall back to ${SHELL:-sh}
-            # so the wrap has a binary to launch.
             return _sh_c(self.inline(SHELL_FALLBACK, session=session))
         return _sh_c(self.inline(command, session=session))
 
@@ -187,32 +188,10 @@ class CommandBackend:
         """
 
         substituted = _substitute(command, session=session)
-        if self.command_prefix is None:
+        if not self.interactive_prefix:
             return substituted
-        substituted_prefix = _substitute(self.command_prefix, session=session)
+        substituted_prefix = _substitute(self.interactive_prefix, session=session)
         return f"{substituted_prefix} {substituted}"
-
-    def translate_terminal_cwd(self, session: ProjectSession, cwd: Path) -> Path:
-        if self.workspace_path is None:
-            return cwd
-        prefix = Path(self.workspace_path)
-        try:
-            relative = cwd.relative_to(prefix)
-        except ValueError:
-            return cwd
-        return session.project_root / relative
-
-    def translate_host_path(self, session: ProjectSession, host_path: Path) -> Path:
-        # Inverse of translate_terminal_cwd: rewrite a host path under the
-        # project root to its in-backend location so commands like nvim's
-        # `:drop <path>` reach the right file from inside the container.
-        if self.workspace_path is None:
-            return host_path
-        try:
-            relative = host_path.relative_to(session.project_root)
-        except ValueError:
-            return host_path
-        return Path(self.workspace_path) / relative
 
     def translate_localhost_url(self, session: ProjectSession, url: str) -> str:
         if self.host_translate_command is None and self.port_translate_command is None:
@@ -285,39 +264,21 @@ class CommandBackend:
             msg = f"backend {self.name!r} teardown failed for {session.session_name!r}: {stderr}"
             raise SessionBackendError(msg)
 
-    def with_workspace_path(self, workspace_path: str | None) -> "CommandBackend":
-        return CommandBackend(
-            name=self.name,
-            command_prefix=self.command_prefix,
-            prepare_command=self.prepare_command,
-            teardown_command=self.teardown_command,
-            workspace_command=self.workspace_command,
-            workspace_path=workspace_path,
-            port_translate_command=self.port_translate_command,
-            host_translate_command=self.host_translate_command,
-            runner=self.runner,
-        )
-
-    def discover_workspace(self, session: ProjectSession) -> str | None:
-        """Run the ``workspace`` command and return its stripped stdout.
-
-        Returns ``None`` when no workspace command is configured. Raises
-        ``SessionBackendError`` if the command fails — discovery sits on the
-        critical path for cwd translation, so a bad command should not be
-        silently absorbed into ``workspace_path = None``.
-        """
-
-        if self.workspace_command is None:
-            return None
-        substituted = _substitute(self.workspace_command, session=session)
-        argv = _sh_c(substituted)
-        result = self.runner(argv, session.project_root)
+    def paths_exist(self, session: ProjectSession, paths: Sequence[Path]) -> set[Path]:
+        if not paths:
+            return set()
+        substituted_prefix = _substitute(self.noninteractive_prefix, session=session)
+        composed = f"{substituted_prefix} sh -c {shlex.quote(_PATH_EXISTS_LOOP)}".lstrip()
+        argv = _sh_c(composed)
+        stdin = "\n".join(str(p) for p in paths) + "\n"
+        result = self.runner(argv, session.project_root, stdin=stdin)
         debug.log_command(argv, session.project_root, result)
         if result.returncode != 0:
             stderr = (result.stderr or result.stdout or "").strip()
-            msg = f"backend {self.name!r} workspace discovery failed for {session.session_name!r}: {stderr}"
+            msg = f"backend {self.name!r} paths_exist failed for {session.session_name!r}: {stderr}"
             raise SessionBackendError(msg)
-        return result.stdout.strip() or None
+        reported = {line for line in result.stdout.splitlines() if line}
+        return {p for p in paths if str(p) in reported}
 
 
 class UnknownBackendError(HopError):
@@ -330,24 +291,21 @@ def select_backend(
     *,
     pinned_name: str | None = None,
     runner: CommandRunner = _default_runner,
-) -> BackendConfig | None:
-    """Choose which backend (if any) applies to ``session``.
-
-    Returns ``None`` to mean "use HostBackend".
+) -> BackendConfig:
+    """Choose which backend applies to ``session``.
 
     Resolution rules:
 
-    - ``pinned_name == "host"`` short-circuits to host.
-    - ``pinned_name`` (any other value) picks the backend with that name. Raises
+    - ``pinned_name`` (when given) picks the backend with that name. Raises
       ``UnknownBackendError`` when no backend matches.
     - Otherwise auto-detect walks ``backends`` in declaration order and runs
-      each backend's ``activate`` command (skipping ones without an ``activate``);
-      the first that exits 0 wins. If none succeed, returns ``None`` so the
-      host backend is used as the implicit fallback.
-    """
+      each backend's ``activate`` command (skipping ones without an
+      ``activate``); the first that exits 0 wins.
 
-    if pinned_name == HOST_BACKEND_NAME:
-        return None
+    The merged config always carries hop's built-in ``host`` backend
+    (``activate = "true"``, empty prefixes) at the lowest priority, so the
+    auto-detect walk always ends with a guaranteed match.
+    """
 
     if pinned_name is not None:
         for candidate in backends:
@@ -365,22 +323,30 @@ def select_backend(
         debug.log_command(argv, session.project_root, result)
         if result.returncode == 0:
             return candidate
-    return None
+    msg = (
+        f"no backend matched for {session.session_name!r}; "
+        "the built-in 'host' fallback was overridden to decline auto-detect"
+    )
+    raise UnknownBackendError(msg)
 
 
 def backend_from_config(
     config: BackendConfig,
     *,
-    workspace_path: str | None = None,
     runner: CommandRunner = _default_runner,
 ) -> CommandBackend:
+    if config.interactive_prefix is None:
+        msg = f"backend {config.name!r} requires 'interactive_prefix'"
+        raise HopError(msg)
+    if config.noninteractive_prefix is None:
+        msg = f"backend {config.name!r} requires 'noninteractive_prefix'"
+        raise HopError(msg)
     return CommandBackend(
         name=config.name,
-        command_prefix=config.command_prefix,
+        interactive_prefix=config.interactive_prefix,
+        noninteractive_prefix=config.noninteractive_prefix,
         prepare_command=config.prepare,
         teardown_command=config.teardown,
-        workspace_command=config.workspace,
-        workspace_path=workspace_path,
         port_translate_command=config.port_translate,
         host_translate_command=config.host_translate,
         runner=runner,

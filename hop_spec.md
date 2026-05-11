@@ -82,10 +82,12 @@ Each session has a **backend** that decides *where* its windows run. The default
 
 - `prepare` (optional) — command hop runs once before bootstrapping kitty. Idempotent.
 - `teardown` (optional) — command hop runs at `hop kill` after closing windows. Closing kitty windows first sends SIGHUP to in-backend shells so they exit cleanly before any teardown command runs.
-- `workspace` (optional) — command whose stripped stdout is the in-backend path that maps to the host project root. Captured once at session creation and used for cwd translation in the kitten dispatch.
 - `port_translate` (optional) — command hop runs lazily when the kitten dispatch resolves a URL whose host is `localhost`, `127.0.0.1`, or `0.0.0.0`. Stripped stdout is the host-reachable port number that should replace the URL's port. Hop substitutes `{port}` with the URL's original port (or empty string when the URL has no port).
 - `host_translate` (optional) — command hop runs lazily for the same set of localhost URLs. Stripped stdout is the hostname that should replace `localhost` / `127.0.0.1` / `0.0.0.0` in the URL. Both `port_translate` and `host_translate` are independently optional; either or both may be configured.
-- `command_prefix` (optional) — shell snippet hop prepends to every window's command launched in this backend's environment (e.g. `podman-compose -f docker-compose.dev.yml exec devcontainer`). Empty for the implicit host backend.
+- `interactive_prefix` (required) — shell snippet hop prepends to every window's command launched in this backend's environment (e.g. `podman-compose -f docker-compose.dev.yml exec devcontainer`). Empty for the built-in `host` backend.
+- `noninteractive_prefix` (required) — prefix hop uses for non-interactive backend operations like the file-existence check that drives the open-selection kitten's highlight filter. Backends that allocate a TTY by default (e.g. `podman-compose exec`) must set this to the no-TTY variant (`podman-compose exec -T <service>`); backends that don't (ssh) pass the same string as `interactive_prefix`. Empty for the built-in `host` backend.
+
+Hop ships an implicit `host` backend (`interactive_prefix = ""`, `noninteractive_prefix = ""`, `activate = "true"`) layered below user config. Users can override any field by declaring `[backends.host]` in either config file — `host` is not a reserved name.
 
 All commands are run via `sh -c <substituted-string>`, so pipes, redirects, and `$(...)` are part of the contract. Substitution placeholders supported inside any command: `{project_root}`. `{port}` is additionally available inside `port_translate` and `host_translate` (the URL's original port, or empty string when absent). Substituted values are shell-quoted before insertion so paths with spaces or shell metacharacters round-trip safely.
 
@@ -106,7 +108,7 @@ Per-role launch commands live outside the backend, in two top-level config secti
 
 Each window declaration carries:
 
-- `command` (string) — the role command. **No backend wrap inside this string** — the active backend's `command_prefix` is prepended at launch time. For built-in roles, hop ships a default; the user can override.
+- `command` (string) — the role command. **No backend wrap inside this string** — the active backend's `interactive_prefix` is prepended at launch time. For built-in roles, hop ships a default; the user can override.
 - `activate` (`"true"` or `"false"`, optional) — opt-in / opt-out only. No probe at the per-window level; the gate is whatever the window's container decides:
   - **Built-in window** (shell / editor / browser) with no top-level override: hop's default (active for shell/editor, inactive for browser).
   - **Top-level window**: defaults active unless the entry sets `activate = "false"`.
@@ -116,7 +118,7 @@ Built-in defaults:
 
 | role     | command default                      | activate default | runtime adapter         |
 |----------|--------------------------------------|------------------|-------------------------|
-| shell    | `""` (kitty's platform default shell on host; `${SHELL:-sh}` falls back inside a `command_prefix`) | active | kitty terminal |
+| shell    | `""` (kitty's platform default shell on host; `${SHELL:-sh}` falls back inside a `interactive_prefix`) | active | kitty terminal |
 | editor   | `nvim`                               | active           | shared nvim adapter     |
 | browser  | xdg-detected default browser         | inactive         | session browser adapter |
 
@@ -130,7 +132,7 @@ Window resolution at session entry, layered with later sources overriding earlie
 
 On first session entry, hop ensures the shell window unconditionally (regardless of activate), then dispatches every remaining active window to its runtime adapter (editor → nvim, browser → session browser, everything else → kitty terminal). Re-entry from another workspace ensures only the shell window — the activation sweep never re-fires for a still-live session.
 
-Backend selection (below) is independent of layouts: any session's backend wraps every layout/top-level window's command through `command_prefix`.
+Backend selection (below) is independent of layouts: any session's backend wraps every layout/top-level window's command through `interactive_prefix`.
 
 Backend selection at session creation:
 
@@ -144,11 +146,11 @@ Overriding `activate` in a project file changes which backend wins auto-detect: 
 
 The name `"host"` is reserved for the implicit fallback. An explicit `[backends.host]` table in either config file is ignored.
 
-The chosen backend (resolved commands + discovered workspace path) is persisted in `${XDG_RUNTIME_DIR}/hop/sessions/<name>.json` at session bootstrap. Every subsequent command against that session reads the persisted backend — auto-detect is not re-run mid-session, so global-config edits don't change a live session.
+The chosen backend (resolved commands + both prefixes) is persisted in `${XDG_RUNTIME_DIR}/hop/sessions/<name>.json` at session bootstrap. Every subsequent command against that session reads the persisted backend — auto-detect is not re-run mid-session, so global-config edits don't change a live session.
 
-For backends with a shared filesystem and a discovered workspace path, hop translates terminal cwds (e.g. `/workspace/...` for a devcontainer) back to host paths whenever the kitten dispatch resolves a file target from visible terminal output. The translation is a backend method, so the rest of the codebase (kitten, target resolver, commands) is backend-agnostic.
+For file targets resolved by the open-selection kitten, hop consults the focused session's backend through `hop.focused.paths_exist`: relative candidates are resolved against the focused window's in-shell cwd (from kitty's per-session socket, via OSC 7), then `backend.paths_exist` runs a single shell loop inside the backend (wrapping `<noninteractive_prefix> sh -c '<while-read>'`) and reports which paths exist. The kitten itself owns no session, backend, or IPC awareness — it just calls `paths_exist` and yields marks for the survivors.
 
-For URL targets, hop applies the same backend-method indirection: if the dispatched URL's host is `localhost`, `127.0.0.1`, or `0.0.0.0`, the backend rewrites it via `host_translate` (replacing the host) and/or `port_translate` (replacing the port) before the URL reaches the session browser. This keeps `http://localhost:3000` printed inside a container's network namespace from being handed to the host browser unchanged. URLs whose host is not one of those three sentinels pass through untouched.
+For URL targets, hop applies a backend-method indirection: if the dispatched URL's host is `localhost`, `127.0.0.1`, or `0.0.0.0`, the backend rewrites it via `host_translate` (replacing the host) and/or `port_translate` (replacing the port) before the URL reaches the session browser. This keeps `http://localhost:3000` printed inside a container's network namespace from being handed to the host browser unchanged. URLs whose host is not one of those three sentinels pass through untouched.
 
 The kitty per-session socket is a filesystem socket at `${XDG_RUNTIME_DIR}/hop/kitty-<session>.sock`. Linux abstract-namespace sockets (`unix:@…`) would not be reachable from inside a container's network namespace, so a filesystem socket is used even for host-backend sessions for forward-compatibility with future in-container hop callers.
 

@@ -9,7 +9,6 @@ from typing import Callable, Protocol, Sequence
 from hop.backends import (
     CommandBackend,
     CommandRunner,
-    HostBackend,
     SessionBackend,
     backend_from_config,
     default_runner,
@@ -54,7 +53,6 @@ from hop.session import ProjectSession, resolve_project_session
 from hop.state import (
     BackendRecord,
     CommandBackendRecord,
-    HostBackendRecord,
     SessionState,
     load_sessions,
     record_session,
@@ -158,8 +156,9 @@ class SessionBackendRegistry:
 
         # No persisted state and no in-process override: a command running
         # against a session that hop never bootstrapped (e.g. someone calling
-        # hop run from a workspace created by hand). Fall back to host.
-        return HostBackend()
+        # hop run from a workspace created by hand). Fall back to the built-in
+        # host backend so adapter code always has a concrete backend in hand.
+        return _builtin_host_backend()
 
     def resolve_for_entry(
         self,
@@ -195,20 +194,17 @@ class SessionBackendRegistry:
                 configured,
                 pinned_name=backend_name,
             )
-        if chosen is None:
-            return HostBackend()
         backend = (
             backend_from_config(chosen, runner=self._runner)
             if self._runner is not None
             else backend_from_config(chosen)
         )
-        # Prepare the backend (e.g. compose up -d) and discover the workspace
-        # path before any role terminals are launched. Both happen here so the
-        # backend persisted in session state already carries workspace_path;
-        # the bootstrap path doesn't have to repeat the discovery.
+        # Prepare the backend (e.g. compose up -d) before any role terminals
+        # are launched. Nothing else needs to happen at session bootstrap —
+        # the kitten's path-existence query is driven dynamically through
+        # ``backend.paths_exist`` and the backend's command prefixes.
         backend.prepare(session)
-        workspace_path = backend.discover_workspace(session)
-        return backend.with_workspace_path(workspace_path)
+        return backend
 
     def resolve_windows_for_entry(self, session: ProjectSession) -> tuple[WindowSpec, ...]:
         merged = self._merged_config(session)
@@ -230,34 +226,42 @@ class SessionBackendRegistry:
         self._overrides.pop(session_name, None)
 
 
-def _backend_from_record(record: BackendRecord) -> SessionBackend:
-    if isinstance(record, CommandBackendRecord):
-        return CommandBackend(
-            name=record.name,
-            command_prefix=record.command_prefix,
-            prepare_command=record.prepare,
-            teardown_command=record.teardown,
-            workspace_command=record.workspace_command,
-            workspace_path=record.workspace_path,
-            port_translate_command=record.port_translate_command,
-            host_translate_command=record.host_translate_command,
-        )
-    return HostBackend()
+def backend_from_record(record: BackendRecord) -> SessionBackend:
+    """Reconstruct a ``SessionBackend`` from a persisted ``BackendRecord``.
+
+    Public so the open-selection kitten (via ``hop.focused.paths_exist``)
+    can rebuild the focused session's backend without re-running auto-detect.
+    """
+
+    return CommandBackend(
+        name=record.name,
+        interactive_prefix=record.interactive_prefix,
+        noninteractive_prefix=record.noninteractive_prefix,
+        prepare_command=record.prepare,
+        teardown_command=record.teardown,
+        port_translate_command=record.port_translate_command,
+        host_translate_command=record.host_translate_command,
+    )
+
+
+_backend_from_record = backend_from_record
 
 
 def _record_for_backend(backend: SessionBackend) -> BackendRecord:
-    if isinstance(backend, CommandBackend):
-        return CommandBackendRecord(
-            name=backend.name,
-            command_prefix=backend.command_prefix,
-            prepare=backend.prepare_command,
-            teardown=backend.teardown_command,
-            workspace_command=backend.workspace_command,
-            workspace_path=backend.workspace_path,
-            port_translate_command=backend.port_translate_command,
-            host_translate_command=backend.host_translate_command,
-        )
-    return HostBackendRecord()
+    assert isinstance(backend, CommandBackend), "SessionBackend Protocol is implemented by CommandBackend"
+    return CommandBackendRecord(
+        name=backend.name,
+        interactive_prefix=backend.interactive_prefix,
+        noninteractive_prefix=backend.noninteractive_prefix,
+        prepare=backend.prepare_command,
+        teardown=backend.teardown_command,
+        port_translate_command=backend.port_translate_command,
+        host_translate_command=backend.host_translate_command,
+    )
+
+
+def _builtin_host_backend() -> CommandBackend:
+    return CommandBackend(name="host", interactive_prefix="", noninteractive_prefix="")
 
 
 @dataclass(frozen=True, slots=True)

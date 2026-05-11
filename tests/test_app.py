@@ -8,7 +8,7 @@ from typing import Mapping, Sequence
 import pytest
 
 from hop.app import HopServices, execute_command
-from hop.backends import CommandBackend, HostBackend
+from hop.backends import CommandBackend
 from hop.commands import (
     BrowserCommand,
     EditCommand,
@@ -25,6 +25,19 @@ from hop.kitty import KittyRemoteControlAdapter, KittyWindow, KittyWindowContext
 from hop.session import ProjectSession
 from hop.state import SessionState
 from hop.sway import SwayWindow
+
+
+def _host_backend() -> CommandBackend:
+    return CommandBackend(name="host", interactive_prefix="", noninteractive_prefix="")
+
+
+def _is_host_backend(backend: object) -> bool:
+    return (
+        isinstance(backend, CommandBackend)
+        and backend.name == "host"
+        and backend.interactive_prefix == ""
+        and backend.noninteractive_prefix == ""
+    )
 
 
 class StubSwayAdapter:
@@ -750,8 +763,8 @@ def _devcontainer_config() -> BackendConfig:
         activate="test -f docker-compose.dev.yml",
         prepare="compose up -d devcontainer",
         teardown="compose down",
-        workspace="compose exec devcontainer pwd",
-        command_prefix="compose exec devcontainer",
+        interactive_prefix="compose exec devcontainer",
+        noninteractive_prefix="compose exec -T devcontainer",
     )
 
 
@@ -773,7 +786,7 @@ def test_session_base_registry_falls_back_to_host_when_no_config(tmp_path: Path)
 
     backend = registry.resolve_for_entry(_make_session(tmp_path), backend_name=None)
 
-    assert isinstance(backend, HostBackend)
+    assert _is_host_backend(backend)
 
 
 def test_session_base_registry_backend_host_returns_host_base(tmp_path: Path) -> None:
@@ -786,7 +799,7 @@ def test_session_base_registry_backend_host_returns_host_base(tmp_path: Path) ->
 
     calls: list[tuple[str, ...]] = []
 
-    def runner(args: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+    def runner(args: Sequence[str], cwd: Path, *, stdin: str | None = None) -> subprocess.CompletedProcess[str]:
         calls.append(tuple(args))
         return subprocess.CompletedProcess(args=list(args), returncode=0, stdout="", stderr="")
 
@@ -798,11 +811,12 @@ def test_session_base_registry_backend_host_returns_host_base(tmp_path: Path) ->
 
     backend = registry.resolve_for_entry(_make_session(tmp_path), backend_name="host")
 
-    assert isinstance(backend, HostBackend)
-    assert calls == []  # host short-circuits before any command runs
+    assert _is_host_backend(backend)
+    # host has no prepare/activate to run when pinned explicitly.
+    assert calls == []
 
 
-def test_session_base_registry_runs_default_then_prepare_and_discovers_workspace(
+def test_session_base_registry_runs_activate_then_prepare(
     tmp_path: Path,
 ) -> None:
     import subprocess
@@ -814,11 +828,8 @@ def test_session_base_registry_runs_default_then_prepare_and_discovers_workspace
 
     calls: list[tuple[str, ...]] = []
 
-    def runner(args: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+    def runner(args: Sequence[str], cwd: Path, *, stdin: str | None = None) -> subprocess.CompletedProcess[str]:
         calls.append(tuple(args))
-        # Discriminate by the inner shell command: workspace probe runs `pwd`.
-        if any("pwd" in part for part in args):
-            return subprocess.CompletedProcess(args=list(args), returncode=0, stdout="/workspace\n", stderr="")
         return subprocess.CompletedProcess(args=list(args), returncode=0, stdout="", stderr="")
 
     registry = SessionBackendRegistry(
@@ -831,14 +842,14 @@ def test_session_base_registry_runs_default_then_prepare_and_discovers_workspace
     backend = registry.resolve_for_entry(session, backend_name=None)
 
     assert isinstance(backend, CommandBackend)
-    assert backend.workspace_path == "/workspace"
+    assert backend.interactive_prefix == "compose exec devcontainer"
+    assert backend.noninteractive_prefix == "compose exec -T devcontainer"
     flock_args = calls[1][:2]
     assert flock_args[0] == "flock"
     assert flock_args[1].endswith(f"backend-{session.session_name}.lock")
     assert calls == [
-        ("sh", "-c", "test -f docker-compose.dev.yml"),  # default probe
+        ("sh", "-c", "test -f docker-compose.dev.yml"),  # activate probe
         flock_args + ("sh", "-c", "compose up -d devcontainer"),
-        ("sh", "-c", "compose exec devcontainer pwd"),
     ]
 
 
@@ -856,12 +867,14 @@ def test_session_base_registry_project_override_can_flip_autodetect(tmp_path: Pa
             BackendConfig(
                 name="primary",
                 activate="test -e .",  # would normally win
-                command_prefix="primary-prefix",
+                interactive_prefix="primary-prefix",
+                noninteractive_prefix="primary-prefix",
             ),
             BackendConfig(
                 name="secondary",
                 activate="test -e .",
-                command_prefix="secondary-prefix",
+                interactive_prefix="secondary-prefix",
+                noninteractive_prefix="secondary-prefix",
             ),
         )
     )
@@ -874,7 +887,7 @@ activate = "false"
 """,
     )
 
-    def runner(args: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+    def runner(args: Sequence[str], cwd: Path, *, stdin: str | None = None) -> subprocess.CompletedProcess[str]:
         # Activate probes go through `sh -c <command>`. Match on the substituted
         # command string: project-overridden "false" → returncode 1; everything
         # else (the secondary backend's "test -e .") succeeds.
@@ -905,12 +918,13 @@ def test_session_backend_registry_uses_project_only_backend_definition(tmp_path:
     (tmp_path / ".hop.toml").write_text(
         """
 [backends.project-only]
-activate       = "true"
-command_prefix = "my-prefix"
+activate                      = "true"
+interactive_prefix                = "my-prefix"
+noninteractive_prefix = "my-prefix"
 """,
     )
 
-    def runner(args: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+    def runner(args: Sequence[str], cwd: Path, *, stdin: str | None = None) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(args=list(args), returncode=0, stdout="", stderr="")
 
     registry = SessionBackendRegistry(
@@ -923,7 +937,7 @@ command_prefix = "my-prefix"
 
     assert isinstance(backend, CommandBackend)
     assert backend.name == "project-only"
-    assert backend.command_prefix == "my-prefix"
+    assert backend.interactive_prefix == "my-prefix"
 
 
 def test_session_backend_registry_project_only_backend_wins_autodetect(tmp_path: Path) -> None:
@@ -937,12 +951,13 @@ def test_session_backend_registry_project_only_backend_wins_autodetect(tmp_path:
     (tmp_path / ".hop.toml").write_text(
         """
 [backends.project-only]
-activate       = "true"
-command_prefix = "my-prefix"
+activate                      = "true"
+interactive_prefix                = "my-prefix"
+noninteractive_prefix = "my-prefix"
 """,
     )
 
-    def runner(args: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+    def runner(args: Sequence[str], cwd: Path, *, stdin: str | None = None) -> subprocess.CompletedProcess[str]:
         if args == ("sh", "-c", "true"):
             return subprocess.CompletedProcess(args=list(args), returncode=0, stdout="", stderr="")
         return subprocess.CompletedProcess(args=list(args), returncode=1, stdout="", stderr="")
@@ -969,14 +984,15 @@ def test_session_backend_registry_for_session_returns_override(tmp_path: Path) -
     session = _make_session(tmp_path)
     override = CommandBackend(
         name="overridden",
-        command_prefix="overridden-prefix",
+        interactive_prefix="overridden-prefix",
+        noninteractive_prefix="overridden-prefix",
     )
     registry.set_override(session.session_name, override)
 
     assert registry.for_session(session) is override
 
     registry.clear_override(session.session_name)
-    assert isinstance(registry.for_session(session), HostBackend)
+    assert _is_host_backend(registry.for_session(session))
 
 
 def test_session_backend_registry_for_session_returns_persisted_command_backend(
@@ -991,11 +1007,10 @@ def test_session_backend_registry_for_session_returns_persisted_command_backend(
             project_root=tmp_path,
             backend=CommandBackendRecord(
                 name="legacy",
-                command_prefix="legacy-prefix",
+                interactive_prefix="legacy-prefix",
                 prepare="legacy-prepare",
                 teardown="legacy-teardown",
-                workspace_command="legacy-workspace",
-                workspace_path="/legacy",
+                noninteractive_prefix="legacy-noninteractive",
             ),
         )
     }
@@ -1008,20 +1023,22 @@ def test_session_backend_registry_for_session_returns_persisted_command_backend(
 
     assert isinstance(backend, CommandBackend)
     assert backend.name == "legacy"
-    assert backend.workspace_path == "/legacy"
+    assert backend.noninteractive_prefix == "legacy-noninteractive"
 
 
-def test_session_backend_registry_for_session_returns_host_for_persisted_host_record(
+def test_session_backend_registry_for_session_returns_host_for_built_in_host_record(
     tmp_path: Path,
 ) -> None:
+    """A persisted record with name=host and empty prefixes round-trips to
+    the built-in host backend."""
     from hop.app import SessionBackendRegistry
-    from hop.state import HostBackendRecord, SessionState
+    from hop.state import CommandBackendRecord, SessionState
 
     persisted = {
         tmp_path.name: SessionState(
             name=tmp_path.name,
             project_root=tmp_path,
-            backend=HostBackendRecord(),
+            backend=CommandBackendRecord(name="host", interactive_prefix="", noninteractive_prefix=""),
         )
     }
     registry = SessionBackendRegistry(
@@ -1029,40 +1046,41 @@ def test_session_backend_registry_for_session_returns_host_for_persisted_host_re
         sessions_loader=lambda: persisted,
     )
 
-    assert isinstance(registry.for_session(_make_session(tmp_path)), HostBackend)
+    assert _is_host_backend(registry.for_session(_make_session(tmp_path)))
 
 
-def test_record_for_backend_round_trips_command_and_host_backends(tmp_path: Path) -> None:
-    from hop.app import _backend_from_record, _record_for_backend  # pyright: ignore[reportPrivateUsage]
-    from hop.state import CommandBackendRecord, HostBackendRecord
+def test_record_for_backend_round_trips_command_backend(tmp_path: Path) -> None:
+    """The round-trip ``CommandBackend → record → CommandBackend`` preserves
+    every field, including the host case (name=host, empty prefixes)."""
+    from hop.app import _record_for_backend, backend_from_record  # pyright: ignore[reportPrivateUsage]
+    from hop.state import CommandBackendRecord
 
     command = CommandBackend(
         name="devcontainer",
-        command_prefix="compose exec devcontainer",
+        interactive_prefix="compose exec devcontainer",
         prepare_command="compose up -d",
         teardown_command="compose down",
-        workspace_command="compose exec devcontainer pwd",
-        workspace_path="/workspace",
+        noninteractive_prefix="compose exec -T devcontainer",
     )
     record = _record_for_backend(command)
 
     assert record == CommandBackendRecord(
         name="devcontainer",
-        command_prefix="compose exec devcontainer",
+        interactive_prefix="compose exec devcontainer",
         prepare="compose up -d",
         teardown="compose down",
-        workspace_command="compose exec devcontainer pwd",
-        workspace_path="/workspace",
+        noninteractive_prefix="compose exec -T devcontainer",
     )
 
-    # Round-trip back to a runtime backend keeps command_prefix intact.
-    restored = _backend_from_record(record)
+    restored = backend_from_record(record)
     assert isinstance(restored, CommandBackend)
-    assert restored.command_prefix == "compose exec devcontainer"
+    assert restored.interactive_prefix == "compose exec devcontainer"
+    assert restored.noninteractive_prefix == "compose exec -T devcontainer"
 
-    host_record = _record_for_backend(HostBackend())
-    assert host_record == HostBackendRecord()
-    assert isinstance(_backend_from_record(host_record), HostBackend)
+    # Host round-trip: built-in backend ↔ built-in record.
+    host_record = _record_for_backend(_host_backend())
+    assert host_record == CommandBackendRecord(name="host", interactive_prefix="", noninteractive_prefix="")
+    assert _is_host_backend(backend_from_record(host_record))
 
 
 def test_persist_bootstrap_record_writes_session_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1076,7 +1094,8 @@ def test_persist_bootstrap_record_writes_session_state(tmp_path: Path, monkeypat
     )
     backend = CommandBackend(
         name="devcontainer",
-        command_prefix="compose exec devcontainer",
+        interactive_prefix="compose exec devcontainer",
+        noninteractive_prefix="compose exec -T devcontainer",
     )
 
     _persist_bootstrap_record(session, backend)
@@ -1128,8 +1147,8 @@ def test_session_base_registry_persisted_state_wins_over_autodetect(tmp_path: Pa
             project_root=tmp_path,
             backend=CommandBackendRecord(
                 name="legacy",
-                command_prefix="legacy-prefix",
-                workspace_path="/legacy",
+                interactive_prefix="legacy-prefix",
+                noninteractive_prefix="legacy-prefix -T",
             ),
         )
     }
@@ -1143,7 +1162,7 @@ def test_session_base_registry_persisted_state_wins_over_autodetect(tmp_path: Pa
 
     assert isinstance(backend, CommandBackend)
     assert backend.name == "legacy"
-    assert backend.workspace_path == "/legacy"
+    assert backend.noninteractive_prefix == "legacy-prefix -T"
 
 
 def test_session_base_registry_re_resolves_when_kitty_dead(tmp_path: Path) -> None:
@@ -1165,17 +1184,20 @@ def test_session_base_registry_re_resolves_when_kitty_dead(tmp_path: Path) -> No
             project_root=tmp_path,
             backend=CommandBackendRecord(
                 name="devcontainer",
-                command_prefix="compose exec devcontainer",
+                interactive_prefix="compose exec devcontainer",
                 prepare="compose up -d devcontainer",
-                workspace_path="/workspace",
+                noninteractive_prefix="compose exec -T devcontainer",
             ),
         )
     }
 
-    def runner(args: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+    def runner(args: Sequence[str], cwd: Path, *, stdin: str | None = None) -> subprocess.CompletedProcess[str]:
         del cwd
-        # The probe `test -f docker-compose.dev.yml` fails (no file present),
-        # so devcontainer auto-detect declines and we land on host.
+        # The devcontainer probe `test -f docker-compose.dev.yml` fails (no
+        # file present); the built-in host's "true" probe succeeds, so the
+        # auto-detect walk falls through to host as the implicit last match.
+        if args == ("sh", "-c", "true"):
+            return subprocess.CompletedProcess(args=list(args), returncode=0, stdout="", stderr="")
         return subprocess.CompletedProcess(args=list(args), returncode=1, stdout="", stderr="")
 
     registry = SessionBackendRegistry(
@@ -1190,4 +1212,4 @@ def test_session_base_registry_re_resolves_when_kitty_dead(tmp_path: Path) -> No
         kitty_alive=False,
     )
 
-    assert isinstance(backend, HostBackend)
+    assert _is_host_backend(backend)

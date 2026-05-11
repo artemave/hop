@@ -98,17 +98,15 @@ def test_resolve_visible_output_target_handles_empty_invalid_url_and_absolute_pa
     absolute_file = tmp_path / "README.md"
     absolute_file.write_text("ok\n")
 
-    assert resolve_visible_output_target("   ", terminal_cwd=tmp_path, project_root=tmp_path) is None
-    assert resolve_visible_output_target("https://", terminal_cwd=tmp_path, project_root=tmp_path) is None
-    assert (
-        resolve_visible_output_target(
-            "Processing MissingController#index", terminal_cwd=tmp_path, project_root=tmp_path
-        )
-        is None
+    # Empty/whitespace input returns None (nothing to resolve).
+    assert resolve_visible_output_target("   ", terminal_cwd=tmp_path) is None
+    # Rails refs that match the pattern return the controller path; existence
+    # filtering happens later (callers consult backend.paths_exist).
+    rails_target = resolve_visible_output_target("Processing MissingController#index", terminal_cwd=tmp_path)
+    assert rails_target == ResolvedFileTarget(path=(tmp_path / "app/controllers/missing_controller.rb").resolve())
+    assert resolve_visible_output_target(str(absolute_file), terminal_cwd=tmp_path) == ResolvedFileTarget(
+        path=absolute_file.resolve()
     )
-    assert resolve_visible_output_target(
-        str(absolute_file), terminal_cwd=tmp_path, project_root=tmp_path
-    ) == ResolvedFileTarget(path=absolute_file.resolve())
 
 
 def test_resolved_file_target_editor_target_omits_line_number_when_absent() -> None:

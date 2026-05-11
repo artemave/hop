@@ -245,7 +245,9 @@ def test_sweep_stale_persisted_sessions_forgets_sessions_with_no_live_workspace(
     tmp_path: Path,
 ) -> None:
     from hop.daemon import sweep_stale_persisted_sessions
-    from hop.state import HostBackendRecord, SessionState
+    from hop.state import CommandBackendRecord, SessionState
+
+    host_record = CommandBackendRecord(name="host", interactive_prefix="", noninteractive_prefix="")
 
     class _SwayWithWorkspaces:
         def list_session_workspaces(self, *, prefix: str = "p:") -> tuple[str, ...]:
@@ -255,8 +257,8 @@ def test_sweep_stale_persisted_sessions_forgets_sessions_with_no_live_workspace(
 
     forgotten: list[str] = []
     sessions = {
-        "live": SessionState(name="live", project_root=tmp_path, backend=HostBackendRecord()),
-        "stale": SessionState(name="stale", project_root=tmp_path, backend=HostBackendRecord()),
+        "live": SessionState(name="live", project_root=tmp_path, backend=host_record),
+        "stale": SessionState(name="stale", project_root=tmp_path, backend=host_record),
     }
 
     sweep_stale_persisted_sessions(

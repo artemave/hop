@@ -302,30 +302,17 @@ def test_open_target_omits_line_jump_when_target_has_no_line_suffix() -> None:
     assert payload["data"] == (f"text:{NORMAL_MODE}:exec 'drop '.fnameescape('app/models/user.rb'){CR}")
 
 
-def test_open_target_translates_host_path_via_backend(tmp_path: Path) -> None:
-    """For backends whose nvim runs in a different filesystem (e.g. devcontainer),
-    `:drop <host_path>` would fail. The editor adapter must rewrite the path via
-    the backend's translate_host_path before sending the keystrokes."""
-    project_root = build_session().project_root
-
+def test_open_target_passes_path_through_to_nvim_unchanged() -> None:
+    """The editor adapter no longer rewrites the target — paths arrive in
+    the active backend's namespace (because the kitten resolved them against
+    the source window's in-shell cwd and asked the backend whether they
+    exist). The adapter just splits off the optional line suffix and hands
+    everything to nvim's :drop unchanged."""
     factory = TransportFactory(ls_response=make_ls_response(kitty_window_id=77))
     sway = StubSwayAdapter([build_marked_editor_window(31)])
+    adapter = make_adapter(sway=sway, factory=factory)
 
-    class FakeBackend:
-        def translate_host_path(self, _session: ProjectSession, host_path: Path) -> Path:
-            try:
-                relative = host_path.relative_to(project_root)
-            except ValueError:
-                return host_path
-            return Path("/workspace") / relative
-
-    adapter = make_adapter(
-        sway=sway,
-        factory=factory,
-        session_backend_for=lambda _session: FakeBackend(),  # type: ignore[arg-type]
-    )
-
-    adapter.open_target(build_session(), target=str(project_root / "lib/foo.py:42"))
+    adapter.open_target(build_session(), target="/workspace/lib/foo.py:42")
 
     transport = factory.for_session("demo")
     _, payload = transport.commands[-1]
@@ -333,7 +320,7 @@ def test_open_target_translates_host_path_via_backend(tmp_path: Path) -> None:
     data = payload["data"]
     assert isinstance(data, str)
     assert "/workspace/lib/foo.py" in data
-    assert str(project_root) not in data
+    assert ":42" in data
 
 
 def test_launch_composes_editor_then_shell_through_backend_inline() -> None:

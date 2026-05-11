@@ -6,13 +6,17 @@ import pytest
 from hop.session import ProjectSession
 from hop.state import (
     CommandBackendRecord,
-    HostBackendRecord,
     SessionState,
     default_sessions_dir,
     forget_session,
     load_sessions,
     record_session,
 )
+
+
+def _host_record() -> CommandBackendRecord:
+    """Hop's built-in ``host`` record — empty prefixes, no other fields."""
+    return CommandBackendRecord(name="host", interactive_prefix="", noninteractive_prefix="")
 
 
 def make_session(*, name: str, project_root: Path) -> ProjectSession:
@@ -24,6 +28,8 @@ def make_session(*, name: str, project_root: Path) -> ProjectSession:
 
 
 def test_record_session_writes_host_payload(tmp_path: Path) -> None:
+    """``record_session`` with no backend uses hop's built-in host record:
+    a regular command record with name=host and empty prefixes."""
     sessions_dir = tmp_path / "sessions"
     session = make_session(name="demo", project_root=tmp_path / "demo")
 
@@ -33,7 +39,12 @@ def test_record_session_writes_host_payload(tmp_path: Path) -> None:
     assert payload == {
         "name": "demo",
         "project_root": str(tmp_path / "demo"),
-        "backend": {"type": "host"},
+        "backend": {
+            "type": "command",
+            "name": "host",
+            "interactive_prefix": "",
+            "noninteractive_prefix": "",
+        },
     }
 
 
@@ -45,11 +56,10 @@ def test_record_session_persists_command_backend_record(tmp_path: Path) -> None:
         session,
         backend=CommandBackendRecord(
             name="devcontainer",
-            command_prefix="podman-compose -f docker-compose.dev.yml exec devcontainer",
+            interactive_prefix="podman-compose -f docker-compose.dev.yml exec devcontainer",
             prepare="podman-compose up -d devcontainer",
             teardown="podman-compose down",
-            workspace_command="podman-compose exec devcontainer pwd",
-            workspace_path="/workspace",
+            noninteractive_prefix="podman-compose -f docker-compose.dev.yml exec -T devcontainer",
         ),
         sessions_dir=sessions_dir,
     )
@@ -58,26 +68,32 @@ def test_record_session_persists_command_backend_record(tmp_path: Path) -> None:
     assert payload["backend"] == {
         "type": "command",
         "name": "devcontainer",
-        "command_prefix": "podman-compose -f docker-compose.dev.yml exec devcontainer",
+        "interactive_prefix": "podman-compose -f docker-compose.dev.yml exec devcontainer",
         "prepare": "podman-compose up -d devcontainer",
         "teardown": "podman-compose down",
-        "workspace_command": "podman-compose exec devcontainer pwd",
-        "workspace_path": "/workspace",
+        "noninteractive_prefix": "podman-compose -f docker-compose.dev.yml exec -T devcontainer",
     }
 
 
 def test_record_session_omits_optional_fields(tmp_path: Path) -> None:
+    """Optional lifecycle / translate fields are dropped from the JSON when
+    unset; required fields (name + both prefixes) always appear."""
     sessions_dir = tmp_path / "sessions"
     session = make_session(name="demo", project_root=tmp_path / "demo")
 
     record_session(
         session,
-        backend=CommandBackendRecord(name="ssh"),
+        backend=CommandBackendRecord(name="ssh", interactive_prefix="ssh host", noninteractive_prefix="ssh host"),
         sessions_dir=sessions_dir,
     )
 
     payload = json.loads((sessions_dir / "demo.json").read_text())
-    assert payload["backend"] == {"type": "command", "name": "ssh"}
+    assert payload["backend"] == {
+        "type": "command",
+        "name": "ssh",
+        "interactive_prefix": "ssh host",
+        "noninteractive_prefix": "ssh host",
+    }
 
 
 def test_record_session_persists_translate_commands(tmp_path: Path) -> None:
@@ -88,7 +104,8 @@ def test_record_session_persists_translate_commands(tmp_path: Path) -> None:
         session,
         backend=CommandBackendRecord(
             name="devcontainer",
-            command_prefix="compose exec devcontainer",
+            interactive_prefix="compose exec devcontainer",
+            noninteractive_prefix="compose exec -T devcontainer",
             port_translate_command="compose port devcontainer {port}",
             host_translate_command="echo myserver",
         ),
@@ -133,11 +150,10 @@ def test_load_sessions_decodes_command_backend_record(tmp_path: Path) -> None:
                 "backend": {
                     "type": "command",
                     "name": "devcontainer",
-                    "command_prefix": "compose exec devcontainer",
+                    "interactive_prefix": "compose exec devcontainer",
                     "prepare": "compose up -d devcontainer",
                     "teardown": "compose down",
-                    "workspace_command": "compose exec devcontainer pwd",
-                    "workspace_path": "/workspace",
+                    "noninteractive_prefix": "compose exec -T devcontainer",
                 },
             }
         )
@@ -147,15 +163,46 @@ def test_load_sessions_decodes_command_backend_record(tmp_path: Path) -> None:
 
     assert sessions["alpha"].backend == CommandBackendRecord(
         name="devcontainer",
-        command_prefix="compose exec devcontainer",
+        interactive_prefix="compose exec devcontainer",
         prepare="compose up -d devcontainer",
         teardown="compose down",
-        workspace_command="compose exec devcontainer pwd",
-        workspace_path="/workspace",
+        noninteractive_prefix="compose exec -T devcontainer",
     )
 
 
-def test_load_sessions_decodes_explicit_host_record(tmp_path: Path) -> None:
+def test_load_sessions_silently_drops_legacy_workspace_keys(tmp_path: Path) -> None:
+    """Old session JSONs may carry the deleted ``workspace_command`` /
+    ``workspace_path`` keys *and* lack the required
+    ``noninteractive_prefix``; the decoder treats them as stale and
+    decodes as the built-in host so the next entry re-bootstraps fresh."""
+
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir()
+    (sessions_dir / "alpha.json").write_text(
+        json.dumps(
+            {
+                "name": "alpha",
+                "project_root": "/projects/alpha",
+                "backend": {
+                    "type": "command",
+                    "name": "devcontainer",
+                    "interactive_prefix": "compose exec devcontainer",
+                    "workspace_command": "compose exec devcontainer pwd",
+                    "workspace_path": "/workspace",
+                },
+            }
+        )
+    )
+
+    sessions = load_sessions(sessions_dir=sessions_dir)
+
+    assert sessions["alpha"].backend == _host_record()
+
+
+def test_load_sessions_falls_back_to_host_record_for_legacy_host_type(tmp_path: Path) -> None:
+    """Old persisted state used a separate ``{"type": "host"}`` record; the
+    new shape has a single record type with empty prefixes for the
+    built-in host. Legacy records decode as that built-in host."""
     sessions_dir = tmp_path / "sessions"
     sessions_dir.mkdir()
     (sessions_dir / "alpha.json").write_text(
@@ -170,7 +217,7 @@ def test_load_sessions_decodes_explicit_host_record(tmp_path: Path) -> None:
 
     sessions = load_sessions(sessions_dir=sessions_dir)
 
-    assert sessions["alpha"].backend == HostBackendRecord()
+    assert sessions["alpha"].backend == _host_record()
 
 
 def test_load_sessions_skips_non_json_and_wrong_shape_files(tmp_path: Path) -> None:
@@ -186,7 +233,7 @@ def test_load_sessions_skips_non_json_and_wrong_shape_files(tmp_path: Path) -> N
         "alpha": SessionState(
             name="alpha",
             project_root=Path("/projects/alpha"),
-            backend=HostBackendRecord(),
+            backend=_host_record(),
         )
     }
 
@@ -201,6 +248,9 @@ def test_load_sessions_raises_on_malformed_json(tmp_path: Path) -> None:
 
 
 def test_load_sessions_drops_optional_command_fields_when_not_strings(tmp_path: Path) -> None:
+    """Non-string values in optional command fields decode as None. Required
+    fields (the two prefixes) are still respected — if any non-string value
+    appears there, the whole record falls back to host."""
     sessions_dir = tmp_path / "sessions"
     sessions_dir.mkdir()
     (sessions_dir / "alpha.json").write_text(
@@ -211,10 +261,11 @@ def test_load_sessions_drops_optional_command_fields_when_not_strings(tmp_path: 
                 "backend": {
                     "type": "command",
                     "name": "devcontainer",
-                    "command_prefix": "compose exec devcontainer",
+                    "interactive_prefix": "compose exec devcontainer",
+                    "noninteractive_prefix": "compose exec -T devcontainer",
                     "prepare": ["legacy", "list"],
                     "teardown": None,
-                    "workspace_command": 42,
+                    "port_translate_command": 42,
                 },
             }
         )
@@ -224,17 +275,18 @@ def test_load_sessions_drops_optional_command_fields_when_not_strings(tmp_path: 
 
     assert sessions["alpha"].backend == CommandBackendRecord(
         name="devcontainer",
-        command_prefix="compose exec devcontainer",
+        interactive_prefix="compose exec devcontainer",
+        noninteractive_prefix="compose exec -T devcontainer",
         prepare=None,
         teardown=None,
-        workspace_command=None,
+        port_translate_command=None,
     )
 
 
 def test_load_sessions_falls_back_to_host_for_legacy_windows_array(tmp_path: Path) -> None:
-    """Pre-redesign records persisted a `windows` array on the command record.
-    That shape is no longer recognized; old payloads are treated as stale and
-    decode as host so the next entry re-bootstraps fresh."""
+    """Pre-redesign records persisted a `windows` array on the command record
+    without the required two-prefixes shape. The decoder treats them as stale
+    and falls back to the built-in host so the next entry re-bootstraps fresh."""
     sessions_dir = tmp_path / "sessions"
     sessions_dir.mkdir()
     (sessions_dir / "alpha.json").write_text(
@@ -255,9 +307,7 @@ def test_load_sessions_falls_back_to_host_for_legacy_windows_array(tmp_path: Pat
 
     sessions = load_sessions(sessions_dir=sessions_dir)
 
-    # `windows` is silently ignored — record decodes with no command_prefix.
-    assert isinstance(sessions["alpha"].backend, CommandBackendRecord)
-    assert sessions["alpha"].backend.command_prefix is None
+    assert sessions["alpha"].backend == _host_record()
 
 
 def test_load_sessions_falls_back_to_host_for_command_record_without_string_name(tmp_path: Path) -> None:
@@ -274,7 +324,7 @@ def test_load_sessions_falls_back_to_host_for_command_record_without_string_name
                 "backend": {
                     "type": "command",
                     # name is missing entirely.
-                    "command_prefix": "compose exec devcontainer",
+                    "interactive_prefix": "compose exec devcontainer",
                 },
             }
         )
@@ -282,13 +332,13 @@ def test_load_sessions_falls_back_to_host_for_command_record_without_string_name
 
     sessions = load_sessions(sessions_dir=sessions_dir)
 
-    assert sessions["alpha"].backend == HostBackendRecord()
+    assert sessions["alpha"].backend == _host_record()
 
 
 def test_load_sessions_falls_back_to_host_for_legacy_flat_record(tmp_path: Path) -> None:
-    """A pre-windows record with flat shell/editor fields decodes under the
-    new schema with neither field recognized; the resulting record has no
-    command_prefix and the next session entry re-bootstraps fresh state."""
+    """A pre-windows record with flat shell/editor fields and no prefixes
+    decodes as the built-in host record; the next session entry
+    re-bootstraps fresh state."""
     sessions_dir = tmp_path / "sessions"
     sessions_dir.mkdir()
     (sessions_dir / "alpha.json").write_text(
@@ -308,8 +358,7 @@ def test_load_sessions_falls_back_to_host_for_legacy_flat_record(tmp_path: Path)
 
     sessions = load_sessions(sessions_dir=sessions_dir)
 
-    assert isinstance(sessions["alpha"].backend, CommandBackendRecord)
-    assert sessions["alpha"].backend.command_prefix is None
+    assert sessions["alpha"].backend == _host_record()
 
 
 def test_default_sessions_dir_honors_explicit_override(monkeypatch: pytest.MonkeyPatch) -> None:

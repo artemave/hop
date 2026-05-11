@@ -69,9 +69,10 @@ class LayoutConfig:
 class BackendConfig:
     """A named backend declared in a hop config file.
 
-    Backends carry only lifecycle commands (``prepare`` / ``teardown`` /
-    ``workspace`` / translate helpers) and a ``command_prefix`` that wraps
-    every window's command launched in this backend's environment.
+    Backends carry lifecycle commands (``prepare`` / ``teardown`` / translate
+    helpers), a ``interactive_prefix`` that wraps every window's command launched
+    in this backend's environment, and a ``noninteractive_prefix``
+    used for non-interactive backend operations like file-existence checks.
 
     Per-role launch commands live in top-level ``[layouts.<name>]`` and
     ``[windows.<role>]`` declarations, not on the backend.
@@ -81,18 +82,25 @@ class BackendConfig:
     are not eligible for auto-detect — they can only be picked by name
     (``hop --backend``).
 
-    ``workspace`` runs after ``prepare`` and its stdout (stripped) is the
-    path inside the backend that maps to the host project root.
+    ``noninteractive_prefix`` is the prefix hop uses when it pipes
+    stdin to the backend or otherwise runs non-interactively (e.g. the
+    file-existence check that drives the open-selection kitten's highlight
+    filter). For backends that allocate a TTY by default (podman-compose
+    exec), set this to the no-TTY variant (``... exec -T <service>``); for
+    backends that don't (ssh) pass the same string as ``interactive_prefix``.
+    Both prefixes must be present on every backend that ends up active —
+    hop's built-in ``host`` config supplies empty strings for the implicit
+    fallback.
     """
 
     name: str
     activate: str | None = None
     prepare: str | None = None
     teardown: str | None = None
-    workspace: str | None = None
     port_translate: str | None = None
     host_translate: str | None = None
-    command_prefix: str | None = None
+    interactive_prefix: str | None = None
+    noninteractive_prefix: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,6 +128,25 @@ class HopConfig:
     debug_log: bool | str | None = None
 
 
+# Hop's built-in ``host`` backend — the implicit auto-detect fallback. Lives
+# at the bottom of the merged backend list with ``activate = "true"`` so the
+# walk always ends with a guaranteed match. Users can override any field by
+# declaring ``[backends.host]`` in their global or project config; the merge
+# layers project > global > builtin per field.
+_BUILTIN_HOST_BACKEND = BackendConfig(
+    name=HOST_BACKEND_NAME,
+    activate="true",
+    interactive_prefix="",
+    noninteractive_prefix="",
+)
+
+
+def builtin_config() -> "HopConfig":
+    """Hop-shipped defaults layered under user config at merge time."""
+
+    return HopConfig(backends=(_BUILTIN_HOST_BACKEND,))
+
+
 def default_global_config_path() -> Path:
     base = os.environ.get("XDG_CONFIG_HOME")
     root = Path(base).expanduser() if base else Path.home() / ".config"
@@ -137,16 +164,52 @@ def load_project_config(project_root: Path | str) -> HopConfig:
 
 
 def merge_configs(project: HopConfig, global_: HopConfig) -> HopConfig:
-    """Merge a project and global HopConfig into one, project-wins-per-field."""
+    """Merge a project and global HopConfig into one, project-wins-per-field.
 
+    Hop's built-in ``host`` backend is layered in below ``global_`` so it
+    always shows up at the bottom of auto-detect — and so users can override
+    it from either config file by declaring ``[backends.host]``.
+    """
+
+    global_with_builtin = _layer_builtin_backends(global_)
     return HopConfig(
-        backends=merge_backends(project, global_),
-        layouts=merge_layouts(project, global_),
-        windows=merge_windows(project, global_),
+        backends=merge_backends(project, global_with_builtin),
+        layouts=merge_layouts(project, global_with_builtin),
+        windows=merge_windows(project, global_with_builtin),
         workspace_layout=(
-            project.workspace_layout if project.workspace_layout is not None else global_.workspace_layout
+            project.workspace_layout if project.workspace_layout is not None else global_with_builtin.workspace_layout
         ),
-        debug_log=(project.debug_log if project.debug_log is not None else global_.debug_log),
+        debug_log=(project.debug_log if project.debug_log is not None else global_with_builtin.debug_log),
+    )
+
+
+def _layer_builtin_backends(global_: HopConfig) -> HopConfig:
+    """Append hop's built-in backends to ``global_``, per-field overridden.
+
+    A user-declared ``[backends.host]`` in the global config still wins:
+    its fields override the built-in's (and remain in the global slot in
+    declaration order). The built-in only contributes whatever the user
+    didn't set, plus its slot at the *bottom* of the list when the user
+    didn't declare ``host`` at all.
+    """
+
+    builtin = builtin_config()
+    seen: set[str] = set()
+    merged: list[BackendConfig] = []
+    for entry in global_.backends:
+        seen.add(entry.name)
+        builtin_match = next((b for b in builtin.backends if b.name == entry.name), None)
+        merged.append(_merge_backend_pair(entry, builtin_match) if builtin_match is not None else entry)
+    for entry in builtin.backends:
+        if entry.name in seen:
+            continue
+        merged.append(entry)
+    return HopConfig(
+        backends=tuple(merged),
+        layouts=global_.layouts,
+        windows=global_.windows,
+        workspace_layout=global_.workspace_layout,
+        debug_log=global_.debug_log,
     )
 
 
@@ -216,10 +279,16 @@ def _merge_backend_pair(project: BackendConfig, global_: BackendConfig) -> Backe
         activate=project.activate if project.activate is not None else global_.activate,
         prepare=project.prepare if project.prepare is not None else global_.prepare,
         teardown=project.teardown if project.teardown is not None else global_.teardown,
-        workspace=project.workspace if project.workspace is not None else global_.workspace,
         port_translate=(project.port_translate if project.port_translate is not None else global_.port_translate),
         host_translate=(project.host_translate if project.host_translate is not None else global_.host_translate),
-        command_prefix=(project.command_prefix if project.command_prefix is not None else global_.command_prefix),
+        interactive_prefix=(
+            project.interactive_prefix if project.interactive_prefix is not None else global_.interactive_prefix
+        ),
+        noninteractive_prefix=(
+            project.noninteractive_prefix
+            if project.noninteractive_prefix is not None
+            else global_.noninteractive_prefix
+        ),
     )
 
 
@@ -261,15 +330,16 @@ _BACKEND_FIELDS = (
     "activate",
     "prepare",
     "teardown",
-    "workspace",
     "port_translate",
     "host_translate",
-    "command_prefix",
+    "interactive_prefix",
+    "noninteractive_prefix",
 )
 _LAYOUT_FIELDS = ("activate", "windows")
 _WINDOW_FIELDS = ("command", "activate")
 _LEGACY_FLAT_BACKEND_FIELDS = ("shell", "editor")
 _LEGACY_BACKEND_WINDOWS_FIELD = "windows"
+_LEGACY_WORKSPACE_FIELD = "workspace"
 _TOP_LEVEL_KEYS = ("backends", "layouts", "windows", "workspace_layout", "debug_log")
 
 
@@ -337,9 +407,6 @@ def _parse_backends(raw: object, *, source: Path) -> tuple[BackendConfig, ...]:
 
     parsed: list[BackendConfig] = []
     for name, value in cast(dict[str, Any], raw).items():
-        if name == HOST_BACKEND_NAME:
-            msg = f"{source}: backend name {HOST_BACKEND_NAME!r} is reserved for the implicit host backend"
-            raise HopConfigError(msg)
         if not isinstance(value, dict):
             msg = f"{source}: backend {name!r} must be a table, got {type(value).__name__}"
             raise HopConfigError(msg)
@@ -353,7 +420,7 @@ def _parse_backend(name: str, table: dict[str, Any], *, source: Path) -> Backend
         flat = legacy[0]
         msg = (
             f"{source}: backend {name!r} has top-level field {flat!r}; that field was removed. "
-            f"Built-in {flat!r} runs through the active backend's command_prefix; "
+            f"Built-in {flat!r} runs through the active backend's interactive_prefix; "
             f'override it with [windows.{flat}] command = "..." if you need a custom one.'
         )
         raise HopConfigError(msg)
@@ -361,7 +428,15 @@ def _parse_backend(name: str, table: dict[str, Any], *, source: Path) -> Backend
         msg = (
             f"{source}: backend {name!r} has a 'windows' sub-table; that shape was removed. "
             "Per-role launch commands now live in top-level [layouts.<name>] or [windows.<role>] "
-            "tables; backends carry only a command_prefix."
+            "tables; backends carry only a interactive_prefix."
+        )
+        raise HopConfigError(msg)
+    if _LEGACY_WORKSPACE_FIELD in table:
+        msg = (
+            f"{source}: backend {name!r} has a 'workspace' field; that field was removed. "
+            "File-existence checks now run inside the backend via the open-selection kitten, "
+            "using 'noninteractive_prefix' (defaults to interactive_prefix). "
+            "Drop the workspace line."
         )
         raise HopConfigError(msg)
 
@@ -374,10 +449,15 @@ def _parse_backend(name: str, table: dict[str, Any], *, source: Path) -> Backend
         activate=_parse_command(table, key="activate", context=f"backend {name!r}", source=source),
         prepare=_parse_command(table, key="prepare", context=f"backend {name!r}", source=source),
         teardown=_parse_command(table, key="teardown", context=f"backend {name!r}", source=source),
-        workspace=_parse_command(table, key="workspace", context=f"backend {name!r}", source=source),
         port_translate=_parse_command(table, key="port_translate", context=f"backend {name!r}", source=source),
         host_translate=_parse_command(table, key="host_translate", context=f"backend {name!r}", source=source),
-        command_prefix=_parse_command(table, key="command_prefix", context=f"backend {name!r}", source=source),
+        interactive_prefix=_parse_command(table, key="interactive_prefix", context=f"backend {name!r}", source=source),
+        noninteractive_prefix=_parse_command(
+            table,
+            key="noninteractive_prefix",
+            context=f"backend {name!r}",
+            source=source,
+        ),
     )
 
 

@@ -10,7 +10,7 @@ For a session whose backend is `devcontainer`, hop will:
 
 | Hop action | Hop runs |
 |---|---|
-| First entry into the session (`hop`) | the backend's `prepare` command, then its `workspace` command, then bootstraps kitty |
+| First entry into the session (`hop`) | the backend's `prepare` command, then bootstraps kitty |
 | Each role terminal | the backend's `shell` command (one per terminal — same container) |
 | `hop edit` | the backend's `editor` command (hop drives nvim by writing keystrokes to kitty's pty — no socket setup) |
 | `hop kill` | closes kitty windows, then runs the backend's `teardown` command |
@@ -65,11 +65,10 @@ Create `${XDG_CONFIG_HOME:-~/.config}/hop/config.toml`:
 
 ```toml
 [backends.devcontainer]
-activate       = "test -f docker-compose.dev.yml"
-prepare        = "podman-compose -f docker-compose.dev.yml up -d devcontainer"
-teardown       = "podman-compose -f docker-compose.dev.yml down"
-workspace      = "podman-compose -f docker-compose.dev.yml exec devcontainer pwd"
-port_translate = """
+activate              = "test -f docker-compose.dev.yml"
+prepare               = "podman-compose -f docker-compose.dev.yml up -d devcontainer"
+teardown              = "podman-compose -f docker-compose.dev.yml down"
+port_translate        = """
   podman ps -q \\
     --filter label=io.podman.compose.project=$(basename {project_root}) \\
     --filter label=io.podman.compose.service=devcontainer \\
@@ -77,10 +76,13 @@ port_translate = """
     | xargs -r -I@ podman port @ {port} \\
     | cut -d: -f2
 """
-command_prefix = "podman-compose -f docker-compose.dev.yml exec devcontainer"
+interactive_prefix    = "podman-compose -f docker-compose.dev.yml exec devcontainer"
+noninteractive_prefix = "podman-compose -f docker-compose.dev.yml exec -T devcontainer"
 ```
 
-The backend's `command_prefix` wraps every window command launched in this backend's environment. The built-in shell and editor (`${SHELL:-sh}` and `nvim`) automatically get the prefix prepended — you don't need to declare per-role commands here unless you want to override them.
+`interactive_prefix` wraps every window command launched in this backend's environment (kitty shells, the editor, browser). The built-in shell and editor (`${SHELL:-sh}` and `nvim`) automatically get the prefix prepended — you don't need to declare per-role commands here unless you want to override them.
+
+`noninteractive_prefix` is the prefix hop uses internally for non-interactive backend operations — currently the file-existence check that drives the open-selection kitten's highlight filter. It's required for every backend; for podman-compose the no-TTY variant is necessary (`exec -T <service>`) because the default `exec` allocates a TTY and eats hop's stdin pipe to the loop, causing the kitten to report nothing as existing.
 
 Each command is a single string. Hop runs it through `sh -c` after substituting placeholders, so pipes, redirects, and `$(...)` work — write the value the way you'd type it at a terminal. Triple-quoted strings (`"""…"""`) let you spread a longer pipeline across lines for readability. Placeholder values (`{project_root}`, `{port}`) are shell-quoted before insertion, so paths with spaces substitute safely.
 
@@ -115,7 +117,7 @@ You can verify the persisted state:
 cat $XDG_RUNTIME_DIR/hop/sessions/<project_name>.json
 ```
 
-The `backend.workspace_path` field shows the value `workspace` returned (e.g. `/workspace`) — that's what hop uses to translate container-cwd paths back to host paths in the kitten dispatch.
+The `backend.interactive_prefix` and `backend.noninteractive_prefix` fields are what hop wraps around every kitty launch and every non-interactive backend call (like the kitten's path-existence check).
 
 ## Project config
 
@@ -129,7 +131,7 @@ A single project file can override one field of a global backend, force/skip a b
 ```toml
 # Override one field of a global backend (this project's compose service is named "app").
 [backends.devcontainer]
-command_prefix = "docker compose -f compose.dev.yml exec app"
+interactive_prefix = "docker compose -f compose.dev.yml exec app"
 
 # Force a backend to win auto-detect in this project.
 # [backends.devcontainer]
@@ -152,9 +154,9 @@ command = "tail -f log/development.log"
 
 # Define a project-specific backend that doesn't exist globally.
 [backends.my-vm]
-activate       = "test -f .my-vm-marker"
-workspace      = "lima shell default -- pwd"
-command_prefix = "lima shell default --"
+activate                      = "test -f .my-vm-marker"
+interactive_prefix                = "lima shell default --"
+noninteractive_prefix = "lima shell default --"
 ```
 
 To force the host backend for a project, pass `hop --backend host` once at session creation (persisted), or override every configured backend's `activate` to a failing command.
@@ -231,7 +233,7 @@ tty: true
 stdin_open: true
 ```
 
-Verify with `podman ps` — if `STATUS` shows `Exited (0)` shortly after `hop`, that's the fingerprint. With `debug_log = true`, the bootstrap log will show `prepare` succeeding and `workspace` returning a path, but no further `compose exec` output, since the container died between the two.
+Verify with `podman ps` — if `STATUS` shows `Exited (0)` shortly after `hop`, that's the fingerprint. With `debug_log = true`, the bootstrap log will show `prepare` succeeding but no further `compose exec` output, since the container died after `prepare`.
 
 ### `hop` fails silently (especially from Vicinae)
 
@@ -261,9 +263,10 @@ Hop drives the in-container nvim by writing keystrokes (`<C-\><C-n>:exec 'drop '
 
 ### Open-selection kitten can't open files from terminal output
 
-Path translation requires the backend's `workspace` command to return a path that the host fs can find. If the kitten dispatches `lib/foo.py` and nothing happens, check `$XDG_RUNTIME_DIR/hop/open-selection.log` and confirm the persisted `backend.workspace_path` matches the prefix you'd expect to see in the container's cwd.
+The kitten asks the focused session's backend "do these paths exist?" through `noninteractive_prefix`. If files in the kitten's match list aren't highlighted (or don't dispatch), check:
 
-If `workspace` is omitted, hop skips translation entirely — file targets resolve against the raw container cwd, which won't exist on the host. Either add a `workspace` command to the backend or accept that hint-pick won't work for that backend.
+- `$XDG_RUNTIME_DIR/hop/open-selection.log` for the dispatch line.
+- With `debug_log = true`, the bootstrap log shows the synthesized `paths_exist` invocation. For `podman-compose`, you should see `... exec -T devcontainer sh -c 'while IFS= read -r p; ...'`. Missing `-T` is the most common pitfall — without it, podman-compose allocates a TTY and the stdin pipe is eaten.
 
 ### Open-selection kitten opens the wrong URL (or hits a dead port)
 
