@@ -844,9 +844,10 @@ def test_session_base_registry_runs_activate_then_prepare(
     assert isinstance(backend, CommandBackend)
     assert backend.interactive_prefix == "compose exec devcontainer"
     assert backend.noninteractive_prefix == "compose exec -T devcontainer"
-    flock_args = calls[1][:2]
+    flock_args = calls[1][:3]
     assert flock_args[0] == "flock"
-    assert flock_args[1].endswith(f"backend-{session.session_name}.lock")
+    assert flock_args[1] == "-o"
+    assert flock_args[2].endswith(f"backend-{session.session_name}.lock")
     assert calls == [
         ("sh", "-c", "test -f docker-compose.dev.yml"),  # activate probe
         flock_args + ("sh", "-c", "compose up -d devcontainer"),

@@ -412,5 +412,11 @@ def _flock_sh(command: str, *, session: ProjectSession) -> tuple[str, ...]:
     # leave podman-compose in an inconsistent state. flock(1) holds the lock
     # for the lifetime of the wrapped command, so even if our parent dies the
     # lock is held by the subprocess and the next caller blocks on it.
+    #
+    # ``-o`` closes the lock fd before exec'ing the wrapped command. Without
+    # it, any detached daemon the prepare spawns (podman's aardvark-dns is
+    # the one that bit us) inherits the fd and pins the lock open forever —
+    # the next prepare/teardown then blocks on flock with no recourse short
+    # of killing the daemon by hand.
     substituted = _substitute(command, session=session)
-    return ("flock", str(_backend_lock_path(session)), "sh", "-c", substituted)
+    return ("flock", "-o", str(_backend_lock_path(session)), "sh", "-c", substituted)

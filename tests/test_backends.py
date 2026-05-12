@@ -194,7 +194,7 @@ def test_command_backend_prepare_runs_prepare_command(tmp_path: Path, monkeypatc
     backend.prepare(build_session(tmp_path))
 
     lock = tmp_path / "hop" / f"backend-{tmp_path.name}.lock"
-    assert runner.calls == [(("flock", str(lock), "sh", "-c", "compose up -d devcontainer"), tmp_path, None)]
+    assert runner.calls == [(("flock", "-o", str(lock), "sh", "-c", "compose up -d devcontainer"), tmp_path, None)]
 
 
 def test_command_backend_prepare_is_noop_without_command(tmp_path: Path) -> None:
@@ -222,7 +222,7 @@ def test_command_backend_teardown_runs_teardown_command(tmp_path: Path, monkeypa
     backend.teardown(build_session(tmp_path))
 
     lock = tmp_path / "hop" / f"backend-{tmp_path.name}.lock"
-    assert runner.calls == [(("flock", str(lock), "sh", "-c", "compose down"), tmp_path, None)]
+    assert runner.calls == [(("flock", "-o", str(lock), "sh", "-c", "compose down"), tmp_path, None)]
 
 
 def test_command_backend_teardown_raises_on_failure(tmp_path: Path) -> None:
