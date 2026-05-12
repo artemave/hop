@@ -506,56 +506,94 @@ def test_daemon_clears_status_on_exit_even_when_main_loop_raises(
     assert read_status() is None
 
 
-def test_daemon_restart_signals_existing_then_starts_fresh(
+def test_daemon_restart_signals_existing_then_spawns_detached_and_exits(
     monkeypatch: pytest.MonkeyPatch,
-    regen_recorder: list[None],
-    stub_sessions: None,
 ) -> None:
-    """``hopd --restart`` calls ``signal_running_hopd_to_stop`` before
-    acquiring the lock, then proceeds normally."""
+    """``hopd --restart`` is a "kick the daemon" command — it must NOT
+    fall through to the foreground main loop. After signaling the old
+    daemon and spawning a detached new one, return 0 immediately so the
+    user's shell prompt comes back."""
     call_log: list[str] = []
 
     def fake_signal(**_kwargs: Any) -> bool:
         call_log.append("signal")
         return True
 
-    real_acquire = daemon.acquire_lock
+    def fake_spawn() -> None:
+        call_log.append("spawn")
 
-    def tracked_acquire() -> int:
-        call_log.append("acquire")
-        return real_acquire()
+    def trap_acquire() -> int:
+        # If --restart ever reaches acquire_lock, the new process would
+        # block on the sway IPC subscription — this is the regression
+        # the user reported.
+        raise AssertionError("--restart must not acquire the lock in the invoking process")
 
     monkeypatch.setattr(daemon, "signal_running_hopd_to_stop", fake_signal)
-    monkeypatch.setattr(daemon, "acquire_lock", tracked_acquire)
-    monkeypatch.setattr(daemon, "SwayIpcAdapter", lambda: StubSubscribingSway())
+    monkeypatch.setattr(daemon, "_spawn_detached_hopd", fake_spawn)
+    monkeypatch.setattr(daemon, "acquire_lock", trap_acquire)
 
     exit_code = daemon.main(["--restart"])
 
-    assert exit_code == 1  # subscription-ended path returns 1
-    assert call_log == ["signal", "acquire"]
-    # Regen still happened — full bootstrap, not just signal-and-exit.
-    assert len(regen_recorder) == 1
+    assert exit_code == 0
+    assert call_log == ["signal", "spawn"]
 
 
-def test_daemon_restart_proceeds_even_when_no_previous_daemon_was_running(
+def test_daemon_restart_still_spawns_when_no_previous_daemon_was_running(
     monkeypatch: pytest.MonkeyPatch,
-    regen_recorder: list[None],
-    stub_sessions: None,
 ) -> None:
-    """``--restart`` with no prior daemon is allowed — it just behaves
-    like a normal startup. The signal helper returns False; lock acquire
-    proceeds; regen runs."""
+    """``--restart`` with no prior daemon shouldn't be a no-op — the
+    user wants a daemon up. Signal returns False; we still spawn."""
+    spawned: list[bool] = []
 
     def fake_signal(**_kwargs: Any) -> bool:
         return False
 
+    def fake_spawn() -> None:
+        spawned.append(True)
+
     monkeypatch.setattr(daemon, "signal_running_hopd_to_stop", fake_signal)
-    monkeypatch.setattr(daemon, "SwayIpcAdapter", lambda: StubSubscribingSway())
+    monkeypatch.setattr(daemon, "_spawn_detached_hopd", fake_spawn)
+    monkeypatch.setattr(
+        daemon,
+        "acquire_lock",
+        lambda: (_ for _ in ()).throw(AssertionError("should not be reached")),
+    )
 
     exit_code = daemon.main(["--restart"])
 
-    assert exit_code == 1
-    assert len(regen_recorder) == 1
+    assert exit_code == 0
+    assert spawned == [True]
+
+
+def test_spawn_detached_hopd_uses_setsid_so_child_survives_parent_exit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The spawned daemon must not be tied to the invoking shell — SIGHUP
+    on parent exit would otherwise tear it down. Verify the Popen call
+    sets ``start_new_session=True`` (the Python equivalent of setsid)
+    and detaches all stdio."""
+    import subprocess
+
+    captured: dict[str, object] = {}
+
+    class FakePopen:
+        def __init__(self, args: list[str], **kwargs: object) -> None:
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+
+    monkeypatch.setattr(subprocess, "Popen", FakePopen)
+
+    daemon._spawn_detached_hopd()  # pyright: ignore[reportPrivateUsage]
+
+    assert captured["args"] == ["hopd"]
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    # The crucial invariant: new session = no controlling terminal =
+    # immune to SIGHUP from the parent shell.
+    assert kwargs["start_new_session"] is True
+    assert kwargs["stdin"] is subprocess.DEVNULL
+    assert kwargs["stdout"] is subprocess.DEVNULL
+    assert kwargs["stderr"] is subprocess.DEVNULL
 
 
 def test_daemon_restart_exits_when_signal_helper_cannot_stop_existing(

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import subprocess
 import sys
 import traceback
 from pathlib import Path
@@ -51,6 +52,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     scripts_dir = default_scripts_dir()
 
     if args.restart:
+        # --restart is a "kick the daemon" command, not a way to run hopd
+        # in the foreground. Signal the existing daemon, then spawn a
+        # detached replacement and return — the user's shell prompt
+        # comes back, the new hopd takes over the lock and the main
+        # loop. We deliberately do NOT acquire the lock ourselves: the
+        # newly spawned process does, after the old hopd has released
+        # it.
         try:
             signaled = signal_running_hopd_to_stop()
         except HopdAlreadyRunning as error:
@@ -59,6 +67,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 1
         if signaled:
             debug.log("hopd: --restart stopped previous daemon")
+        _spawn_detached_hopd()
+        return 0
 
     try:
         lock_fd = acquire_lock()
@@ -77,6 +87,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         # otherwise outlive us and falsely claim the daemon is alive.
         clear_status()
         os.close(lock_fd)
+
+
+def _spawn_detached_hopd() -> None:
+    """Fork off a fresh hopd, detached from the current shell session.
+
+    Mirrors what ``setsid -f hopd`` does in the vicinae daemon-down
+    entry: ``start_new_session=True`` calls ``setsid`` in the child so
+    the new process survives the parent's exit / terminal close, and
+    stdio gets pointed at /dev/null so the parent's shell stays quiet.
+    """
+
+    subprocess.Popen(  # noqa: S603
+        ["hopd"],
+        start_new_session=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
 
 
 def _run_main_loop(scripts_dir: Path) -> int:
