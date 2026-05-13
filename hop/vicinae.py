@@ -161,12 +161,17 @@ def _window_script(
     filename = _unique(WINDOW_FILENAME_PREFIX + _sanitize(role), used=used)
     title = f"Hop {role}"
     description = f"Open or focus the {role!r} window in the {session.session_name!r} hop session."
+    # `setsid -f` detaches hop into its own session so vicinae's SIGTERM
+    # (sent when its UI closes after the action fires) doesn't kill hop
+    # mid-bootstrap. Without it, a slow first-time `prepare` (compose
+    # recreate, image pull) leaves the user with "nothing happens" because
+    # hop dies before kitty launches.
     if role == EDITOR_ROLE:
-        body = "exec hop edit\n"
+        body = "exec setsid -f hop edit\n"
     elif role == BROWSER_ROLE:
-        body = "exec hop browser\n"
+        body = "exec setsid -f hop browser\n"
     else:
-        body = f"exec hop term --role {shlex.quote(role)}\n"
+        body = f"exec setsid -f hop term --role {shlex.quote(role)}\n"
     content = _render(
         title=title,
         description=description,
@@ -238,7 +243,11 @@ def _create_script() -> GeneratedScript:
             "fi\n"
             "\n"
             'cd "$HOME/$chosen"\n'
-            "exec hop\n"
+            # `setsid -f` detaches hop so vicinae's SIGTERM (sent when its
+            # UI closes after the action fires) doesn't kill it mid-prepare.
+            # A slow first-time `prepare` (compose recreate, image pull) is
+            # otherwise enough to lose the whole bootstrap.
+            "exec setsid -f hop\n"
         ),
     )
 
@@ -247,7 +256,9 @@ def _switch_script(session: SessionListing, *, used: set[str]) -> GeneratedScrip
     filename = _unique(SWITCH_FILENAME_PREFIX + _sanitize(session.name), used=used)
     title = f"Hop switch to {session.name}"
     description = f"Switch focus to the {session.name!r} hop session's workspace."
-    body = f"exec hop switch {shlex.quote(session.name)}\n"
+    # `setsid -f` for the same reason `_window_script` uses it — vicinae
+    # SIGTERMs the action on UI close.
+    body = f"exec setsid -f hop switch {shlex.quote(session.name)}\n"
     # Switch entries already name the target session in the title, so
     # the right-side label would be redundant. Empty packageName hides
     # the launcher's default ("scripts" — derived from the dir name).

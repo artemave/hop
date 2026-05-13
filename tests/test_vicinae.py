@@ -80,9 +80,11 @@ def test_dispatched_command_per_role() -> None:
     )
 
     by_filename = {script.filename: script.content for script in scripts}
-    assert "exec hop edit\n" in by_filename["hop-window-editor"]
-    assert "exec hop browser\n" in by_filename["hop-window-browser"]
-    assert "exec hop term --role console\n" in by_filename["hop-window-console"]
+    # `setsid -f` detaches hop from vicinae's SIGTERM-on-UI-close, so a
+    # slow first-time prepare can't be killed mid-bootstrap.
+    assert "exec setsid -f hop edit\n" in by_filename["hop-window-editor"]
+    assert "exec setsid -f hop browser\n" in by_filename["hop-window-browser"]
+    assert "exec setsid -f hop term --role console\n" in by_filename["hop-window-console"]
 
 
 def test_off_session_workspace_emits_only_session_switch_scripts() -> None:
@@ -123,7 +125,9 @@ def test_create_script_dispatches_to_vicinae_dmenu_over_home_directories() -> No
     assert "-printf '%P\\n'" in create.content
     # `hop` from the picked directory creates the session if missing or
     # attaches if it already exists — same dispatch hop's CLI uses.
-    assert 'cd "$HOME/$chosen"\nexec hop\n' in create.content
+    # `setsid -f` survives vicinae's SIGTERM-on-UI-close, so a slow
+    # first-time prepare can't be killed mid-bootstrap.
+    assert 'cd "$HOME/$chosen"\nexec setsid -f hop\n' in create.content
 
 
 def test_focused_workspace_with_unregistered_session_falls_back_to_off_session_set() -> None:
@@ -281,7 +285,7 @@ def test_switch_script_dispatches_hop_switch_with_quoted_session_name() -> None:
     )
     weird = next(s for s in scripts if "weird" in s.filename)
 
-    assert "exec hop switch 'weird name'\n" in weird.content
+    assert "exec setsid -f hop switch 'weird name'\n" in weird.content
 
 
 def test_reconcile_writes_target_files_with_executable_bit(tmp_path: Path) -> None:
