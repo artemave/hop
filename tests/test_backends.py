@@ -242,6 +242,48 @@ def test_command_backend_teardown_is_noop_without_command(tmp_path: Path) -> Non
     assert runner.calls == []
 
 
+# --- probe_workspace_path -------------------------------------------------
+
+
+def test_command_backend_probe_workspace_path_returns_stdout(tmp_path: Path) -> None:
+    """The probe runs ``<noninteractive_prefix> pwd`` and returns the
+    trimmed stdout, which is what gets cached on the persisted record."""
+    runner = RecordingRunner(stdout="/workspace\n")
+    backend = backend_from_config(
+        make_backend(noninteractive_prefix="compose exec -T devcontainer"),
+        runner=runner,
+    )
+
+    assert backend.probe_workspace_path(build_session(tmp_path)) == "/workspace"
+    assert runner.calls == [(("sh", "-c", "compose exec -T devcontainer pwd"), tmp_path, None)]
+
+
+def test_command_backend_probe_workspace_path_returns_none_for_empty_prefix(tmp_path: Path) -> None:
+    """The host backend has no prefix, so there's nothing useful to probe —
+    return ``None`` and skip the round-trip."""
+    runner = RecordingRunner()
+    backend = backend_from_config(make_backend(noninteractive_prefix=""), runner=runner)
+
+    assert backend.probe_workspace_path(build_session(tmp_path)) is None
+    assert runner.calls == []
+
+
+def test_command_backend_probe_workspace_path_returns_none_on_failure(tmp_path: Path) -> None:
+    """Probe failures are best-effort — a missing fallback degrades the
+    kitten's relative-path matching but doesn't fail bootstrap."""
+    runner = RecordingRunner(returncode=1, stderr="boom")
+    backend = backend_from_config(make_backend(), runner=runner)
+
+    assert backend.probe_workspace_path(build_session(tmp_path)) is None
+
+
+def test_command_backend_probe_workspace_path_returns_none_on_empty_stdout(tmp_path: Path) -> None:
+    runner = RecordingRunner(stdout="  \n")
+    backend = backend_from_config(make_backend(), runner=runner)
+
+    assert backend.probe_workspace_path(build_session(tmp_path)) is None
+
+
 # --- paths_exist ----------------------------------------------------------
 
 

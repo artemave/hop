@@ -808,7 +808,17 @@ def test_is_alive_returns_false_when_session_socket_is_unreachable() -> None:
 # --- get_focused_window_cwd ----------------------------------------------
 
 
-def _focused_window_payload(*, cwd: str | None, kitty_id: int = 17) -> dict[str, object]:
+def _focused_window_payload(
+    *,
+    cwd_of_child: str | None = None,
+    cwd: str | None = None,
+    kitty_id: int = 17,
+) -> dict[str, object]:
+    focused: dict[str, object] = {"id": kitty_id, "is_focused": True}
+    if cwd is not None:
+        focused["cwd"] = cwd
+    if cwd_of_child is not None:
+        focused["cwd_of_child"] = cwd_of_child
     return {
         "ok": True,
         "data": [
@@ -821,11 +831,7 @@ def _focused_window_payload(*, cwd: str | None, kitty_id: int = 17) -> dict[str,
                                 "is_focused": False,
                                 "cwd": "/somewhere/else",
                             },
-                            {
-                                "id": kitty_id,
-                                "is_focused": True,
-                                **({"cwd": cwd} if cwd is not None else {}),
-                            },
+                            focused,
                         ]
                     }
                 ]
@@ -834,15 +840,29 @@ def _focused_window_payload(*, cwd: str | None, kitty_id: int = 17) -> dict[str,
     }
 
 
-def test_get_focused_window_cwd_returns_cwd_for_focused_window() -> None:
+def test_get_focused_window_cwd_returns_cwd_of_child_for_focused_window() -> None:
     from hop.kitty import get_focused_window_cwd
 
-    factory = StubKittyFactory([_focused_window_payload(cwd="/workspace/src")])
+    factory = StubKittyFactory([_focused_window_payload(cwd_of_child="/workspace/src")])
 
     cwd = get_focused_window_cwd("demo", transport_factory=factory)
 
     assert cwd == Path("/workspace/src")
     assert factory.calls == [(SESSION_SOCKET, "ls", {"output_format": "json"})]
+
+
+def test_get_focused_window_cwd_ignores_process_cwd_without_cwd_of_child() -> None:
+    """Kitty's ``cwd`` is the kitty *process* cwd — for a container session
+    that's the host launch directory (e.g. ``/home/me/projects/foo``), not
+    where the in-container shell is. Returning it would make every relative
+    candidate from the kitten resolve against a host path that doesn't exist
+    inside the backend. The function must report ``None`` here so callers
+    fall back to ``backend.workspace_path`` (or to the project root)."""
+    from hop.kitty import get_focused_window_cwd
+
+    factory = StubKittyFactory([_focused_window_payload(cwd="/home/me/projects/foo")])
+
+    assert get_focused_window_cwd("demo", transport_factory=factory) is None
 
 
 def test_get_focused_window_cwd_returns_none_when_no_window_is_focused() -> None:
@@ -904,7 +924,7 @@ def test_get_focused_window_cwd_skips_malformed_entries() -> None:
                             {
                                 "windows": [
                                     "bad window",
-                                    {"id": 42, "is_focused": True, "cwd": "/right/place"},
+                                    {"id": 42, "is_focused": True, "cwd_of_child": "/right/place"},
                                 ]
                             }
                         ]

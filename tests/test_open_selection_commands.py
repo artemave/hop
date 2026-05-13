@@ -136,26 +136,77 @@ def test_open_selection_in_window_logs_when_listen_on_is_none(tmp_path: Path, ca
     assert any("not a hop session socket" in record.message for record in caplog.records)
 
 
-def test_open_selection_in_window_logs_when_source_cwd_missing(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
+def test_open_selection_in_window_resolves_against_backend_workspace_path(tmp_path: Path) -> None:
+    """When the session's persisted backend record carries a ``workspace_path``
+    (the cached ``<noninteractive_prefix> pwd`` from bootstrap), relatives
+    resolve against it rather than ``source_cwd`` — because for container/ssh
+    backends, ``source_cwd`` is kitty's host-side launch directory, not the
+    in-backend cwd, and resolving against it would hand the backend a path
+    it can't see."""
+    from hop.state import CommandBackendRecord
+
+    workspace_path = tmp_path / "workspace"
+    workspace_path.mkdir()
+    selected_file = workspace_path / "app/models/user.rb"
+    selected_file.parent.mkdir(parents=True)
+    selected_file.write_text("")
+
+    # source_cwd here is the host launch path — should be ignored because
+    # the backend has its own workspace_path.
+    misleading_source_cwd = tmp_path / "demo"
+    misleading_source_cwd.mkdir()
+
+    neovim = StubNeovimAdapter()
+    result = open_selection_in_window(
+        "app/models/user.rb",
+        source_cwd=misleading_source_cwd.resolve(),
+        listen_on=session_socket_address("demo"),
+        neovim=neovim,
+        browser=StubBrowserAdapter(),
+        sessions_loader=lambda: {
+            "demo": SessionState(
+                name="demo",
+                project_root=misleading_source_cwd.resolve(),
+                backend=CommandBackendRecord(
+                    name="devcontainer",
+                    interactive_prefix="",
+                    noninteractive_prefix="",
+                    workspace_path=str(workspace_path.resolve()),
+                ),
+            ),
+        },
+    )
+
+    assert result is not None
+    assert neovim.opened_targets == [("demo", str(selected_file.resolve()))]
+
+
+def test_open_selection_in_window_resolves_against_project_root_when_source_cwd_missing(
+    tmp_path: Path,
 ) -> None:
+    """No ``source_cwd`` and no backend ``workspace_path`` (host backend) is
+    still a usable input: resolve relatives against the session's project
+    root rather than refusing. The kitten doesn't always know the in-shell
+    cwd, and forcing it to back out would mean clicking marks does nothing."""
     project_root = tmp_path / "demo"
     project_root.mkdir(parents=True)
+    (project_root / "app").mkdir()
+    (project_root / "app" / "user.rb").write_text("")
+    neovim = StubNeovimAdapter()
 
-    with caplog.at_level(logging.INFO, logger="hop.open_selection"):
-        result = open_selection_in_window(
-            "app/models/user.rb",
-            source_cwd=None,
-            listen_on=session_socket_address("demo"),
-            neovim=StubNeovimAdapter(),
-            browser=StubBrowserAdapter(),
-            sessions_loader=lambda: {
-                "demo": SessionState(name="demo", project_root=project_root.resolve()),
-            },
-        )
+    result = open_selection_in_window(
+        "app/user.rb",
+        source_cwd=None,
+        listen_on=session_socket_address("demo"),
+        neovim=neovim,
+        browser=StubBrowserAdapter(),
+        sessions_loader=lambda: {
+            "demo": SessionState(name="demo", project_root=project_root.resolve()),
+        },
+    )
 
-    assert result is None
-    assert any("source window has no cwd" in record.message for record in caplog.records)
+    assert result is not None
+    assert neovim.opened_targets == [(result.session_name, str((project_root / "app" / "user.rb").resolve()))]
 
 
 def test_open_selection_in_window_logs_when_selection_does_not_parse(

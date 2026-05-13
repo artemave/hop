@@ -31,6 +31,10 @@ class CommandBackendRecord:
     teardown: str | None = None
     port_translate_command: str | None = None
     host_translate_command: str | None = None
+    # Cached result of ``<noninteractive_prefix> pwd`` captured at bootstrap.
+    # Used as a fallback base cwd in ``hop.focused.paths_exist`` when the
+    # focused window's OSC-7-driven ``cwd_of_child`` is unset.
+    workspace_path: str | None = None
     type: str = "command"
 
     def to_json(self) -> dict[str, object]:
@@ -48,6 +52,8 @@ class CommandBackendRecord:
             payload["port_translate_command"] = self.port_translate_command
         if self.host_translate_command is not None:
             payload["host_translate_command"] = self.host_translate_command
+        if self.workspace_path is not None:
+            payload["workspace_path"] = self.workspace_path
         return payload
 
 
@@ -148,6 +154,7 @@ def _decode_backend_record(raw: object) -> BackendRecord:
                     teardown=_optional_str(record.get("teardown")),
                     port_translate_command=_optional_str(record.get("port_translate_command")),
                     host_translate_command=_optional_str(record.get("host_translate_command")),
+                    workspace_path=_optional_str(record.get("workspace_path")),
                 )
     # Anything we can't decode (legacy ``{"type": "host"}`` records, malformed
     # payloads, the ``workspace_command``/``workspace_path``-era shape) falls

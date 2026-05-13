@@ -145,7 +145,26 @@ def get_focused_window_cwd(
                     continue
                 if not cast(Any, window_entry).get("is_focused"):
                     continue
-                return _path_from_text(_window_cwd_text(cast(Any, window_entry)))
+                return _path_from_text(_in_shell_cwd_text(cast(Any, window_entry)))
+    return None
+
+
+def _in_shell_cwd_text(window_entry: Mapping[str, object]) -> str | None:
+    """Return *only* ``cwd_of_child`` — kitty's OSC-7-driven in-shell cwd.
+
+    Unlike ``_window_cwd_text`` (which falls back to kitty's process cwd),
+    this is the correct source for ``hop.focused.paths_exist``: a process
+    cwd of ``/home/me/projects/foo`` in a container-backed session reflects
+    the host-side launch directory, not where the user's in-container shell
+    actually is. Returning ``None`` here lets the caller fall back to the
+    backend's cached ``workspace_path`` (or to the host project root as a
+    last resort) instead of resolving relative candidates against a host
+    path that doesn't exist inside the backend.
+    """
+
+    value = window_entry.get("cwd_of_child")
+    if isinstance(value, str) and value:
+        return value
     return None
 
 

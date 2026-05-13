@@ -152,6 +152,12 @@ class CommandBackend:
     teardown_command: str | None = None
     port_translate_command: str | None = None
     host_translate_command: str | None = None
+    # The backend's default working directory, captured by running
+    # ``<noninteractive_prefix> pwd`` once at bootstrap. Used as a fallback
+    # in ``hop.focused.paths_exist`` when the kitty window's ``cwd_of_child``
+    # is unset (e.g. the in-shell shell doesn't emit OSC 7). ``None`` for
+    # the host backend or when the probe failed.
+    workspace_path: str | None = None
     runner: CommandRunner = field(default=_default_runner)
 
     def prepare(self, session: ProjectSession) -> None:
@@ -263,6 +269,32 @@ class CommandBackend:
             stderr = (result.stderr or result.stdout or "").strip()
             msg = f"backend {self.name!r} teardown failed for {session.session_name!r}: {stderr}"
             raise SessionBackendError(msg)
+
+    def probe_workspace_path(self, session: ProjectSession) -> str | None:
+        """Return the backend's default working directory (``pwd``), or ``None``.
+
+        Run once at bootstrap by ``SessionBackendRegistry.resolve_for_entry``
+        and persisted in the session record. The result is used as the
+        fallback ``base_cwd`` in ``hop.focused.paths_exist`` when the kitty
+        window's OSC-7-driven ``cwd_of_child`` is unavailable.
+
+        Best-effort: probe failures (empty prefix, non-zero exit, empty
+        stdout) return ``None`` rather than raising — a missing fallback
+        just degrades the kitten's relative-path matching, it doesn't
+        break the session.
+        """
+
+        if not self.noninteractive_prefix:
+            return None
+        substituted_prefix = _substitute(self.noninteractive_prefix, session=session)
+        composed = f"{substituted_prefix} pwd"
+        argv = _sh_c(composed)
+        result = self.runner(argv, session.project_root)
+        debug.log_command(argv, session.project_root, result)
+        if result.returncode != 0:
+            return None
+        stdout = result.stdout.strip()
+        return stdout or None
 
     def paths_exist(self, session: ProjectSession, paths: Sequence[Path]) -> set[Path]:
         if not paths:

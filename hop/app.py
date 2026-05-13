@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Protocol, Sequence
 
@@ -200,10 +200,14 @@ class SessionBackendRegistry:
             else backend_from_config(chosen)
         )
         # Prepare the backend (e.g. compose up -d) before any role terminals
-        # are launched. Nothing else needs to happen at session bootstrap —
-        # the kitten's path-existence query is driven dynamically through
-        # ``backend.paths_exist`` and the backend's command prefixes.
+        # are launched. After prepare succeeds, probe the backend's default
+        # working directory once — ``hop.focused.paths_exist`` uses it as a
+        # fallback base cwd when OSC 7 isn't being emitted by the in-shell
+        # shell (typical for fresh container/ssh shells).
         backend.prepare(session)
+        workspace_path = backend.probe_workspace_path(session)
+        if workspace_path is not None:
+            backend = replace(backend, workspace_path=workspace_path)
         return backend
 
     def resolve_windows_for_entry(self, session: ProjectSession) -> tuple[WindowSpec, ...]:
@@ -241,6 +245,7 @@ def backend_from_record(record: BackendRecord) -> SessionBackend:
         teardown_command=record.teardown,
         port_translate_command=record.port_translate_command,
         host_translate_command=record.host_translate_command,
+        workspace_path=record.workspace_path,
     )
 
 
@@ -257,6 +262,7 @@ def _record_for_backend(backend: SessionBackend) -> BackendRecord:
         teardown=backend.teardown_command,
         port_translate_command=backend.port_translate_command,
         host_translate_command=backend.host_translate_command,
+        workspace_path=backend.workspace_path,
     )
 
 

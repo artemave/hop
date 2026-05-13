@@ -43,19 +43,31 @@ def open_selection_in_window(
         logger.warning("no recorded session state for %r; selection=%r", session_name, selection)
         return None
 
-    if source_cwd is None:
-        logger.warning("source window has no cwd; selection=%r", selection)
-        return None
-
     session = resolve_project_session(state.project_root)
     backend = session_backend_for(session)
 
-    resolved_target = resolve_visible_output_target(selection, terminal_cwd=Path(source_cwd))
+    # Pick the cwd against which relative candidates resolve. ``source_cwd``
+    # comes from kitty's ``window.cwd_of_child`` which is the foreground
+    # process's /proc cwd — for container/ssh backends that's the host
+    # launch directory, not the in-backend path, so resolving against it
+    # gives paths the backend can't see. Prefer ``backend.workspace_path``
+    # (probed via ``<noninteractive_prefix> pwd`` at bootstrap) whenever
+    # the backend has one; for the host backend fall back to ``source_cwd``
+    # (which is meaningful there) or the project root as a last resort.
+    backend_workspace = getattr(state.backend, "workspace_path", None)
+    if backend_workspace is not None:
+        base_cwd: Path = Path(backend_workspace)
+    elif source_cwd is not None:
+        base_cwd = Path(source_cwd)
+    else:
+        base_cwd = state.project_root
+
+    resolved_target = resolve_visible_output_target(selection, terminal_cwd=base_cwd)
     if resolved_target is None:
         logger.info(
             "could not parse %r against terminal_cwd=%s",
             selection,
-            source_cwd,
+            base_cwd,
         )
         return None
 

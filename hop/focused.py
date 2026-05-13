@@ -78,8 +78,21 @@ def paths_exist(
     if backend is None:
         return _local_fallback(candidate_list, base_cwd=Path.cwd())
 
+    # Pick the base cwd against which relative candidates resolve. OSC 7
+    # from the in-shell shell is the ground truth (cd-aware). If the shell
+    # isn't emitting it, fall back to the backend's cached ``workspace_path``
+    # (its default cwd, captured at bootstrap via ``<noninteractive_prefix>
+    # pwd``) — works for the at-default-cwd case without any in-shell setup.
+    # Last resort is the host-side project root, which is the wrong namespace
+    # for non-host backends but is preserved here as a fallback so the host
+    # backend (no workspace_path) still resolves relatives.
     in_shell_cwd = cwd_fn(session_name)
-    base_cwd = in_shell_cwd if in_shell_cwd is not None else state.project_root
+    if in_shell_cwd is not None:
+        base_cwd = in_shell_cwd
+    elif state.backend.workspace_path is not None:
+        base_cwd = Path(state.backend.workspace_path)
+    else:
+        base_cwd = state.project_root
 
     session = resolve_project_session(state.project_root)
 

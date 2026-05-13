@@ -117,6 +117,32 @@ def test_record_session_persists_translate_commands(tmp_path: Path) -> None:
     assert payload["backend"]["host_translate_command"] == "echo myserver"
 
 
+def test_record_session_round_trips_workspace_path(tmp_path: Path) -> None:
+    """``workspace_path`` (cached ``<noninteractive_prefix> pwd`` result) is
+    persisted on bootstrap and restored on load — that's what lets the
+    open-selection kitten fall back to the backend's default cwd when the
+    in-shell shell isn't emitting OSC 7."""
+    sessions_dir = tmp_path / "sessions"
+    session = make_session(name="demo", project_root=tmp_path / "demo")
+
+    record_session(
+        session,
+        backend=CommandBackendRecord(
+            name="devcontainer",
+            interactive_prefix="compose exec devcontainer",
+            noninteractive_prefix="compose exec -T devcontainer",
+            workspace_path="/workspace",
+        ),
+        sessions_dir=sessions_dir,
+    )
+
+    payload = json.loads((sessions_dir / "demo.json").read_text())
+    assert payload["backend"]["workspace_path"] == "/workspace"
+
+    loaded = load_sessions(sessions_dir=sessions_dir)
+    assert loaded["demo"].backend.workspace_path == "/workspace"
+
+
 def test_forget_session_removes_state_file(tmp_path: Path) -> None:
     sessions_dir = tmp_path / "sessions"
     sessions_dir.mkdir()

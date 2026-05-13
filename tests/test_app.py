@@ -851,7 +851,36 @@ def test_session_base_registry_runs_activate_then_prepare(
     assert calls == [
         ("sh", "-c", "test -f docker-compose.dev.yml"),  # activate probe
         flock_args + ("sh", "-c", "compose up -d devcontainer"),
+        ("sh", "-c", "compose exec -T devcontainer pwd"),  # workspace_path probe
     ]
+
+
+def test_session_base_registry_captures_workspace_path_from_probe(tmp_path: Path) -> None:
+    """When the workspace_path probe returns a path, it's captured on the
+    backend so the persisted record carries it and ``focused.paths_exist``
+    can fall back to it for OSC-7-less shells."""
+    import subprocess
+
+    from hop.app import SessionBackendRegistry
+
+    (tmp_path / "docker-compose.dev.yml").write_text("")
+    config = HopConfig(backends=(_devcontainer_config(),))
+
+    def runner(args: Sequence[str], cwd: Path, *, stdin: str | None = None) -> subprocess.CompletedProcess[str]:
+        del cwd, stdin
+        stdout = "/workspace\n" if "pwd" in args[-1] else ""
+        return subprocess.CompletedProcess(args=list(args), returncode=0, stdout=stdout, stderr="")
+
+    registry = SessionBackendRegistry(
+        global_config_loader=lambda: config,
+        sessions_loader=lambda: {},
+        runner=runner,
+    )
+
+    backend = registry.resolve_for_entry(_make_session(tmp_path), backend_name=None)
+
+    assert isinstance(backend, CommandBackend)
+    assert backend.workspace_path == "/workspace"
 
 
 def test_session_base_registry_project_override_can_flip_autodetect(tmp_path: Path) -> None:
