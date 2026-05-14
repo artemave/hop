@@ -123,6 +123,10 @@ def test_create_script_dispatches_to_vicinae_dmenu_over_home_directories() -> No
     # Emits relative paths so vicinae doesn't auto-collapse same-basename
     # nested directories into a single visible entry.
     assert "-printf '%P\\n'" in create.content
+    # Project roots (`.git` / `.jj`) prune so subdirectories don't outrank
+    # their parent in vicinae's fuzzy ranking.
+    assert "-exec test -e {}/.git \\;" in create.content
+    assert "-exec test -e {}/.jj \\;" in create.content
     # `hop` from the picked directory creates the session if missing or
     # attaches if it already exists — same dispatch hop's CLI uses.
     # `setsid -f` survives vicinae's SIGTERM-on-UI-close, so a slow

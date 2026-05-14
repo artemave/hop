@@ -213,6 +213,12 @@ def _create_script() -> GeneratedScript:
     # that share a basename with their parent (e.g. a Python package layout
     # `tmux_super_fingers/tmux_super_fingers`) look like duplicates. Relative
     # strings sidestep that detection so distinct paths render distinctly.
+    #
+    # Directories that contain a `.git` or `.jj` marker are printed and then
+    # pruned, so subdirectories of a project root never surface as separate
+    # candidates. Vicinae's fuzzy ranker otherwise lifts deeper children
+    # (`projects/foo/lib`, `…/log`) above their parent for a query that
+    # matches both, hiding the project root the user actually wants.
     return GeneratedScript(
         filename=CREATE_FILENAME,
         content=(
@@ -228,7 +234,8 @@ def _create_script() -> GeneratedScript:
             'candidates=$(find "$HOME" -mindepth 1 -maxdepth 3 \\\n'
             "    \\( -name '.*' -o -name 'node_modules' -o -name 'target' "
             "-o -name 'dist' -o -name '__pycache__' \\) -prune \\\n"
-            "    -o -type d -printf '%P\\n')\n"
+            "    -o -type d -printf '%P\\n' \\\n"
+            "    \\( -exec test -e {}/.git \\; -o -exec test -e {}/.jj \\; \\) -prune)\n"
             "\n"
             'if [ -z "$candidates" ]; then\n'
             "    exit 0\n"
