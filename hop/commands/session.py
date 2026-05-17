@@ -35,6 +35,8 @@ class SessionSwayAdapter(Protocol):
 
     def focus_window(self, window_id: int) -> None: ...
 
+    def get_focused_workspace(self) -> str: ...
+
 
 class SessionTerminalAdapter(Protocol):
     def ensure_terminal(self, session: ProjectSession, *, role: str) -> None: ...
@@ -65,7 +67,17 @@ def enter_project_session(
     workspace_layout: str | None = None,
 ) -> ProjectSession:
     session = resolve_project_session(cwd)
-    sway.switch_to_workspace(session.workspace_name)
+    # Switch only when we aren't already on the session's workspace. Two
+    # reasons: (a) sway's `workspace_auto_back_and_forth yes` flips off the
+    # focused workspace when re-targeted, which would yank the user away;
+    # (b) the headless first-entry path may have switched eagerly already
+    # (so the prepare popup lands on `p:<session>`), in which case we'd be
+    # re-issuing the same switch. The check also re-affirms the target when
+    # the user navigated away during a slow prepare popup — kitty windows
+    # then bootstrap on the session's workspace rather than wherever the
+    # user currently is.
+    if sway.get_focused_workspace() != session.workspace_name:
+        sway.switch_to_workspace(session.workspace_name)
     if workspace_layout is not None:
         # Apply before launching any windows so the first one lands in the
         # configured arrangement (tabbed, stacking, splith, splitv) instead

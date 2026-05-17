@@ -77,11 +77,18 @@ def test_main_prints_hop_errors_to_stderr(
     def fake_parse_command(argv: object | None = None) -> EnterSessionCommand:
         return EnterSessionCommand()
 
-    def fake_build_default_services() -> object:
-        return object()
+    class _InteractivePopupStub:
+        def is_interactive(self) -> bool:
+            return True
+
+        def show_error(self, _error: HopError) -> None:  # pragma: no cover - unused on interactive path
+            return None
+
+    class _ServicesStub:
+        popup = _InteractivePopupStub()
 
     monkeypatch.setattr("hop.cli.parse_command", fake_parse_command)
-    monkeypatch.setattr("hop.cli.build_default_services", fake_build_default_services)
+    monkeypatch.setattr("hop.cli.build_default_services", _ServicesStub)
 
     def raise_hop_error(command: object, *, cwd: Path, services: object) -> int:
         raise ExplodingHopError("boom")

@@ -229,6 +229,64 @@ def test_kill_session_uses_host_backend_by_default(tmp_path: Path) -> None:
     )
 
 
+def test_kill_session_with_teardown_runner_delegates_teardown(tmp_path: Path) -> None:
+    """When `teardown_runner` is supplied (e.g. the headless popup path),
+    `kill_session` delegates the teardown step to it instead of calling
+    `backend.teardown(session)` inline. `forget` still runs after the
+    delegate returns normally."""
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+
+    events: list[str] = []
+
+    class _NoopBackend:
+        def teardown(self, _session: ProjectSession) -> None:
+            events.append("backend.teardown")  # pragma: no cover - must not run
+
+    def my_runner(session: ProjectSession, backend: object) -> None:
+        del backend
+        events.append(f"runner-{session.session_name}")
+
+    def my_forget(name: str) -> None:
+        events.append(f"forget-{name}")
+
+    kill_session(
+        project_root,
+        sway=StubSwayAdapter(),
+        session_backend_for=lambda _session: _NoopBackend(),  # type: ignore[arg-type]
+        forget=my_forget,
+        teardown_runner=my_runner,  # type: ignore[arg-type]
+    )
+
+    assert events == ["runner-demo", "forget-demo"]
+
+
+def test_kill_session_with_teardown_runner_short_circuits_forget_on_error(tmp_path: Path) -> None:
+    """When the delegate raises, `forget` is NOT called — matches today's
+    inline behavior where a SessionBackendError short-circuits the cleanup."""
+    import pytest
+
+    from hop.backends import SessionBackendError
+
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+
+    def failing_runner(_session: ProjectSession, _backend: object) -> None:
+        raise SessionBackendError("compose down failed", surfaced_by_popup=True)
+
+    forgotten: list[str] = []
+
+    with pytest.raises(SessionBackendError):
+        kill_session(
+            project_root,
+            sway=StubSwayAdapter(),
+            forget=forgotten.append,
+            teardown_runner=failing_runner,
+        )
+
+    assert forgotten == []
+
+
 def test_kill_session_waits_for_windows_to_close_before_teardown(tmp_path: Path) -> None:
     # close_window is async in real sway: by the time it returns, the window
     # (and the shell it wraps) may still be alive. teardown must wait so

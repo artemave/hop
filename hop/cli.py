@@ -115,15 +115,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     command = parse_command(argv)
     _warn_if_hopd_version_stale()
 
+    services = build_default_services()
     try:
         debug.configure(load_global_config().debug_log)
         return execute_command(
             command,
             cwd=Path.cwd(),
-            services=build_default_services(),
+            services=services,
         )
     except HopError as error:
         print(str(error), file=sys.stderr)
+        # Headless callers (vicinae's `setsid -f hop`, sway keybindings,
+        # `nohup hop &`) have no terminal watching the stderr print — surface
+        # the error in a kitten panel so it's actually visible. Lifecycle
+        # popups already show their own command's failure inside the panel
+        # via the held-open shell; their `SessionBackendError` carries
+        # `surfaced_by_popup=True` so we don't pop a redundant second panel.
+        if not error.surfaced_by_popup and not services.popup.is_interactive():
+            services.popup.show_error(error)
         return 1
 
 

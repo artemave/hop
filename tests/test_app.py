@@ -1,14 +1,15 @@
 import io
 import json
+import subprocess
 from contextlib import redirect_stdout
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Mapping, Sequence
 
 import pytest
 
 from hop.app import HopServices, execute_command
-from hop.backends import CommandBackend
+from hop.backends import CommandBackend, SessionBackend, SessionBackendError
 from hop.commands import (
     BrowserCommand,
     EditCommand,
@@ -21,6 +22,7 @@ from hop.commands import (
     TermCommand,
 )
 from hop.config import BackendConfig, HopConfig
+from hop.errors import HopError
 from hop.kitty import KittyRemoteControlAdapter, KittyWindow, KittyWindowContext, KittyWindowState
 from hop.session import ProjectSession
 from hop.state import SessionState
@@ -59,6 +61,10 @@ class StubSwayAdapter:
 
     def switch_to_workspace(self, workspace_name: str) -> None:
         self.switched_workspaces.append(workspace_name)
+        # Reflect the switch so subsequent `get_focused_workspace` checks see
+        # the new workspace — `enter_project_session` reads it back to decide
+        # whether to re-issue the switch.
+        self.focused_workspace = workspace_name
 
     def set_workspace_layout(self, workspace_name: str, layout: str) -> None:
         self.layout_calls.append((workspace_name, layout))
@@ -163,6 +169,43 @@ class StubBrowserAdapter:
         self.calls.append((session.session_name, session.project_root, url))
 
 
+class StubHopPopup:
+    """Stub `HopPopup`. Defaults to interactive (popup never fires) so
+    existing tests preserve their byte-for-byte behavior; tests that exercise
+    the headless code paths construct with `is_interactive=False`.
+    """
+
+    def __init__(
+        self,
+        *,
+        is_interactive: bool = True,
+        prepare_raises: BaseException | None = None,
+        teardown_raises: BaseException | None = None,
+    ) -> None:
+        self._is_interactive = is_interactive
+        self._prepare_raises = prepare_raises
+        self._teardown_raises = teardown_raises
+        self.prepare_calls: list[tuple[str, str | None]] = []
+        self.teardown_calls: list[tuple[str, str | None]] = []
+        self.shown_errors: list[HopError] = []
+
+    def is_interactive(self) -> bool:
+        return self._is_interactive
+
+    def run_prepare(self, session: ProjectSession, backend: SessionBackend) -> None:
+        self.prepare_calls.append((session.session_name, getattr(backend, "prepare_command", None)))
+        if self._prepare_raises is not None:
+            raise self._prepare_raises
+
+    def run_teardown(self, session: ProjectSession, backend: SessionBackend) -> None:
+        self.teardown_calls.append((session.session_name, getattr(backend, "teardown_command", None)))
+        if self._teardown_raises is not None:
+            raise self._teardown_raises
+
+    def show_error(self, error: HopError) -> None:
+        self.shown_errors.append(error)
+
+
 @dataclass
 class StubHopServices:
     sway: StubSwayAdapter
@@ -170,6 +213,7 @@ class StubHopServices:
     neovim: StubNeovimAdapter
     browser: StubBrowserAdapter
     persisted_session_names: tuple[str, ...] = ()
+    popup: StubHopPopup = field(default_factory=StubHopPopup)
 
     def as_services(self) -> HopServices:
         from hop.app import SessionBackendRegistry
@@ -190,6 +234,7 @@ class StubHopServices:
                 global_config_loader=lambda: HopConfig(),
                 sessions_loader=lambda: persisted,
             ),
+            popup=self.popup,
         )
 
 
@@ -281,6 +326,7 @@ def test_hop_enter_session_passes_invocation_directory_as_kitty_launch_cwd(
             global_config_loader=lambda: HopConfig(),
             sessions_loader=lambda: {},
         ),
+        popup=StubHopPopup(),
     )
 
     assert execute_command(EnterSessionCommand(), cwd=project_root, services=services) == 0
@@ -374,6 +420,7 @@ def test_execute_command_applies_workspace_layout_from_config_on_first_entry(tmp
         neovim=services.neovim,
         browser=services.browser,
         session_backends=registry,
+        popup=services.popup,
     )
 
     assert execute_command(EnterSessionCommand(), cwd=project_root, services=real_services) == 0
@@ -407,6 +454,7 @@ def test_execute_command_skips_workspace_layout_on_re_entry(tmp_path: Path) -> N
         neovim=services.neovim,
         browser=services.browser,
         session_backends=registry,
+        popup=services.popup,
     )
 
     assert execute_command(EnterSessionCommand(), cwd=project_root, services=real_services) == 0
@@ -553,6 +601,7 @@ def test_execute_command_lists_windows_for_current_session(tmp_path: Path) -> No
         neovim=services.neovim,
         browser=services.browser,
         session_backends=registry,
+        popup=services.popup,
     )
     stdout = io.StringIO()
 
@@ -754,6 +803,274 @@ def test_execute_command_kills_every_window_on_session_workspace(tmp_path: Path)
     assert sorted(services.sway.closed_windows) == [11, 12]
 
 
+# --- Popup-routed lifecycle commands -----------------------------------------
+
+
+def _devcontainer_session(tmp_path: Path) -> tuple[Path, BackendConfig]:
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+    (project_root / "docker-compose.dev.yml").write_text("")
+    return project_root, BackendConfig(
+        name="devcontainer",
+        activate="test -f docker-compose.dev.yml",
+        prepare="compose up -d devcontainer",
+        teardown="compose down",
+        interactive_prefix="compose exec devcontainer",
+        noninteractive_prefix="compose exec -T devcontainer",
+    )
+
+
+def _no_subprocess_runner(
+    args: Sequence[str], cwd: Path, *, stdin: str | None = None
+) -> subprocess.CompletedProcess[str]:
+    """For tests where the popup is supposed to run prepare/teardown — the
+    `SessionBackendRegistry`'s runner must not be exercised for those commands.
+    The runner is still hit for activate and workspace_path probes; both succeed
+    with empty stdout, which is what real-config compose / podman backends
+    typically return for `test -f` and `pwd`."""
+    del cwd, stdin
+    return subprocess.CompletedProcess(args=list(args), returncode=0, stdout="", stderr="")
+
+
+def test_create_headless_runs_prepare_in_popup_after_eager_workspace_switch(tmp_path: Path) -> None:
+    project_root, backend_config = _devcontainer_session(tmp_path)
+
+    from hop.app import SessionBackendRegistry
+
+    runner_calls: list[tuple[str, ...]] = []
+
+    def runner(args: Sequence[str], cwd: Path, *, stdin: str | None = None) -> subprocess.CompletedProcess[str]:
+        runner_calls.append(tuple(args))
+        return _no_subprocess_runner(args, cwd, stdin=stdin)
+
+    sway_events: list[tuple[str, str]] = []
+
+    class TrackingSway(StubSwayAdapter):
+        def switch_to_workspace(self, workspace_name: str) -> None:
+            sway_events.append(("switch", workspace_name))
+            super().switch_to_workspace(workspace_name)
+
+    class TrackingPopup(StubHopPopup):
+        def run_prepare(self, session: ProjectSession, backend: SessionBackend) -> None:
+            sway_events.append(("prepare", session.session_name))
+            super().run_prepare(session, backend)
+
+    popup = TrackingPopup(is_interactive=False)
+    kitty_stub = StubKittyAdapter()
+    services = HopServices(
+        sway=TrackingSway(focused_workspace="p:other"),
+        kitty=kitty_stub,
+        neovim=StubNeovimAdapter(),
+        browser=StubBrowserAdapter(),
+        session_backends=SessionBackendRegistry(
+            global_config_loader=lambda: HopConfig(backends=(backend_config,)),
+            sessions_loader=lambda: {},
+            runner=runner,
+        ),
+        popup=popup,
+    )
+
+    assert execute_command(EnterSessionCommand(), cwd=project_root, services=services) == 0
+
+    # The popup ran prepare exactly once with the backend's prepare command.
+    assert popup.prepare_calls == [("demo", "compose up -d devcontainer")]
+    # The eager workspace switch happened BEFORE the popup runs prepare.
+    assert sway_events == [("switch", "p:demo"), ("prepare", "demo")]
+    # SessionBackendRegistry's runner skipped the prepare invocation
+    # (`flock -o ... sh -c 'compose up -d devcontainer'`) — only activate and
+    # workspace_path probes ran.
+    assert all("compose up -d devcontainer" not in " ".join(args) for args in runner_calls)
+    # The shell role was bootstrapped after prepare succeeded.
+    assert kitty_stub.ensured_roles == [("demo", "shell", project_root.resolve())]
+
+
+def test_create_headless_failure_aborts_bootstrap(tmp_path: Path) -> None:
+    project_root, backend_config = _devcontainer_session(tmp_path)
+
+    from hop.app import SessionBackendRegistry
+
+    popup = StubHopPopup(
+        is_interactive=False,
+        prepare_raises=SessionBackendError("prepare failed", surfaced_by_popup=True),
+    )
+    sway = StubSwayAdapter(focused_workspace="p:other")
+    kitty_stub = StubKittyAdapter()
+    neovim_stub = StubNeovimAdapter()
+    services = HopServices(
+        sway=sway,
+        kitty=kitty_stub,
+        neovim=neovim_stub,
+        browser=StubBrowserAdapter(),
+        session_backends=SessionBackendRegistry(
+            global_config_loader=lambda: HopConfig(backends=(backend_config,)),
+            sessions_loader=lambda: {},
+            runner=_no_subprocess_runner,
+        ),
+        popup=popup,
+    )
+
+    with pytest.raises(SessionBackendError) as excinfo:
+        execute_command(EnterSessionCommand(), cwd=project_root, services=services)
+
+    # The error carries the marker so cli.main won't pop a second error popup.
+    assert excinfo.value.surfaced_by_popup is True
+    # Workspace was switched eagerly even though prepare failed — the user
+    # is still on the new workspace with the popup visible.
+    assert sway.switched_workspaces == ["p:demo"]
+    # Bootstrap was aborted: no kitty / editor ensure calls.
+    assert kitty_stub.ensured_roles == []
+    assert neovim_stub.ensured_sessions == []
+
+
+def test_create_interactive_runs_prepare_inline_not_in_popup(tmp_path: Path) -> None:
+    project_root, backend_config = _devcontainer_session(tmp_path)
+
+    from hop.app import SessionBackendRegistry
+
+    runner_calls: list[tuple[str, ...]] = []
+
+    def runner(args: Sequence[str], cwd: Path, *, stdin: str | None = None) -> subprocess.CompletedProcess[str]:
+        runner_calls.append(tuple(args))
+        return _no_subprocess_runner(args, cwd, stdin=stdin)
+
+    popup = StubHopPopup(is_interactive=True)
+    sway = StubSwayAdapter(focused_workspace="p:other")
+    services = HopServices(
+        sway=sway,
+        kitty=StubKittyAdapter(),
+        neovim=StubNeovimAdapter(),
+        browser=StubBrowserAdapter(),
+        session_backends=SessionBackendRegistry(
+            global_config_loader=lambda: HopConfig(backends=(backend_config,)),
+            sessions_loader=lambda: {},
+            runner=runner,
+        ),
+        popup=popup,
+    )
+
+    assert execute_command(EnterSessionCommand(), cwd=project_root, services=services) == 0
+
+    # Popup was never asked to run prepare.
+    assert popup.prepare_calls == []
+    # The inline path ran the prepare command through the registry's runner.
+    flock_calls = [args for args in runner_calls if args[:1] == ("flock",)]
+    assert flock_calls and any("compose up -d devcontainer" in " ".join(args) for args in flock_calls)
+
+
+def test_create_headless_without_prepare_command_still_bootstraps(tmp_path: Path) -> None:
+    """Headless first-entry against a backend that has no `prepare` command
+    (e.g. host) still works: the popup adapter's `run_prepare` is a no-op
+    when `prepare_command is None`, and bootstrap proceeds normally."""
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+
+    services = build_services(
+        focused_workspace="p:other",
+        persisted_session_names=(),
+    )
+    services.popup = StubHopPopup(is_interactive=False)
+
+    assert execute_command(EnterSessionCommand(), cwd=project_root, services=services.as_services()) == 0
+    # host backend has no prepare_command — stub still receives the call but
+    # the test doesn't drill into what the real KittyHopPopup would do
+    # (covered in test_popup.py).
+    assert services.popup.prepare_calls == [("demo", None)]
+    assert services.kitty.ensured_roles == [("demo", "shell", project_root.resolve())]
+
+
+def test_create_headless_reentry_does_not_run_popup(tmp_path: Path) -> None:
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+
+    services = build_services(
+        focused_workspace="p:other",
+        persisted_session_names=("demo",),
+        alive_session_names=("demo",),
+    )
+    services.popup = StubHopPopup(is_interactive=False)
+
+    assert execute_command(EnterSessionCommand(), cwd=project_root, services=services.as_services()) == 0
+    # Re-entry: kitty is alive, prepare doesn't run inline OR in the popup.
+    assert services.popup.prepare_calls == []
+
+
+def test_kill_headless_delegates_teardown_to_popup_after_window_close(tmp_path: Path) -> None:
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+    workspace_name = f"p:{project_root.name}"
+
+    session_window = SwayWindow(id=21, workspace_name=workspace_name, app_id="kitty", window_class=None)
+
+    events: list[str] = []
+
+    class TrackingSway(StubSwayAdapter):
+        def close_window(self, window_id: int) -> None:
+            events.append(f"close-{window_id}")
+            super().close_window(window_id)
+
+    sway = TrackingSway(workspaces=(workspace_name,), windows=(session_window,))
+
+    class TrackingPopup(StubHopPopup):
+        def run_teardown(self, session: ProjectSession, backend: SessionBackend) -> None:
+            events.append(f"teardown-{session.session_name}")
+            super().run_teardown(session, backend)
+
+    popup = TrackingPopup(is_interactive=False)
+
+    services = StubHopServices(
+        sway=sway,
+        kitty=StubKittyAdapter(),
+        neovim=StubNeovimAdapter(),
+        browser=StubBrowserAdapter(),
+        popup=popup,
+    )
+
+    assert execute_command(KillCommand(), cwd=project_root, services=services.as_services()) == 0
+    # Window-close ordering preserved: close fires before teardown.
+    assert events == ["close-21", "teardown-demo"]
+    # The popup recorded the teardown call (host backend has no teardown_command).
+    assert popup.teardown_calls == [("demo", None)]
+
+
+def test_kill_headless_teardown_failure_skips_forget(tmp_path: Path) -> None:
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+    workspace_name = f"p:{project_root.name}"
+    session_window = SwayWindow(id=21, workspace_name=workspace_name, app_id="kitty", window_class=None)
+    sway = StubSwayAdapter(workspaces=(workspace_name,), windows=(session_window,))
+
+    popup = StubHopPopup(
+        is_interactive=False,
+        teardown_raises=SessionBackendError("compose down failed", surfaced_by_popup=True),
+    )
+
+    services = StubHopServices(
+        sway=sway,
+        kitty=StubKittyAdapter(),
+        neovim=StubNeovimAdapter(),
+        browser=StubBrowserAdapter(),
+        popup=popup,
+    )
+
+    with pytest.raises(SessionBackendError):
+        execute_command(KillCommand(), cwd=project_root, services=services.as_services())
+    # Windows were still closed (closing happens before teardown).
+    assert sway.closed_windows == [21]
+    # Teardown was attempted exactly once.
+    assert popup.teardown_calls == [("demo", None)]
+
+
+def test_kill_interactive_does_not_invoke_popup(tmp_path: Path) -> None:
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+
+    services = build_services()
+    services.popup = StubHopPopup(is_interactive=True)
+
+    assert execute_command(KillCommand(), cwd=project_root, services=services.as_services()) == 0
+    assert services.popup.teardown_calls == []
+
+
 # --- SessionBackendRegistry --------------------------------------------------
 
 
@@ -851,6 +1168,40 @@ def test_session_base_registry_runs_activate_then_prepare(
     assert calls == [
         ("sh", "-c", "test -f docker-compose.dev.yml"),  # activate probe
         flock_args + ("sh", "-c", "compose up -d devcontainer"),
+        ("sh", "-c", "compose exec -T devcontainer pwd"),  # workspace_path probe
+    ]
+
+
+def test_session_base_registry_skip_prepare_omits_prepare_subprocess(tmp_path: Path) -> None:
+    """The headless popup path runs prepare inside a kitten panel, so
+    `resolve_for_entry` is called with `skip_prepare=True` to avoid
+    invoking the backend's prepare subprocess inline. The activate
+    probe and workspace_path probe still run."""
+    import subprocess
+
+    from hop.app import SessionBackendRegistry
+
+    (tmp_path / "docker-compose.dev.yml").write_text("")
+    config = HopConfig(backends=(_devcontainer_config(),))
+
+    calls: list[tuple[str, ...]] = []
+
+    def runner(args: Sequence[str], cwd: Path, *, stdin: str | None = None) -> subprocess.CompletedProcess[str]:
+        calls.append(tuple(args))
+        return subprocess.CompletedProcess(args=list(args), returncode=0, stdout="", stderr="")
+
+    registry = SessionBackendRegistry(
+        global_config_loader=lambda: config,
+        sessions_loader=lambda: {},
+        runner=runner,
+    )
+
+    backend = registry.resolve_for_entry(_make_session(tmp_path), backend_name=None, skip_prepare=True)
+
+    assert isinstance(backend, CommandBackend)
+    # Activate and workspace_path probes ran; the prepare flock invocation did NOT.
+    assert calls == [
+        ("sh", "-c", "test -f docker-compose.dev.yml"),  # activate
         ("sh", "-c", "compose exec -T devcontainer pwd"),  # workspace_path probe
     ]
 

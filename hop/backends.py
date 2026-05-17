@@ -55,6 +55,12 @@ class SessionBackend(Protocol):
     @property
     def interactive_prefix(self) -> str: ...
 
+    @property
+    def prepare_command(self) -> str | None: ...
+
+    @property
+    def teardown_command(self) -> str | None: ...
+
     def prepare(self, session: ProjectSession) -> None: ...
 
     def wrap(self, command: str, session: ProjectSession) -> Sequence[str]: ...
@@ -193,10 +199,10 @@ class CommandBackend:
         as its own backend exec, preserving today's two-call behavior.
         """
 
-        substituted = _substitute(command, session=session)
+        substituted = substitute(command, session=session)
         if not self.interactive_prefix:
             return substituted
-        substituted_prefix = _substitute(self.interactive_prefix, session=session)
+        substituted_prefix = substitute(self.interactive_prefix, session=session)
         return f"{substituted_prefix} {substituted}"
 
     def translate_localhost_url(self, session: ProjectSession, url: str) -> str:
@@ -286,7 +292,7 @@ class CommandBackend:
 
         if not self.noninteractive_prefix:
             return None
-        substituted_prefix = _substitute(self.noninteractive_prefix, session=session)
+        substituted_prefix = substitute(self.noninteractive_prefix, session=session)
         composed = f"{substituted_prefix} pwd"
         argv = _sh_c(composed)
         result = self.runner(argv, session.project_root)
@@ -299,7 +305,7 @@ class CommandBackend:
     def paths_exist(self, session: ProjectSession, paths: Sequence[Path]) -> set[Path]:
         if not paths:
             return set()
-        substituted_prefix = _substitute(self.noninteractive_prefix, session=session)
+        substituted_prefix = substitute(self.noninteractive_prefix, session=session)
         composed = f"{substituted_prefix} sh -c {shlex.quote(_PATH_EXISTS_LOOP)}".lstrip()
         argv = _sh_c(composed)
         stdin = "\n".join(str(p) for p in paths) + "\n"
@@ -349,7 +355,7 @@ def select_backend(
     for candidate in backends:
         if candidate.activate is None:
             continue
-        substituted = _substitute(candidate.activate, session=session)
+        substituted = substitute(candidate.activate, session=session)
         argv = _sh_c(substituted)
         result = runner(argv, session.project_root)
         debug.log_command(argv, session.project_root, result)
@@ -385,7 +391,7 @@ def backend_from_config(
     )
 
 
-def _substitute(template: str, *, session: ProjectSession) -> str:
+def substitute(template: str, *, session: ProjectSession) -> str:
     replacements: dict[str, str] = {
         PLACEHOLDER_PROJECT_ROOT: shlex.quote(str(session.project_root)),
     }
@@ -430,7 +436,7 @@ def _sh_c(command: str) -> tuple[str, ...]:
     return ("sh", "-c", command)
 
 
-def _backend_lock_path(session: ProjectSession) -> Path:
+def backend_lock_path(session: ProjectSession) -> Path:
     runtime_root = os.environ.get("XDG_RUNTIME_DIR") or gettempdir()
     runtime_dir = Path(runtime_root).expanduser().resolve() / "hop"
     runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -450,5 +456,5 @@ def _flock_sh(command: str, *, session: ProjectSession) -> tuple[str, ...]:
     # the one that bit us) inherits the fd and pins the lock open forever —
     # the next prepare/teardown then blocks on flock with no recourse short
     # of killing the daemon by hand.
-    substituted = _substitute(command, session=session)
-    return ("flock", "-o", str(_backend_lock_path(session)), "sh", "-c", substituted)
+    substituted = substitute(command, session=session)
+    return ("flock", "-o", str(backend_lock_path(session)), "sh", "-c", substituted)

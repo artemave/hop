@@ -31,6 +31,7 @@ def kill_session(
     forget: Callable[[str], None] = forget_session,
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
+    teardown_runner: Callable[[ProjectSession, SessionBackend], None] | None = None,
 ) -> ProjectSession:
     session = resolve_project_session(cwd)
 
@@ -78,7 +79,15 @@ def kill_session(
             break
         sleep(WINDOW_CLOSE_POLL_INTERVAL_SECONDS)
 
-    backend.teardown(session)
+    # Delegate the teardown step when the caller wants to wrap it (e.g. the
+    # headless popup path, which runs teardown inside a kitten panel). The
+    # default keeps today's inline behavior. `forget` still runs only on
+    # successful return — a SessionBackendError from either path short-
+    # circuits the cleanup so the persisted state file stays as a marker.
+    if teardown_runner is not None:
+        teardown_runner(session, backend)
+    else:
+        backend.teardown(session)
 
     forget(session.session_name)
 

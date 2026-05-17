@@ -49,6 +49,7 @@ from hop.config import (
 from hop.editor import SharedNeovimEditorAdapter
 from hop.kitty import KittyRemoteControlAdapter, KittyWindow, KittyWindowContext, KittyWindowState
 from hop.layouts import WindowSpec, resolve_windows
+from hop.popup import HopPopup, KittyHopPopup
 from hop.session import ProjectSession, resolve_project_session
 from hop.state import (
     BackendRecord,
@@ -166,6 +167,7 @@ class SessionBackendRegistry:
         *,
         backend_name: str | None,
         kitty_alive: bool = True,
+        skip_prepare: bool = False,
     ) -> SessionBackend:
         # When kitty is alive the persisted record is authoritative — the
         # session is mid-flight, the backend was prepared for it, and we
@@ -200,11 +202,15 @@ class SessionBackendRegistry:
             else backend_from_config(chosen)
         )
         # Prepare the backend (e.g. compose up -d) before any role terminals
-        # are launched. After prepare succeeds, probe the backend's default
-        # working directory once — ``hop.focused.paths_exist`` uses it as a
-        # fallback base cwd when OSC 7 isn't being emitted by the in-shell
-        # shell (typical for fresh container/ssh shells).
-        backend.prepare(session)
+        # are launched. Skipped when the caller is going to run prepare itself
+        # (e.g. the headless popup path, which runs prepare inside a kitten
+        # panel and re-substitutes the same flock-wrapped command — the
+        # popup IS the prepare). After prepare succeeds, probe the backend's
+        # default working directory once — ``hop.focused.paths_exist`` uses it
+        # as a fallback base cwd when OSC 7 isn't being emitted by the
+        # in-shell shell (typical for fresh container/ssh shells).
+        if not skip_prepare:
+            backend.prepare(session)
         workspace_path = backend.probe_workspace_path(session)
         if workspace_path is not None:
             backend = replace(backend, workspace_path=workspace_path)
@@ -277,6 +283,7 @@ class HopServices:
     neovim: NeovimAdapter
     browser: BrowserAdapter
     session_backends: SessionBackendRegistry
+    popup: HopPopup
 
 
 def execute_command(
@@ -313,11 +320,24 @@ def execute_command(
                 # is stale on disk.
                 kitty_alive = services.kitty.is_alive(session)
                 is_first_entry = not kitty_alive
+                # Headless first-entry takes a different path: the popup
+                # runs prepare with a visible UI, but it can't do that
+                # *after* `resolve_for_entry` has already prepared inline
+                # — so we skip the inline prepare, switch workspace
+                # eagerly (so the popup lands on `p:<session>` rather
+                # than the user's previous workspace), then dispatch the
+                # popup. Re-entry doesn't run prepare in either branch, so
+                # the headless path only matters when kitty isn't alive.
+                headless_first_entry = is_first_entry and not services.popup.is_interactive()
                 backend = services.session_backends.resolve_for_entry(
                     session,
                     backend_name=backend_name,
                     kitty_alive=kitty_alive,
+                    skip_prepare=headless_first_entry,
                 )
+                if headless_first_entry:
+                    services.sway.switch_to_workspace(session.workspace_name)
+                    services.popup.run_prepare(session, backend)
                 services.session_backends.set_override(session.session_name, backend)
                 try:
                     windows = services.session_backends.resolve_windows_for_entry(session) if is_first_entry else ()
@@ -394,10 +414,16 @@ def execute_command(
                 url=url,
             )
         case KillCommand():
+            # Delegate the teardown step to the popup when stderr isn't a
+            # TTY (vicinae, sway keybindings, etc.) so the user sees what
+            # `compose down` (or equivalent) is doing — window-close
+            # ordering is unchanged, only the teardown step is wrapped.
+            teardown_runner = None if services.popup.is_interactive() else services.popup.run_teardown
             kill_session(
                 current_directory,
                 sway=services.sway,
                 session_backend_for=services.session_backends.for_session,
+                teardown_runner=teardown_runner,
             )
         case _:
             msg = f"Unsupported command {command!r}"
@@ -429,6 +455,7 @@ def build_default_services() -> HopServices:
         neovim=neovim,
         browser=SessionBrowserAdapter(sway=sway, session_windows_for=registry.resolve_windows_for_entry),
         session_backends=registry,
+        popup=KittyHopPopup(sway=sway),
     )
 
 
@@ -459,4 +486,5 @@ def build_kitten_services(boss: object) -> HopServices:
         neovim=neovim,
         browser=SessionBrowserAdapter(sway=sway, session_windows_for=registry.resolve_windows_for_entry),
         session_backends=registry,
+        popup=KittyHopPopup(sway=sway),
     )

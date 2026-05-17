@@ -19,15 +19,21 @@ class StubSwayAdapter:
         self,
         workspaces: tuple[str, ...] = (),
         windows: tuple[SwayWindow, ...] = (),
+        focused_workspace: str = "",
     ) -> None:
         self.workspaces = workspaces
         self.windows = windows
+        self.focused_workspace = focused_workspace
         self.switched_workspaces: list[str] = []
         self.layout_calls: list[tuple[str, str]] = []
         self.focused_window_ids: list[int] = []
 
     def switch_to_workspace(self, workspace_name: str) -> None:
         self.switched_workspaces.append(workspace_name)
+        # Reflect the switch so subsequent `get_focused_workspace` checks see
+        # the new workspace — `enter_project_session` reads it back to decide
+        # whether to re-issue the switch.
+        self.focused_workspace = workspace_name
 
     def set_workspace_layout(self, workspace_name: str, layout: str) -> None:
         self.layout_calls.append((workspace_name, layout))
@@ -40,6 +46,9 @@ class StubSwayAdapter:
 
     def focus_window(self, window_id: int) -> None:
         self.focused_window_ids.append(window_id)
+
+    def get_focused_workspace(self) -> str:
+        return self.focused_workspace
 
 
 class StubTerminalAdapter:
@@ -466,7 +475,12 @@ def test_enter_project_session_reuses_the_same_directory_session_on_repeat_invoc
     second_session = enter_project_session(session_root, sway=sway, terminals=terminals)
 
     assert first_session == second_session
-    assert sway.switched_workspaces == [f"p:{session_root.name}", f"p:{session_root.name}"]
+    # The first call switches workspace; the second is a no-op for the switch
+    # since the user is already on `p:src` (skipping the IPC avoids tripping
+    # sway's `workspace_auto_back_and_forth`). Terminal ensure is still
+    # idempotent and fires both times — that's the user-visible "give me
+    # another shell" behavior.
+    assert sway.switched_workspaces == [f"p:{session_root.name}"]
     assert terminals.ensured_terminals == [
         ("src", "shell", session_root),
         ("src", "shell", session_root),

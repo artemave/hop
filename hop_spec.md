@@ -192,6 +192,8 @@ When the focused Sway workspace already matches the cwd-derived session's worksp
 
 This makes "give me another shell in this session" a single keystroke (`hop`) from any session terminal. The signal is the focused workspace, not env vars — so the same behavior is available to a Sway keybinding that runs `cd <project_root> && hop term`.
 
+When `hop` is invoked without a controlling TTY (e.g. from vicinae's detached `setsid -f hop`, a sway keybinding, or a launcher script), the first-entry path shows a `kitten panel` overlay (`app_id="hop:popup"`) streaming the backend's `prepare` output while the session is being created. Sway is switched to `p:<session>` *before* the popup runs so the user lands on the session-to-be while prepare streams. On prepare failure the panel stays open at a held shell so the user can read the error; on success it closes and the normal kitty / editor bootstrap proceeds. From an interactive terminal, prepare output streams to that terminal as today.
+
 ---
 
 ## Kitty process model
@@ -395,6 +397,12 @@ Behavior:
 - remove the session workspace if it still exists after teardown
 - do not close windows on the workspace that hop did not create
 - focus after teardown is left to Sway
+
+Headless invocations (vicinae's `hop-kill` script, sway keybindings) show the same `kitten panel` overlay (`app_id="hop:popup"`) streaming `teardown` output after session windows have closed. Window-close ordering is unchanged — only the teardown step is wrapped. Teardown failure leaves the popup open at a held shell; the session's persisted state file is not removed (matching today's "teardown failure short-circuits forget" behavior). From an interactive terminal, teardown output streams to that terminal as today.
+
+### Error display
+
+Any `HopError` raised during a headless `hop` invocation also surfaces through a `kitten panel` overlay (same `app_id="hop:popup"`, title `Hop: error`) so the user sees what went wrong (`UnknownBackendError`, `SwayConnectionError`, "No active session named …", etc.). Errors already surfaced by a lifecycle popup (`SessionBackendError` with `surfaced_by_popup=True`) are not re-shown — exactly one panel per failure. From an interactive terminal, errors continue to print to stderr only.
 
 ---
 

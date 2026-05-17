@@ -28,6 +28,14 @@ class _FakeBackend:
     def interactive_prefix(self) -> str:
         return ""
 
+    @property
+    def prepare_command(self) -> str | None:
+        return None
+
+    @property
+    def teardown_command(self) -> str | None:
+        return None
+
     def prepare(self, session: ProjectSession) -> None:
         del session
 

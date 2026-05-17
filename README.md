@@ -23,12 +23,14 @@ hop is built on top of [Sway](https://swaywm.org/) window manager, [Kitty](https
 - Linux
 - Python 3.12+
 - [Sway](https://swaywm.org/)
-- [Kitty](https://sw.kovidgoyal.net/kitty/) with remote control enabled (`allow_remote_control yes` in `kitty.conf`)
+- [Kitty](https://sw.kovidgoyal.net/kitty/) ≥ 0.34 (uses `kitten panel --edge=center --layer=overlay` for headless progress popups) with remote control enabled (`allow_remote_control yes` in `kitty.conf`)
 - [Neovim](https://neovim.io/)
 
 Optionally:
 
 - [Vicinae](https://www.vicinae.com/) launcher
+
+When you launch `hop` or `hop kill` headlessly (via vicinae, a sway keybinding, or any other detached caller), a centered `kitten panel` overlay streams the backend's `prepare` / `teardown` output and surfaces any unhandled error so the user can read it before dismissing. From a terminal, output streams to that terminal as today.
 
 ## Installation
 

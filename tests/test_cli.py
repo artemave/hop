@@ -140,3 +140,96 @@ def test_warn_if_hopd_version_stale_silent_when_no_status_file(
     cli._warn_if_hopd_version_stale()  # pyright: ignore[reportPrivateUsage]
 
     assert capsys.readouterr().err == ""
+
+
+# --- Error popup wrapper -----------------------------------------------------
+
+
+class _CapturingPopup:
+    def __init__(self, *, interactive: bool) -> None:
+        self._interactive = interactive
+        self.shown_errors: list[object] = []
+
+    def is_interactive(self) -> bool:
+        return self._interactive
+
+    def show_error(self, error: object) -> None:
+        self.shown_errors.append(error)
+
+
+def _install_cli_doubles(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    popup: _CapturingPopup,
+    raise_exc: BaseException,
+) -> None:
+    from hop import cli
+    from hop.commands import EnterSessionCommand
+
+    class _Services:
+        def __init__(self) -> None:
+            self.popup = popup
+
+    def fake_parse(_argv: list[str] | None = None) -> EnterSessionCommand:
+        return EnterSessionCommand()
+
+    monkeypatch.setattr(cli, "parse_command", fake_parse)
+    monkeypatch.setattr(cli, "build_default_services", _Services)
+    monkeypatch.setattr(cli, "_warn_if_hopd_version_stale", lambda: None)
+
+    def raise_during_execute(_command: object, *, cwd: object, services: object) -> int:
+        del cwd, services
+        raise raise_exc
+
+    monkeypatch.setattr(cli, "execute_command", raise_during_execute)
+
+
+def test_main_invokes_popup_show_error_when_headless(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from hop import cli
+    from hop.errors import HopError
+
+    error = HopError("no active session named 'nonexistent'")
+    popup = _CapturingPopup(interactive=False)
+    _install_cli_doubles(monkeypatch, popup=popup, raise_exc=error)
+
+    assert cli.main([]) == 1
+
+    # Popup surfaces the error to the user.
+    assert popup.shown_errors == [error]
+    # Stderr print is unchanged (additive — captured-stderr callers still see it).
+    assert "no active session" in capsys.readouterr().err
+
+
+def test_main_skips_popup_when_interactive(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    from hop import cli
+    from hop.errors import HopError
+
+    error = HopError("no active session named 'nonexistent'")
+    popup = _CapturingPopup(interactive=True)
+    _install_cli_doubles(monkeypatch, popup=popup, raise_exc=error)
+
+    assert cli.main([]) == 1
+
+    # Interactive caller's terminal already shows the stderr print — no popup.
+    assert popup.shown_errors == []
+    assert "no active session" in capsys.readouterr().err
+
+
+def test_main_skips_popup_when_error_already_surfaced(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from hop import cli
+    from hop.backends import SessionBackendError
+
+    error = SessionBackendError("prepare failed", surfaced_by_popup=True)
+    popup = _CapturingPopup(interactive=False)
+    _install_cli_doubles(monkeypatch, popup=popup, raise_exc=error)
+
+    assert cli.main([]) == 1
+
+    # The lifecycle popup already displayed this failure inline; cli.main
+    # must not pop a second, redundant error panel.
+    assert popup.shown_errors == []
+    assert "prepare failed" in capsys.readouterr().err

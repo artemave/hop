@@ -97,6 +97,24 @@ class StubBrowserAdapter:
         raise AssertionError("Browser should not be called in this test")
 
 
+class _InteractivePopup:
+    """`hop run` doesn't touch the popup; keep `is_interactive=True` so the
+    adapter is never invoked. Constructed inline to avoid pulling test_app.py's
+    stubs across files."""
+
+    def is_interactive(self) -> bool:
+        return True
+
+    def run_prepare(self, *_args: object, **_kwargs: object) -> None:  # pragma: no cover - unused
+        return None
+
+    def run_teardown(self, *_args: object, **_kwargs: object) -> None:  # pragma: no cover - unused
+        return None
+
+    def show_error(self, *_args: object, **_kwargs: object) -> None:  # pragma: no cover - unused
+        return None
+
+
 @dataclass
 class StubHopServices:
     sway: StubSwayAdapter
@@ -117,6 +135,7 @@ class StubHopServices:
                 global_config_loader=lambda: HopConfig(),
                 sessions_loader=lambda: {},
             ),
+            popup=_InteractivePopup(),
         )
 
 
