@@ -4,9 +4,9 @@ Add a unix-socket HTTP acceptor to `hopd` so editor plugins inside non-host back
 
 ## Background
 
-Editor plugins like `vigun` invoke `hop run --role test "<cmd>"` from inside the editor. With the `host` backend this works because the editor runs on the host. With `devcontainer` or `ssh` backends the editor runs on the backend side, where neither `hop` nor host kitty/Sway state is reachable. The [bridge design](../ideas/bridge-hop-cli-calls-from-non-host-backends.md) introduces a host-side acceptor and a small backend-side shim that forwards CLI invocations over a unix socket.
+Editor plugins like `vigun` invoke `hop run --role test "<cmd>"` from inside the editor. With the `host` backend this works because the editor runs on the host. With `devcontainer` or `ssh` backends the editor runs on the backend side, where neither `hop` nor host kitty/Sway state is reachable. The bridge introduces a host-side acceptor in `hopd` and a small backend-side shim that forwards CLI invocations over a unix socket.
 
-This task implements only the host side: the acceptor, the wire protocol, and session-identity resolution from the focused Sway window. The backend shim, recipe templates, and user-facing docs are out of scope and tracked separately by the umbrella idea.
+This task implements the full bridge — host acceptor, wire protocol, focused-window session resolution, POSIX-sh client shim, the `hop bridge shim` CLI surface that prints the shim, and recipe / docs updates for both `devcontainer` and `ssh` backends. The umbrella idea's scope is delivered here and can be retired.
 
 ## Design
 
@@ -57,13 +57,17 @@ The acceptor buffers full stdout/stderr — no streaming. Acceptable for the tar
   - `dispatch_via_subprocess(session: ProjectSession, argv: Sequence[str]) -> CompletedProcess[bytes]` — the production dispatcher. Lives here so it has a single integration test.
 - **`hop/daemon.py`** — extend `main()` to start a `threading.Thread(target=bridge.serve_forever, daemon=True)` after the daemon lock is acquired. The thread terminates when `hopd` exits. The socket path is `Path(XDG_RUNTIME_DIR) / "hop" / "api.sock"`; the directory is created (`mkdir(parents=True, exist_ok=True)`) and any stale socket file is unlinked before bind.
 - **`hop/sway.py`** — no API change. The bridge consumes `list_windows()` directly.
+- **`hop/bridge.py`** — also exports `BRIDGE_SHIM`, the POSIX-sh client script as a string constant. Reads `${HOP_SOCKET:-/run/hop.sock}` for the socket path, uses `curl --unix-socket`, demultiplexes the `X-Hop-Exit` / `X-Hop-Stderr` (base64) headers into the caller's exit code and stderr stream.
+- **`hop/commands/__init__.py`, `hop/cli.py`, `hop/app.py`** — add the `hop bridge shim` CLI surface. `BridgeShimCommand()` is parsed from `["bridge", "shim"]`; `execute_command` writes `BRIDGE_SHIM` to stdout. argparse enforces the only valid bridge subcommand so the dispatch in `cli.py` is unconditional.
+- **`docs/devcontainer.md`** — adds a "4. Optional: enable the bridge for editor plugins" section covering the compose socket mount, the `prepare`-time shim install via `hop bridge shim | podman-compose exec -T … install -m 755 /dev/stdin /usr/local/bin/hop`, and a verification step.
+- **`docs/ssh.md`** — adds an "Optional: enable the bridge for editor plugins" section showing how to layer `-R /run/hop.sock:$XDG_RUNTIME_DIR/hop/api.sock` and an inline shim install into the existing `prepare` ControlMaster recipe. Documents the `StreamLocalBindUnlink=yes` requirement.
+- **`hop_spec.md`** — adds a "Bridge acceptor" section after the hopd section, documenting the wire protocol, focused-window session resolution, subprocess dispatch, and the `hop bridge shim` surface.
 
 ### What this task does *not* do
 
-- No backend-side shim or shim install step. Tracked separately.
-- No devcontainer/ssh recipe templates or user-facing doc updates.
-- No support for bridge calls originating from role terminals (Sway marks alone can't disambiguate which session a kitty role window belongs to).
-- No streaming responses.
+- No support for bridge calls originating from role terminals (Sway marks alone can't disambiguate which session a kitty role window belongs to). Future enhancement via per-session kitty-socket probing.
+- No streaming responses; the acceptor buffers full stdout/stderr.
+- No granular runtime configuration (single fixed socket path, single fixed `POST /call` endpoint).
 
 ## Test Plan
 
@@ -84,6 +88,10 @@ Test cases in `tests/test_bridge.py`:
 7. **Stderr round-trips through base64 header** — stderr containing binary bytes (NULs, non-UTF8). Asserts: client base64-decodes the header back to the original bytes.
 8. **`dispatch_via_subprocess` integration** — calls the production dispatcher directly with `argv=["hop", "--help"]` and a `ProjectSession` for `tmp_path`. Asserts: returncode is 0, stdout contains `usage:`.
 9. **Stale socket file is unlinked** — pre-create the socket path as a regular file. `serve_forever` removes it and binds successfully.
+10. **Shim round-trips stdout, stderr, exit code** — writes `BRIDGE_SHIM` to a tmp file, invokes `sh shim.sh hop run --role test ls` with `HOP_SOCKET` pointing at the test bridge, dispatcher returns scripted `(returncode=7, stdout, stderr)`. Asserts: shim exits 7, stdout matches, stderr matches.
+11. **Shim surfaces acceptor 4xx to stderr** — bridge returns `400 no focused Sway window`; shim exits 1 with the message on stderr and empty stdout.
+12. **Shim exits 2 on connection failure** — invokes shim against a non-existent socket. Asserts: exit 2, curl error on stderr.
+13. **`hop bridge shim` CLI prints the shim** — `parse_command(["bridge", "shim"])` returns `BridgeShimCommand()`; `execute_command(BridgeShimCommand(), ...)` writes `BRIDGE_SHIM` to stdout.
 
 ## Task Type
 
@@ -100,8 +108,10 @@ implement
 
 ## Definition of Done
 
-- `hop/bridge.py` exists with `BridgeServer`, `serve_forever`, `dispatch_via_subprocess` as described.
+- `hop/bridge.py` exists with `BridgeServer`, `serve_forever`, `dispatch_via_subprocess`, `BRIDGE_SHIM` as described.
 - `hop/daemon.py` starts the bridge acceptor in a daemon thread after lock acquisition; the thread terminates cleanly on `hopd` shutdown.
+- `hop bridge shim` is wired through `BridgeShimCommand` and prints `BRIDGE_SHIM` to stdout.
+- `docs/devcontainer.md`, `docs/ssh.md`, and `hop_spec.md` carry the end-to-end setup story and protocol reference.
 - All test cases above pass.
-- No new runtime dependencies beyond the Python stdlib.
+- No new runtime dependencies beyond the Python stdlib on the host; `curl`, `awk`, `base64`, `tr`, `mktemp` on the backend (already present in standard dev container base images — `socat` / `nc` are *not* required).
 - `make` (the default target — test, typecheck, lint, format-check) is green.

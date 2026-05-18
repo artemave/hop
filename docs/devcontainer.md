@@ -119,6 +119,67 @@ cat $XDG_RUNTIME_DIR/hop/sessions/<project_name>.json
 
 The `backend.interactive_prefix` and `backend.noninteractive_prefix` fields are what hop wraps around every kitty launch and every non-interactive backend call (like the kitten's path-existence check).
 
+### 4. Optional: enable the bridge for editor plugins
+
+Plugins like `vigun` invoke `hop run --role test "<cmd>"` from inside the editor. With `host` sessions that's just `hop` on the host. With this backend the editor runs *inside* the container, where `hop` isn't installed and host kitty/Sway state isn't reachable — so without setup, those calls fail.
+
+Hop ships a small POSIX-sh client (no `socat`/`nc` dependency, just `curl`) that forwards CLI invocations through a unix socket to a host-side acceptor inside `hopd`. To wire it up:
+
+**a. Mount the bridge socket into the container.**
+
+In your compose file, add one bind mount on the `devcontainer` service. The host socket is created and managed by `hopd`:
+
+```yaml
+services:
+  devcontainer:
+    volumes:
+      - "${XDG_RUNTIME_DIR}/hop/api.sock:/run/hop.sock"
+```
+
+The container side path doesn't have to be `/run/hop.sock` — anything works, you just have to point the shim at it via `HOP_SOCKET` (see step c). The default the shim looks for is `/run/hop.sock`, so picking that means zero extra config.
+
+> `hopd` must be running when the container starts (`exec hopd` in sway config; see the spec). If the host socket doesn't exist at compose-up time, container runtimes will create a directory at that path instead, and the bridge won't work — start `hopd` first, then `hop` your session.
+
+**b. Install the shim into the container at `prepare` time.**
+
+Extend the backend's `prepare` recipe to pipe `hop bridge shim` into the container as `/usr/local/bin/hop`. Combined with your existing compose-up:
+
+```toml
+[backends.devcontainer]
+prepare = """
+  podman-compose -f docker-compose.dev.yml up -d devcontainer \\
+  && hop bridge shim | podman-compose -f docker-compose.dev.yml exec -T devcontainer \\
+       install -m 755 /dev/stdin /usr/local/bin/hop
+"""
+```
+
+`hop bridge shim` prints the shim script to stdout; `install -m 755 /dev/stdin /usr/local/bin/hop` reads it via stdin and drops it in place with the executable bit set. Re-runs are idempotent (the shim contents don't change between calls).
+
+**c. (Optional) point the shim at a non-default socket path.**
+
+If you mounted the socket somewhere other than `/run/hop.sock`, export `HOP_SOCKET` in the container's environment so the shim finds it:
+
+```yaml
+services:
+  devcontainer:
+    environment:
+      HOP_SOCKET: /tmp/hop-api.sock
+    volumes:
+      - "${XDG_RUNTIME_DIR}/hop/api.sock:/tmp/hop-api.sock"
+```
+
+**d. Verify.**
+
+After `hop` brings the session up, open the editor window and from a shell inside the container run:
+
+```bash
+hop edit
+```
+
+It should focus your host editor window (a no-op if you're already on it, otherwise switching to the session's Sway workspace). Errors from the acceptor — `no focused Sway window`, `session 'X' from focused window is not in hop state`, etc. — go to the shim's stderr.
+
+The bridge currently requires you to be focused on the session's **editor** window when the call is made. Bridge calls from kitty role terminals (test/server/console) are rejected; that's a future enhancement.
+
 ## Project config
 
 `<project_root>/.hop.toml` uses **the same schema** as the global file — backends, layouts, and top-level windows are all parseable in either place. Drop in whatever subset of sections you want. Hop merges the two files when resolving:

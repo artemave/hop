@@ -71,6 +71,48 @@ You should see:
 
 `cat $XDG_RUNTIME_DIR/hop/sessions/foo-remote.json` shows the persisted record. `backend.interactive_prefix` is the ssh-with-ControlPath line; that's what hop replays for every later command against the session.
 
+## Optional: enable the bridge for editor plugins
+
+The remote-side nvim can't call `hop run`/`hop edit` directly — `hop` isn't installed on the remote, and host kitty/Sway state isn't reachable. Hop's bridge solves this: a POSIX-sh client on the remote forwards CLI invocations to a unix socket inside `hopd` on the host.
+
+Both ends are wired up through the existing ssh `ControlMaster`, so there's no second connection or new tunnel:
+
+```toml
+[backends.foo-remote]
+activate              = "true"
+prepare               = """
+  ssh -o ControlMaster=auto -o ControlPath=~/.ssh/cm-%r@%h:%p -o ControlPersist=600 \\
+      -o ServerAliveInterval=60 \\
+      -o StreamLocalBindUnlink=yes \\
+      -R /run/hop.sock:$XDG_RUNTIME_DIR/hop/api.sock \\
+      myhost true \\
+  && hop bridge shim | ssh -o ControlPath=~/.ssh/cm-%r@%h:%p myhost \\
+       install -m 755 /dev/stdin /usr/local/bin/hop
+"""
+interactive_prefix    = "ssh -o ControlPath=~/.ssh/cm-%r@%h:%p myhost"
+noninteractive_prefix = "ssh -o ControlPath=~/.ssh/cm-%r@%h:%p myhost"
+host_translate        = "echo myhost"
+```
+
+What changed in `prepare`:
+
+- **`-R /run/hop.sock:$XDG_RUNTIME_DIR/hop/api.sock`** — reverse-forwards the host's bridge socket to `/run/hop.sock` on the remote. The shim's default `HOP_SOCKET` is `/run/hop.sock`, so this needs no in-shim config.
+- **`-o StreamLocalBindUnlink=yes`** — tells the remote sshd to unlink any stale socket at the bind path before creating the new one. Without this, a second `ssh -R` after an unclean session leaves the prior socket and fails. Requires `StreamLocalBindUnlink=yes` to also be enabled in the remote `sshd_config` for SocketAddrPath bindings outside the user's runtime dir; if your sysadmin won't enable that, pick a per-user path like `$HOME/.hop-api.sock` on the remote and set `HOP_SOCKET` to match (e.g. via `~/.ssh/environment` or by exporting it from the shell's profile).
+- **`hop bridge shim | ssh … install -m 755 /dev/stdin /usr/local/bin/hop`** — pipes the shim script through the same ssh ControlMaster and writes it to `/usr/local/bin/hop` with the executable bit set. Idempotent; re-runs just rewrite the same content.
+
+The remote needs `curl`, `awk`, `base64`, `tr`, and `mktemp` available in `$PATH`. All coreutils-universal; nothing remote-specific to install.
+
+`hopd` must be running on the host before `hop` starts the session (`exec hopd` in your sway config). If the host socket doesn't exist, `ssh -R` will fail to set up the reverse forward and `prepare` aborts before the shim install.
+
+Verify:
+
+```bash
+# From inside the remote shell (a session terminal):
+hop edit
+```
+
+Errors from the acceptor — `no focused Sway window`, `session 'X' from focused window is not in hop state`, etc. — go to the shim's stderr. The bridge requires you to be focused on the session's **editor** window when the call is made; calls from role terminals (test/server) are rejected pending a future enhancement.
+
 ## Tradeoffs
 
 - **Plugins live on the remote.** This is the deepest commitment of the model. Either install your nvim stack on the remote (recommended), or use a different shape (sshfs + local nvim) which hop doesn't support directly.

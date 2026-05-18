@@ -57,6 +57,11 @@ class KillCommand:
     pass
 
 
+@dataclass(frozen=True, slots=True)
+class BridgeShimCommand:
+    pass
+
+
 Command = (
     EnterSessionCommand
     | SwitchSessionCommand
@@ -68,4 +73,5 @@ Command = (
     | TailCommand
     | BrowserCommand
     | KillCommand
+    | BridgeShimCommand
 )

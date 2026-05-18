@@ -10,7 +10,9 @@ import pytest
 
 from hop.app import HopServices, execute_command
 from hop.backends import CommandBackend, SessionBackend, SessionBackendError
+from hop.bridge import BRIDGE_SHIM
 from hop.commands import (
+    BridgeShimCommand,
     BrowserCommand,
     EditCommand,
     EnterSessionCommand,
@@ -1594,3 +1596,12 @@ def test_session_base_registry_re_resolves_when_kitty_dead(tmp_path: Path) -> No
     )
 
     assert _is_host_backend(backend)
+
+
+def test_execute_bridge_shim_prints_shim_to_stdout(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    services = build_services().as_services()
+
+    assert execute_command(BridgeShimCommand(), cwd=tmp_path, services=services) == 0
+    captured = capsys.readouterr()
+    assert captured.out == BRIDGE_SHIM
+    assert captured.err == ""

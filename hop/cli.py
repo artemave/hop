@@ -8,6 +8,7 @@ from typing import Sequence
 from hop import debug
 from hop.app import build_default_services, execute_command
 from hop.commands import (
+    BridgeShimCommand,
     BrowserCommand,
     Command,
     EditCommand,
@@ -67,6 +68,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("kill")
 
+    bridge_parser = subparsers.add_parser("bridge")
+    bridge_subparsers = bridge_parser.add_subparsers(dest="bridge_command", required=True)
+    bridge_subparsers.add_parser("shim", help="Print the POSIX-sh bridge client to stdout.")
+
     return parser
 
 
@@ -106,6 +111,10 @@ def parse_command(argv: Sequence[str] | None = None) -> Command:
             return BrowserCommand(url=namespace.url)
         case "kill":
             return KillCommand()
+        case "bridge":
+            # argparse enforces ``bridge_command == "shim"`` via the
+            # ``required=True`` subparser + the single ``shim`` choice.
+            return BridgeShimCommand()
         case command_name:
             msg = f"Unsupported command {command_name!r}"
             raise ValueError(msg)

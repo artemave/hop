@@ -13,7 +13,7 @@ from typing import Callable, Iterator, Sequence
 
 import pytest
 
-from hop.bridge import BridgeServer, default_api_socket_path, dispatch_via_subprocess, serve_forever
+from hop.bridge import BRIDGE_SHIM, BridgeServer, default_api_socket_path, dispatch_via_subprocess, serve_forever
 from hop.session import ProjectSession
 from hop.state import record_session
 from hop.sway import SwayWindow
@@ -379,3 +379,63 @@ def test_default_api_socket_path_uses_xdg_runtime_dir(monkeypatch: pytest.Monkey
 def test_default_api_socket_path_falls_back_to_tmp(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
     assert default_api_socket_path() == Path("/tmp/hop/api.sock")
+
+
+def _run_shim(socket_path: Path, shim_path: Path, args: list[str]) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(
+        ["sh", str(shim_path), *args],
+        env={"HOP_SOCKET": str(socket_path), "PATH": "/usr/bin:/bin"},
+        capture_output=True,
+        check=False,
+    )
+
+
+def test_shim_round_trips_stdout_stderr_and_exit_code(tmp_path: Path) -> None:
+    socket_path = tmp_path / "api.sock"
+    sessions_dir = tmp_path / "sessions"
+    _record_demo_session(sessions_dir, tmp_path)
+    shim_path = tmp_path / "hop-shim.sh"
+    shim_path.write_text(BRIDGE_SHIM)
+
+    def dispatcher(session: ProjectSession, argv: Sequence[str]) -> CompletedProcess[bytes]:
+        del session, argv
+        return CompletedProcess(args=[], returncode=7, stdout=b"hello\n", stderr=b"warn line\n")
+
+    with _running_bridge(socket_path, lambda: [_editor_window("demo")], dispatcher, sessions_dir=sessions_dir):
+        result = _run_shim(socket_path, shim_path, ["run", "--role", "test", "ls"])
+
+    assert result.returncode == 7
+    assert result.stdout == b"hello\n"
+    assert result.stderr == b"warn line\n"
+
+
+def test_shim_surfaces_acceptor_error_to_stderr(tmp_path: Path) -> None:
+    socket_path = tmp_path / "api.sock"
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir()
+    shim_path = tmp_path / "hop-shim.sh"
+    shim_path.write_text(BRIDGE_SHIM)
+
+    def dispatcher(session: ProjectSession, argv: Sequence[str]) -> CompletedProcess[bytes]:
+        raise AssertionError("dispatcher should not be invoked")
+
+    # No focused window → acceptor returns 400; shim must route body to stderr
+    # and exit 1.
+    with _running_bridge(socket_path, lambda: [], dispatcher, sessions_dir=sessions_dir):
+        result = _run_shim(socket_path, shim_path, ["edit"])
+
+    assert result.returncode == 1
+    assert result.stdout == b""
+    assert b"no focused Sway window" in result.stderr
+
+
+def test_shim_fails_when_socket_is_missing(tmp_path: Path) -> None:
+    socket_path = tmp_path / "missing.sock"
+    shim_path = tmp_path / "hop-shim.sh"
+    shim_path.write_text(BRIDGE_SHIM)
+
+    result = _run_shim(socket_path, shim_path, ["edit"])
+
+    assert result.returncode == 2
+    # curl wrote the connection diagnostic to its own stderr (because we use -sS).
+    assert b"curl" in result.stderr.lower() or b"connect" in result.stderr.lower()

@@ -428,6 +428,42 @@ Intended to be wired in sway config as `exec hopd` — *not* `exec_always`. The 
 
 Activated entries in vicinae dispatch via `hop edit` (editor role), `hop browser` (browser role), `hop term --role <name>` (any other role), `hop switch <name>`, or `hop kill`. The activated `hop kill` script detaches via `setsid -f` so vicinae's UI-close SIGTERM does not interrupt teardown.
 
+`hopd` also hosts the **bridge acceptor** (see next section) on a unix socket. The acceptor runs in a daemon thread alongside the Sway IPC subscription and shares `hopd`'s lifecycle — no extra `exec` line in sway config.
+
+---
+
+## Bridge acceptor
+
+`hopd` listens on a per-user unix socket at `$XDG_RUNTIME_DIR/hop/api.sock` so editor plugins running inside non-host backends (devcontainer, ssh) can dispatch `hop` CLI calls back to the host. The host is always the authority — backends never carry hop state.
+
+Wire protocol — HTTP/1.0 over `AF_UNIX`:
+
+- Request: `POST /call` with the body as the shim's argv NUL-separated. The first element is the shim's `$0` and is ignored; subsequent elements are forwarded to `hop`. No `cwd` or session handle is carried in the request.
+- Response on successful dispatch: `200 OK` with body equal to the `hop` subprocess's stdout, header `X-Hop-Exit: <integer>` carrying its exit code, and header `X-Hop-Stderr: <base64>` carrying its stderr (base64-encoded because HTTP headers are text-only).
+- Response on acceptor-level failure: `400` (caller context — no focused session, malformed argv) or `500` (acceptor fault) with a plain-text `text/plain; charset=utf-8` body explaining the problem.
+
+Session identity is resolved on the host from existing Sway state, not from anything the shim sends:
+
+- The acceptor queries Sway for the focused window. The focused window must carry an `_hop_editor:<session>` mark (set by the editor adapter at launch); the suffix is the session name.
+- The session record is looked up in `$XDG_RUNTIME_DIR/hop/sessions/<name>.json`. The `hop` subprocess is then spawned with `cwd` set to that session's `project_root`.
+- Bridge calls made while focus is on a kitty role terminal are rejected with `400` — role terminals carry no session mark in Sway, and disambiguating them is left to a future enhancement.
+
+Dispatch is via subprocess (`python -m hop <argv>`) per request. Output is buffered before the response is written; streaming is out of scope. The protocol is curl-compatible — `curl --unix-socket $XDG_RUNTIME_DIR/hop/api.sock --data-binary @- http://_/call < argv.nul` is sufficient to drive it from the host, which is also how the host-side test suite exercises it.
+
+### Shim
+
+A POSIX-sh client ships with hop and is printed verbatim by:
+
+```bash
+hop bridge shim
+```
+
+Backends install it into the backend's filesystem at the path `hop` (typically `/usr/local/bin/hop`); inside the backend it forwards argv to the host acceptor and demultiplexes the response into stdout, stderr, and an exit code. Required backend-side tools: `curl`, `awk`, `base64`, `tr`, `mktemp` — coreutils-universal or near-universal in dev container base images.
+
+The shim reads its socket path from `${HOP_SOCKET:-/run/hop.sock}`. Recipes that bind/forward the host socket to a different in-backend path set `HOP_SOCKET` in the backend's environment.
+
+Per-backend recipes (compose volume mount for devcontainer; ssh `-R` for the ssh backend) along with the `prepare`-time shim install live in the recipe guides under `docs/`.
+
 ---
 
 ## Opening links from terminal output

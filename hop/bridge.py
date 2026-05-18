@@ -26,6 +26,41 @@ SwaySource = Callable[[], Sequence[SwayWindow]]
 Dispatcher = Callable[[ProjectSession, Sequence[str]], "CompletedProcess[bytes]"]
 
 
+# POSIX-sh client for the bridge acceptor. Printed verbatim by
+# ``hop bridge shim``; install into the backend at ``/usr/local/bin/hop``
+# and forward ``$XDG_RUNTIME_DIR/hop/api.sock`` from the host into the
+# backend at the path ``HOP_SOCKET`` resolves to (default ``/run/hop.sock``).
+# Dependencies inside the backend: ``curl``, ``awk``, ``base64``,
+# ``mktemp``, ``tr`` — all coreutils-universal or near-universal in dev
+# container base images.
+BRIDGE_SHIM = r"""#!/bin/sh
+sock=${HOP_SOCKET:-/run/hop.sock}
+hdr=$(mktemp) || exit 2
+body=$(mktemp) || { rm -f "$hdr"; exit 2; }
+trap 'rm -f "$hdr" "$body"' EXIT
+
+status=$(printf '%s\0' "$0" "$@" | curl -sS --unix-socket "$sock" \
+    -D "$hdr" -o "$body" -w '%{http_code}' \
+    --data-binary @- "http://_/call") || exit 2
+
+case "$status" in
+    200)
+        ec=$(awk 'tolower($1)=="x-hop-exit:" {print $2+0; exit}' "$hdr")
+        err=$(awk 'tolower($1)=="x-hop-stderr:" {print $2; exit}' "$hdr" | tr -d '\r')
+        if [ -n "$err" ]; then
+            printf '%s' "$err" | base64 -d >&2
+        fi
+        cat "$body"
+        exit "${ec:-0}"
+        ;;
+    *)
+        cat "$body" >&2
+        exit 1
+        ;;
+esac
+"""
+
+
 def default_api_socket_path() -> Path:
     """Canonical bridge socket path under ``$XDG_RUNTIME_DIR/hop``."""
 

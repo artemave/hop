@@ -2,6 +2,7 @@ import pytest
 
 from hop.cli import parse_command
 from hop.commands import (
+    BridgeShimCommand,
     BrowserCommand,
     EditCommand,
     EnterSessionCommand,
@@ -45,6 +46,7 @@ from hop.commands import (
         (["browser"], BrowserCommand()),
         (["browser", "https://example.com"], BrowserCommand(url="https://example.com")),
         (["kill"], KillCommand()),
+        (["bridge", "shim"], BridgeShimCommand()),
     ],
 )
 def test_parse_command_maps_argv_to_typed_commands(argv: list[str], expected: object) -> None:
