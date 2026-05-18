@@ -11,11 +11,12 @@ import argparse
 import os
 import subprocess
 import sys
+import threading
 import traceback
 from pathlib import Path
 from typing import Callable, Sequence
 
-from hop import debug
+from hop import bridge, debug
 from hop.app import SessionBackendRegistry
 from hop.commands.session import SESSION_WORKSPACE_PREFIX, SessionListing, list_sessions
 from hop.config import load_global_config
@@ -89,6 +90,32 @@ def main(argv: Sequence[str] | None = None) -> int:
         os.close(lock_fd)
 
 
+def _start_bridge_acceptor(sway: SwayIpcAdapter) -> None:
+    """Spin up the bridge acceptor in a daemon thread.
+
+    Bridge calls (editor plugins inside devcontainer/ssh backends) hit a
+    unix socket under ``$XDG_RUNTIME_DIR/hop`` and dispatch back to the
+    host hop. The thread is a daemon thread so it dies when ``hopd``
+    exits — no explicit shutdown handshake.
+    """
+
+    socket_path = bridge.default_api_socket_path()
+
+    def serve() -> None:
+        try:
+            bridge.serve_forever(
+                socket_path,
+                sway_source=sway.list_windows,
+                dispatcher=bridge.dispatch_via_subprocess,
+            )
+        except Exception:
+            debug.log(f"hopd: bridge acceptor crashed\n{traceback.format_exc()}")
+
+    thread = threading.Thread(target=serve, name="hopd-bridge", daemon=True)
+    thread.start()
+    debug.log(f"hopd: bridge acceptor listening on {socket_path}")
+
+
 def _spawn_detached_hopd() -> None:
     """Fork off a fresh hopd, detached from the current shell session.
 
@@ -122,6 +149,7 @@ def _run_main_loop(scripts_dir: Path) -> int:
     debug.log("hopd: starting")
     sway = SwayIpcAdapter()
     registry = SessionBackendRegistry()
+    _start_bridge_acceptor(sway)
 
     def sessions_loader() -> Sequence[SessionListing]:
         return list_sessions(sway=sway)
