@@ -95,6 +95,37 @@ prepare = "docker compose -f docker-compose.dev.yml up -d devcontainer"
 # ... etc.
 ```
 
+#### Entrypoint setup steps and the `--wait` race
+
+`podman-compose up -d` (and `docker compose up -d`) returns as soon as the container's PID 1 has started — *not* when the entrypoint's pre-exec setup completes. If your image's entrypoint does anything that downstream hop commands depend on (writing an nvim `.exrc` trust file, mutating `~/.claude.json`, dotfiles glue, etc.), hop's editor and role-terminal launches will race that setup.
+
+The fix is a healthcheck on the container, paired with `--wait`:
+
+```yaml
+# in your compose service
+services:
+  devcontainer:
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /tmp/devcontainer-ready"]
+      interval: 1s
+      timeout: 1s
+      retries: 30
+      start_period: 1s
+```
+
+```bash
+# in your image's entrypoint, AFTER all pre-exec setup
+touch /tmp/devcontainer-ready
+exec "$@"
+```
+
+```toml
+# in the backend recipe
+prepare = "podman-compose -f docker-compose.dev.yml up -d --wait devcontainer && …"
+```
+
+`--wait` blocks until the healthcheck passes, so the entrypoint's setup is guaranteed to be complete before hop launches the editor or installs the bridge shim. Same shape applies to `docker compose up -d --wait`.
+
 `activate` is the auto-detect probe — hop runs it in the project root and picks this backend if it exits 0. Any command works; `test -f <marker>` is the simplest. Backends without `activate` aren't eligible for auto-detect; they can only be picked by name with `hop --backend <name>` or `[backend].name = "<name>"` in `.hop.toml`.
 
 ### 3. Verify
