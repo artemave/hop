@@ -118,12 +118,15 @@ class KittyHopPopup:
         *,
         kind: Literal["prepare", "teardown"],
     ) -> None:
-        exit_code = self._spawn_and_wait(_lifecycle_script(session, command_str, kind=kind))
+        exit_code = self._spawn_and_wait(
+            _lifecycle_script(session, command_str, kind=kind),
+            workspace_name=session.workspace_name,
+        )
         if exit_code != 0:
             msg = f"session {kind} did not succeed for {session.session_name!r}; see the popup for details"
             raise SessionBackendError(msg, surfaced_by_popup=True)
 
-    def _spawn_and_wait(self, script: str) -> int:
+    def _spawn_and_wait(self, script: str, *, workspace_name: str | None = None) -> int:
         argv = _kitty_argv(script)
         # Snapshot existing popup-app-id windows so the polling loop can pick
         # out *our* new window even when a stale one is still being torn down
@@ -131,27 +134,44 @@ class KittyHopPopup:
         seen_before: set[int] = self._popup_window_ids() if self._sway is not None else set()
         proc = self._launcher(argv)
         if self._sway is not None:
-            self._float_new_popup_window(seen_before)
+            self._float_new_popup_window(seen_before, workspace_name=workspace_name)
         return proc.wait()
 
     def _popup_window_ids(self) -> set[int]:
         assert self._sway is not None
         return {w.id for w in self._sway.list_windows() if w.app_id == POPUP_APP_ID}
 
-    def _float_new_popup_window(self, seen_before: set[int]) -> None:
+    def _float_new_popup_window(
+        self,
+        seen_before: set[int],
+        *,
+        workspace_name: str | None,
+    ) -> None:
         """Poll sway's window tree for the kitty window we just spawned, then
-        issue `floating enable, resize set <w>ppt <h>ppt, move position center`
-        against it.
+        issue `move container to workspace p:<session>, floating enable,
+        resize set <w>ppt <h>ppt, move position center` against it.
 
-        Resizing is needed because kitty's default `initial_window_*` can
-        produce a window that spans multiple monitors; `resize set` with `ppt`
-        scales to the workspace's output, so the popup is always contained
-        within the display showing `p:<session>`. `move position center`
+        The move-to-workspace step is the load-bearing fix for the "popup
+        spills onto a different monitor" symptom: kitty creates the toplevel
+        on whatever workspace happens to be focused at registration time, so
+        if the user has wandered off ``p:<session>`` during ``prepare`` the
+        popup lands on the wrong output and the subsequent ``ppt`` resize is
+        measured against that wrong output. Moving first pins the popup to
+        the session's workspace; the resize+center then applies to the
+        session's output.
+
+        Resizing is needed because kitty's default ``initial_window_*`` can
+        produce a window that spans multiple monitors; ``resize set`` with
+        ``ppt`` scales to the workspace's output. ``move position center``
         re-centers after the resize.
+
+        ``workspace_name`` may be ``None`` (currently only the ``show_error``
+        path), in which case the popup floats on whichever workspace the
+        kitty window happened to register on.
 
         Bounded by a short timeout so a kitty that fails to register a window
         (typically because the binary crashed at startup) doesn't hang hop —
-        `proc.wait()` will then surface the exit code.
+        ``proc.wait()`` will then surface the exit code.
         """
         assert self._sway is not None
         deadline = self._clock() + _FLOAT_POLL_TIMEOUT_SECONDS
@@ -160,11 +180,17 @@ class KittyHopPopup:
             new_ids = current - seen_before
             if new_ids:
                 target = max(new_ids)
-                self._sway.run_command(
-                    f"[con_id={target}] floating enable, "
-                    f"resize set {_POPUP_WIDTH_PPT} ppt {_POPUP_HEIGHT_PPT} ppt, "
-                    "move position center"
+                steps: list[str] = []
+                if workspace_name is not None:
+                    steps.append(f"move container to workspace {workspace_name}")
+                steps.extend(
+                    [
+                        "floating enable",
+                        f"resize set {_POPUP_WIDTH_PPT} ppt {_POPUP_HEIGHT_PPT} ppt",
+                        "move position center",
+                    ]
                 )
+                self._sway.run_command(f"[con_id={target}] " + ", ".join(steps))
                 return
             self._sleep(_FLOAT_POLL_INTERVAL_SECONDS)
 

@@ -159,12 +159,13 @@ def test_run_prepare_launches_plain_kitty_with_popup_app_id(tmp_path: Path) -> N
     assert "compose up -d devcontainer" in script
 
 
-def test_run_prepare_floats_resizes_and_centers_the_popup_window_via_sway(tmp_path: Path) -> None:
-    """After kitty spawns the popup window, hop must issue an `[con_id=N]
-    floating enable, resize set <w>ppt <h>ppt, move position center` command.
-    The `ppt` resize keeps the popup inside the workspace's output — kitty's
-    default initial window size can otherwise straddle monitor boundaries on
-    multi-display setups."""
+def test_run_prepare_moves_floats_resizes_and_centers_the_popup_window_via_sway(tmp_path: Path) -> None:
+    """After kitty spawns the popup window, hop must pin it to the session's
+    workspace *first*, then float / resize / center — so the ``ppt`` resize is
+    measured against the session's output rather than whichever monitor was
+    focused when kitty happened to register the window. Without the move step,
+    focusing away from ``p:<session>`` during ``prepare`` left the popup on
+    the wrong display."""
     sway = _RecordingSway()
 
     def appear() -> None:
@@ -174,14 +175,41 @@ def test_run_prepare_floats_resizes_and_centers_the_popup_window_via_sway(tmp_pa
 
     launcher = _LauncherWithSpawnHook(exit_code=0, on_spawn=appear)
     popup = KittyHopPopup(sway=sway, launcher=launcher, sleep=lambda _s: None)
+    session = _make_session(tmp_path)
 
-    popup.run_prepare(_make_session(tmp_path), _devcontainer_backend())
+    popup.run_prepare(session, _devcontainer_backend())
 
     assert len(sway.commands) == 1
     cmd = sway.commands[0]
-    assert cmd.startswith("[con_id=77] floating enable, ")
-    assert "resize set" in cmd
+    assert cmd.startswith("[con_id=77] ")
+    # Order is load-bearing: workspace move must precede the resize so the
+    # percentage-based resize uses the session's output dimensions.
+    move_idx = cmd.index(f"move container to workspace {session.workspace_name}")
+    resize_idx = cmd.index("resize set")
+    floating_idx = cmd.index("floating enable")
+    assert move_idx < floating_idx < resize_idx
     assert "ppt" in cmd  # percentage of the workspace's output, not raw px
+    assert cmd.endswith("move position center")
+
+
+def test_show_error_floats_without_workspace_pin(tmp_path: Path) -> None:
+    """``show_error`` has no session in scope — the popup floats on whichever
+    workspace it registered on, no move-to-workspace step."""
+    del tmp_path  # unused
+    sway = _RecordingSway()
+
+    def appear() -> None:
+        sway.windows = (_popup_window(con_id=99),)
+
+    launcher = _LauncherWithSpawnHook(exit_code=0, on_spawn=appear)
+    popup = KittyHopPopup(sway=sway, launcher=launcher, sleep=lambda _s: None)
+
+    popup.show_error(HopError("boom"))
+
+    assert len(sway.commands) == 1
+    cmd = sway.commands[0]
+    assert "move container to workspace" not in cmd
+    assert "floating enable" in cmd
     assert cmd.endswith("move position center")
 
 
