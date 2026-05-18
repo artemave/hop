@@ -179,7 +179,7 @@ def test_no_focused_window_returns_400(tmp_path: Path) -> None:
     assert b"no focused Sway window" in response.body
 
 
-def test_focused_window_without_editor_mark_returns_400(tmp_path: Path) -> None:
+def test_focused_window_off_any_session_workspace_returns_400(tmp_path: Path) -> None:
     socket_path = tmp_path / "api.sock"
     sessions_dir = tmp_path / "sessions"
 
@@ -188,17 +188,46 @@ def test_focused_window_without_editor_mark_returns_400(tmp_path: Path) -> None:
 
     bare_window = SwayWindow(
         id=99,
-        workspace_name="p:demo",
-        app_id="kitty",
+        workspace_name="non-session-workspace",
+        app_id="firefox",
         window_class=None,
-        marks=("_hop_browser:demo",),
+        marks=(),
         focused=True,
     )
     with _running_bridge(socket_path, lambda: [bare_window], dispatcher, sessions_dir=sessions_dir):
         response = _curl_post(socket_path, b"hop\x00")
 
     assert response.status == 400
-    assert b"focus your editor window first" in response.body
+    assert b"neither a hop editor nor on a session workspace" in response.body
+
+
+def test_focused_role_terminal_on_session_workspace_resolves_session(tmp_path: Path) -> None:
+    socket_path = tmp_path / "api.sock"
+    sessions_dir = tmp_path / "sessions"
+    expected = _record_demo_session(sessions_dir, tmp_path)
+
+    captured: list[ProjectSession] = []
+
+    def dispatcher(session: ProjectSession, argv: Sequence[str]) -> CompletedProcess[bytes]:
+        del argv
+        captured.append(session)
+        return CompletedProcess(args=[], returncode=0, stdout=b"", stderr=b"")
+
+    role_terminal = SwayWindow(
+        id=42,
+        workspace_name="p:demo",
+        app_id="hop:test",
+        window_class=None,
+        marks=(),
+        focused=True,
+    )
+    with _running_bridge(socket_path, lambda: [role_terminal], dispatcher, sessions_dir=sessions_dir):
+        response = _curl_post(socket_path, b"hop\x00run\x00--role\x00test\x00ls\x00")
+
+    assert response.status == 200
+    assert len(captured) == 1
+    assert captured[0].session_name == "demo"
+    assert captured[0].project_root == expected.project_root
 
 
 def test_mark_points_to_unknown_session_returns_400(tmp_path: Path) -> None:

@@ -442,11 +442,12 @@ Wire protocol — HTTP/1.0 over `AF_UNIX`:
 - Response on successful dispatch: `200 OK` with body equal to the `hop` subprocess's stdout, header `X-Hop-Exit: <integer>` carrying its exit code, and header `X-Hop-Stderr: <base64>` carrying its stderr (base64-encoded because HTTP headers are text-only).
 - Response on acceptor-level failure: `400` (caller context — no focused session, malformed argv) or `500` (acceptor fault) with a plain-text `text/plain; charset=utf-8` body explaining the problem.
 
-Session identity is resolved on the host from existing Sway state, not from anything the shim sends:
+Session identity is resolved on the host from existing Sway state, not from anything the shim sends. The acceptor queries Sway for the focused window and applies two resolution rules in order:
 
-- The acceptor queries Sway for the focused window. The focused window must carry an `_hop_editor:<session>` mark (set by the editor adapter at launch); the suffix is the session name.
-- The session record is looked up in `$XDG_RUNTIME_DIR/hop/sessions/<name>.json`. The `hop` subprocess is then spawned with `cwd` set to that session's `project_root`.
-- Bridge calls made while focus is on a kitty role terminal are rejected with `400` — role terminals carry no session mark in Sway, and disambiguating them is left to a future enhancement.
+1. If the focused window carries an `_hop_editor:<session>` mark (set by the editor adapter at launch), the suffix is the session name. This path also works when the editor window has drifted off its session workspace.
+2. Otherwise, if the focused window's workspace name matches `p:<session>`, the suffix is the session name. This covers kitty role terminals (test/server/console/…) and any other window inside a session workspace — they carry no per-window session identity in Sway, but the workspace tag is hop's canonical session-to-window mapping.
+
+The session record is then looked up in `$XDG_RUNTIME_DIR/hop/sessions/<name>.json`; the `hop` subprocess is spawned with `cwd` set to that session's `project_root`. Bridge calls from windows that are neither a hop editor nor on a `p:<session>` workspace are rejected with `400`.
 
 Dispatch is via subprocess (`python -m hop <argv>`) per request. Output is buffered before the response is written; streaming is out of scope. The protocol is curl-compatible — `curl --unix-socket $XDG_RUNTIME_DIR/hop/api.sock --data-binary @- http://_/call < argv.nul` is sufficient to drive it from the host, which is also how the host-side test suite exercises it.
 
