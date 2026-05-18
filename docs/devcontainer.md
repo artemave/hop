@@ -152,11 +152,13 @@ Extend the backend's `prepare` recipe to pipe `hop bridge shim` into the contain
 prepare = """
   podman-compose -f docker-compose.dev.yml up -d devcontainer \\
   && hop bridge shim | podman-compose -f docker-compose.dev.yml exec -T devcontainer \\
-       install -m 755 /dev/stdin /usr/local/bin/hop
+       sudo install -m 755 /dev/stdin /usr/local/bin/hop
 """
 ```
 
 `hop bridge shim` prints the shim script to stdout; `install -m 755 /dev/stdin /usr/local/bin/hop` reads it via stdin and drops it in place with the executable bit set. Re-runs are idempotent (the shim contents don't change between calls).
+
+The `sudo` is necessary when the container's `exec` user isn't root — typical for dev container images that run as a `dev` user with passwordless sudo. If your container exec's as root by default, the `sudo` is a harmless no-op. If your container runs as a non-root user *without* sudo configured, install the shim to a user-writable path on `$PATH` instead (e.g. `~/.local/bin/hop`) and adjust accordingly.
 
 **c. Point the shim at the host's runtime path when the container shares `$XDG_RUNTIME_DIR`.**
 
@@ -167,7 +169,7 @@ prepare = """
   podman-compose -f docker-compose.dev.yml up -d devcontainer \\
   && hop bridge shim --socket "$XDG_RUNTIME_DIR/hop/api.sock" \\
        | podman-compose -f docker-compose.dev.yml exec -T devcontainer \\
-         install -m 755 /dev/stdin /usr/local/bin/hop
+         sudo install -m 755 /dev/stdin /usr/local/bin/hop
 """
 ```
 
