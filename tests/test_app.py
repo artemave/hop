@@ -10,7 +10,7 @@ import pytest
 
 from hop.app import HopServices, execute_command
 from hop.backends import CommandBackend, SessionBackend, SessionBackendError
-from hop.bridge import BRIDGE_SHIM
+from hop.bridge import BRIDGE_SHIM, render_bridge_shim
 from hop.commands import (
     BridgeShimCommand,
     BrowserCommand,
@@ -1604,4 +1604,19 @@ def test_execute_bridge_shim_prints_shim_to_stdout(tmp_path: Path, capsys: pytes
     assert execute_command(BridgeShimCommand(), cwd=tmp_path, services=services) == 0
     captured = capsys.readouterr()
     assert captured.out == BRIDGE_SHIM
+    assert "/run/hop.sock" in captured.out
+    assert captured.err == ""
+
+
+def test_execute_bridge_shim_bakes_socket_flag_into_default(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    services = build_services().as_services()
+    custom_socket = "/run/user/1000/hop/api.sock"
+
+    rc = execute_command(BridgeShimCommand(socket=custom_socket), cwd=tmp_path, services=services)
+
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert captured.out == render_bridge_shim(custom_socket)
+    assert custom_socket in captured.out
+    assert "/run/hop.sock" not in captured.out
     assert captured.err == ""

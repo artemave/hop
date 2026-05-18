@@ -59,7 +59,7 @@ class KillCommand:
 
 @dataclass(frozen=True, slots=True)
 class BridgeShimCommand:
-    pass
+    socket: str | None = None
 
 
 Command = (

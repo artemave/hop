@@ -26,15 +26,22 @@ SwaySource = Callable[[], Sequence[SwayWindow]]
 Dispatcher = Callable[[ProjectSession, Sequence[str]], "CompletedProcess[bytes]"]
 
 
-# POSIX-sh client for the bridge acceptor. Printed verbatim by
-# ``hop bridge shim``; install into the backend at ``/usr/local/bin/hop``
-# and forward ``$XDG_RUNTIME_DIR/hop/api.sock`` from the host into the
-# backend at the path ``HOP_SOCKET`` resolves to (default ``/run/hop.sock``).
+# POSIX-sh client for the bridge acceptor. Rendered by
+# ``render_bridge_shim()`` and printed verbatim by ``hop bridge shim``;
+# install into the backend at ``/usr/local/bin/hop``. Inside the backend
+# the shim's socket path is ``${HOP_SOCKET:-<baked default>}``. The
+# default is set at render time from ``--socket`` (or
+# ``BRIDGE_SHIM_DEFAULT_SOCKET`` if unspecified) so a recipe can bake the
+# host's actual runtime path in and skip touching the container's compose
+# environment.
+#
 # Dependencies inside the backend: ``curl``, ``awk``, ``base64``,
 # ``mktemp``, ``tr`` — all coreutils-universal or near-universal in dev
 # container base images.
-BRIDGE_SHIM = r"""#!/bin/sh
-sock=${HOP_SOCKET:-/run/hop.sock}
+BRIDGE_SHIM_DEFAULT_SOCKET = "/run/hop.sock"
+
+_BRIDGE_SHIM_TEMPLATE = r"""#!/bin/sh
+sock=${HOP_SOCKET:-__SOCKET_DEFAULT__}
 hdr=$(mktemp) || exit 2
 body=$(mktemp) || { rm -f "$hdr"; exit 2; }
 trap 'rm -f "$hdr" "$body"' EXIT
@@ -59,6 +66,17 @@ case "$status" in
         ;;
 esac
 """
+
+
+def render_bridge_shim(socket_default: str = BRIDGE_SHIM_DEFAULT_SOCKET) -> str:
+    """Render the POSIX-sh client with the given default socket path baked in."""
+
+    return _BRIDGE_SHIM_TEMPLATE.replace("__SOCKET_DEFAULT__", socket_default)
+
+
+# Default-rendered shim text — convenience for callers that don't customize the
+# socket path (tests, anything that wants to inspect the canonical script).
+BRIDGE_SHIM = render_bridge_shim()
 
 
 def default_api_socket_path() -> Path:

@@ -70,7 +70,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     bridge_parser = subparsers.add_parser("bridge")
     bridge_subparsers = bridge_parser.add_subparsers(dest="bridge_command", required=True)
-    bridge_subparsers.add_parser("shim", help="Print the POSIX-sh bridge client to stdout.")
+    bridge_shim_parser = bridge_subparsers.add_parser("shim", help="Print the POSIX-sh bridge client to stdout.")
+    bridge_shim_parser.add_argument(
+        "--socket",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Default socket path baked into the printed shim. Overridden at run time "
+            "by $HOP_SOCKET. Defaults to /run/hop.sock."
+        ),
+    )
 
     return parser
 
@@ -114,7 +123,7 @@ def parse_command(argv: Sequence[str] | None = None) -> Command:
         case "bridge":
             # argparse enforces ``bridge_command == "shim"`` via the
             # ``required=True`` subparser + the single ``shim`` choice.
-            return BridgeShimCommand()
+            return BridgeShimCommand(socket=namespace.socket)
         case command_name:
             msg = f"Unsupported command {command_name!r}"
             raise ValueError(msg)

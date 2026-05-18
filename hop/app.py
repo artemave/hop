@@ -14,7 +14,7 @@ from hop.backends import (
     default_runner,
     select_backend,
 )
-from hop.bridge import BRIDGE_SHIM
+from hop.bridge import BRIDGE_SHIM_DEFAULT_SOCKET, render_bridge_shim
 from hop.browser import SessionBrowserAdapter
 from hop.commands import (
     BridgeShimCommand,
@@ -427,8 +427,8 @@ def execute_command(
                 session_backend_for=services.session_backends.for_session,
                 teardown_runner=teardown_runner,
             )
-        case BridgeShimCommand():
-            sys.stdout.write(BRIDGE_SHIM)
+        case BridgeShimCommand(socket=socket):
+            sys.stdout.write(render_bridge_shim(socket_default=socket or BRIDGE_SHIM_DEFAULT_SOCKET))
         case _:
             msg = f"Unsupported command {command!r}"
             raise ValueError(msg)

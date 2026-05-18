@@ -13,7 +13,15 @@ from typing import Callable, Iterator, Sequence
 
 import pytest
 
-from hop.bridge import BRIDGE_SHIM, BridgeServer, default_api_socket_path, dispatch_via_subprocess, serve_forever
+from hop.bridge import (
+    BRIDGE_SHIM,
+    BRIDGE_SHIM_DEFAULT_SOCKET,
+    BridgeServer,
+    default_api_socket_path,
+    dispatch_via_subprocess,
+    render_bridge_shim,
+    serve_forever,
+)
 from hop.session import ProjectSession
 from hop.state import record_session
 from hop.sway import SwayWindow
@@ -439,3 +447,42 @@ def test_shim_fails_when_socket_is_missing(tmp_path: Path) -> None:
     assert result.returncode == 2
     # curl wrote the connection diagnostic to its own stderr (because we use -sS).
     assert b"curl" in result.stderr.lower() or b"connect" in result.stderr.lower()
+
+
+def test_render_bridge_shim_bakes_socket_default() -> None:
+    rendered = render_bridge_shim("/custom/path/api.sock")
+
+    assert "${HOP_SOCKET:-/custom/path/api.sock}" in rendered
+    assert "${HOP_SOCKET:-/run/hop.sock}" not in rendered
+
+
+def test_render_bridge_shim_default_matches_constant() -> None:
+    assert render_bridge_shim() == BRIDGE_SHIM
+    assert f"${{HOP_SOCKET:-{BRIDGE_SHIM_DEFAULT_SOCKET}}}" in BRIDGE_SHIM
+
+
+def test_shim_uses_baked_default_when_hop_socket_unset(tmp_path: Path) -> None:
+    socket_path = tmp_path / "api.sock"
+    sessions_dir = tmp_path / "sessions"
+    _record_demo_session(sessions_dir, tmp_path)
+    shim_path = tmp_path / "hop-shim.sh"
+    # Bake the test socket path into the shim's default so the shim works
+    # without ``HOP_SOCKET`` set — mirrors what a recipe does when it
+    # invokes ``hop bridge shim --socket <host-path>``.
+    shim_path.write_text(render_bridge_shim(str(socket_path)))
+
+    def dispatcher(session: ProjectSession, argv: Sequence[str]) -> CompletedProcess[bytes]:
+        del session, argv
+        return CompletedProcess(args=[], returncode=0, stdout=b"ok\n", stderr=b"")
+
+    with _running_bridge(socket_path, lambda: [_editor_window("demo")], dispatcher, sessions_dir=sessions_dir):
+        # Drop HOP_SOCKET from the env entirely — only ``PATH`` survives.
+        result = subprocess.run(
+            ["sh", str(shim_path), "run"],
+            env={"PATH": "/usr/bin:/bin"},
+            capture_output=True,
+            check=False,
+        )
+
+    assert result.returncode == 0
+    assert result.stdout == b"ok\n"

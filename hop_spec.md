@@ -452,15 +452,15 @@ Dispatch is via subprocess (`python -m hop <argv>`) per request. Output is buffe
 
 ### Shim
 
-A POSIX-sh client ships with hop and is printed verbatim by:
+A POSIX-sh client ships with hop and is printed by:
 
 ```bash
-hop bridge shim
+hop bridge shim [--socket PATH]
 ```
 
 Backends install it into the backend's filesystem at the path `hop` (typically `/usr/local/bin/hop`); inside the backend it forwards argv to the host acceptor and demultiplexes the response into stdout, stderr, and an exit code. Required backend-side tools: `curl`, `awk`, `base64`, `tr`, `mktemp` — coreutils-universal or near-universal in dev container base images.
 
-The shim reads its socket path from `${HOP_SOCKET:-/run/hop.sock}`. Recipes that bind/forward the host socket to a different in-backend path set `HOP_SOCKET` in the backend's environment.
+The shim's socket path is `${HOP_SOCKET:-<default>}`. `<default>` is `/run/hop.sock` unless overridden at print time via `hop bridge shim --socket <path>` — useful when a recipe already shares the host's `$XDG_RUNTIME_DIR` into the backend and wants the bridge socket to "just work" without changing the backend's environment.
 
 Per-backend recipes (compose volume mount for devcontainer; ssh `-R` for the ssh backend) along with the `prepare`-time shim install live in the recipe guides under `docs/`.
 

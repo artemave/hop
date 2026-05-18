@@ -47,6 +47,10 @@ from hop.commands import (
         (["browser", "https://example.com"], BrowserCommand(url="https://example.com")),
         (["kill"], KillCommand()),
         (["bridge", "shim"], BridgeShimCommand()),
+        (
+            ["bridge", "shim", "--socket", "/run/user/1000/hop/api.sock"],
+            BridgeShimCommand(socket="/run/user/1000/hop/api.sock"),
+        ),
     ],
 )
 def test_parse_command_maps_argv_to_typed_commands(argv: list[str], expected: object) -> None:
