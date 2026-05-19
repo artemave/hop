@@ -95,7 +95,7 @@ def _running_bridge(
         dispatcher=dispatcher,
         sessions_dir=sessions_dir,
     )
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, args=(0.05,), daemon=True)
     thread.start()
     try:
         yield server
