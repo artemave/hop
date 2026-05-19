@@ -560,9 +560,9 @@ def test_launch_payload_composes_through_backend_prefix() -> None:
 def test_empty_command_non_shell_role_inherits_shell_role_command() -> None:
     """A role declared with ``command = ""`` (e.g. the ``test`` window in the
     rails layout) inherits the shell role's command. The intent is that a
-    user wrap on the shell role (``kitten run-shell --shell=$SHELL`` to
-    enable OSC 133 inside a backend) propagates uniformly to every role
-    without per-role boilerplate."""
+    user wrap on the shell role (``kitten run-shell`` to enable OSC 133
+    inside a backend) propagates uniformly to every role without per-role
+    boilerplate."""
     factory = StubKittyFactory(
         [
             {"ok": True, "data": []},
@@ -582,7 +582,7 @@ def test_empty_command_non_shell_role_inherits_shell_role_command() -> None:
     adapter = KittyRemoteControlAdapter(
         session_backend_for=lambda _session: FakeBackend(),  # type: ignore[arg-type]
         session_windows_for=lambda _session: (
-            WindowSpec(role="shell", command="kitten run-shell --shell=/usr/bin/zsh", active=True),
+            WindowSpec(role="shell", command="kitten run-shell", active=True),
             WindowSpec(role="test", command="", active=True),
         ),
         transport_factory=factory,
@@ -595,7 +595,7 @@ def test_empty_command_non_shell_role_inherits_shell_role_command() -> None:
     assert payload is not None
     # The test role's empty command is replaced by the shell role's command,
     # then wrapped — no `;` composition, no ${SHELL:-sh} fallback.
-    assert payload["args"] == ["sh", "-c", "kitten run-shell --shell=/usr/bin/zsh"]
+    assert payload["args"] == ["sh", "-c", "kitten run-shell"]
 
 
 def test_shell_role_empty_command_does_not_self_inherit() -> None:
@@ -661,7 +661,7 @@ def test_non_shell_role_with_primary_command_composes_with_shell_role_wrap() -> 
     adapter = KittyRemoteControlAdapter(
         session_backend_for=lambda _session: FakeBackend(),  # type: ignore[arg-type]
         session_windows_for=lambda _session: (
-            WindowSpec(role="shell", command="kitten run-shell --shell=/usr/bin/zsh", active=True),
+            WindowSpec(role="shell", command="kitten run-shell", active=True),
             WindowSpec(role="log", command="less -R log/test.log", active=True),
         ),
         transport_factory=factory,
@@ -675,7 +675,7 @@ def test_non_shell_role_with_primary_command_composes_with_shell_role_wrap() -> 
     assert payload["args"] == [
         "sh",
         "-c",
-        "less -R log/test.log; kitten run-shell --shell=/usr/bin/zsh",
+        "less -R log/test.log; kitten run-shell",
     ]
 
 

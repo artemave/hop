@@ -206,7 +206,7 @@ To enable Kitty shell integration end-to-end inside a non-host backend (so `hop 
 
 ```toml
 [layouts.rails.windows.shell]
-command = "kitten run-shell --shell=${SHELL:-sh}"
+command = "kitten run-shell"  # kitten auto-detects $SHELL / passwd
 
 [layouts.rails.windows.test]
 command = ""  # inherits the shell role's kitten wrap
