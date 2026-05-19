@@ -305,6 +305,35 @@ command = "sh -c '$SHELL -lc \"bin/rails console\"'"
 
 The single-quote dance is mandatory — without it, `$SHELL` expands to the **host's** `$SHELL`, which usually doesn't exist at the same path inside the container. `$SHELL` in the container reflects the container user's `/etc/passwd` entry, so this only buys portability if the image was built with your preferred shell as the user's login shell. Otherwise `bash -lc` is just as accurate and avoids the quoting trap.
 
+## Terminal capabilities (`$TERM` / `$COLORTERM`)
+
+`compose exec` does not propagate the host's `$TERM` and `$COLORTERM` by default, so the in-container shell starts with `TERM=xterm` — eight colors, no italics, no truecolor. Symptoms: pale or wrong colors in `bat` / `lazygit` / `fzf`; nvim treesitter highlights look washed out; LSP diagnostic underlines render as flat lines.
+
+Set both in your service's `environment:` block to inherit the host values (with a sensible fallback for non-kitty parents):
+
+```yaml
+services:
+  devcontainer:
+    environment:
+      TERM: ${TERM:-xterm-256color}
+      COLORTERM: ${COLORTERM:-truecolor}
+```
+
+That covers 95% of "missing colors" — `xterm-256color` gives 256-color + italics; `COLORTERM=truecolor` opts most modern apps into 24-bit color.
+
+**Optional: full kitty fidelity (undercurl / styled underlines).**
+
+If you live in nvim with LSP diagnostics and want the squiggly red underlines, you need the `xterm-kitty` terminfo entry inside the container. The image probably doesn't ship it, but you can bind-mount the host's:
+
+```yaml
+services:
+  devcontainer:
+    volumes:
+      - /usr/share/terminfo/x/xterm-kitty:/usr/share/terminfo/x/xterm-kitty:ro
+```
+
+With both pieces in place, `$TERM=xterm-kitty` resolves to a full description inside the container: `Smulx` (styled underlines), `Su` (alt underline modes), kitty-specific keyboard protocol, OSC 22 cursor shapes, etc. Skip the mount if you don't see LSP undercurls — `xterm-256color` is fine without it.
+
 ## Mental model: one container, many terminals
 
 Each session corresponds to **one** instance of the backend. For a compose-based devcontainer, that's one container, with all shells `compose exec`-ing into it:
