@@ -12,6 +12,7 @@ from hop.kitty import (
     session_socket_address,
 )
 from hop.session import ProjectSession
+from hop.sway import SwayWindow
 
 
 class StubKittyFactory:
@@ -56,6 +57,27 @@ class StubLauncher:
 
     def __call__(self, args: Sequence[str], env: Mapping[str, str]) -> None:
         self.calls.append((tuple(args), dict(env)))
+
+
+class StubSwayAdapter:
+    """Records ``move_window_to_workspace`` calls and serves a timeline of
+    ``SwayWindow`` snapshots from ``list_windows``. Each call advances to the
+    next snapshot (the last is held indefinitely) so tests can model
+    "pre-launch state" vs "post-launch state, kitty's new window appeared"
+    without needing a side-effecting launcher hook."""
+
+    def __init__(self, timeline: Sequence[Sequence[SwayWindow]] = ((),)) -> None:
+        self._timeline: list[tuple[SwayWindow, ...]] = [tuple(s) for s in timeline] or [()]
+        self.moves: list[tuple[int, str]] = []
+        self.list_calls = 0
+
+    def list_windows(self) -> Sequence[SwayWindow]:
+        snapshot = self._timeline[min(self.list_calls, len(self._timeline) - 1)]
+        self.list_calls += 1
+        return snapshot
+
+    def move_window_to_workspace(self, window_id: int, workspace_name: str) -> None:
+        self.moves.append((window_id, workspace_name))
 
 
 def build_session() -> ProjectSession:
@@ -943,3 +965,158 @@ def test_get_focused_window_cwd_returns_none_when_focused_window_has_no_cwd() ->
     factory = StubKittyFactory([_focused_window_payload(cwd=None)])
 
     assert get_focused_window_cwd("demo", transport_factory=factory) is None
+
+
+def _hop_role_window(window_id: int, role: str, workspace_name: str) -> SwayWindow:
+    return SwayWindow(
+        id=window_id,
+        workspace_name=workspace_name,
+        app_id=f"hop:{role}",
+        window_class=None,
+    )
+
+
+def test_launch_window_moves_new_role_terminal_to_session_workspace_when_drifted() -> None:
+    factory = StubKittyFactory(
+        [
+            {"ok": True, "data": []},  # _find_window's ls (no existing role)
+            {"ok": True},  # launch
+        ]
+    )
+    sway = StubSwayAdapter(
+        timeline=[
+            (),  # pre-launch snapshot — no hop:test windows yet
+            (_hop_role_window(window_id=42, role="test", workspace_name="p:other"),),
+        ]
+    )
+    adapter = KittyRemoteControlAdapter(
+        transport_factory=factory,
+        launcher=StubLauncher(),
+        sway=sway,
+        sleep=lambda _: None,
+    )
+
+    adapter.ensure_terminal(build_session(), role="test")
+
+    assert sway.moves == [(42, "p:demo")]
+
+
+def test_launch_window_skips_move_when_new_role_terminal_already_on_session_workspace() -> None:
+    factory = StubKittyFactory([{"ok": True, "data": []}, {"ok": True}])
+    sway = StubSwayAdapter(
+        timeline=[
+            (),
+            (_hop_role_window(window_id=42, role="test", workspace_name="p:demo"),),
+        ]
+    )
+    adapter = KittyRemoteControlAdapter(
+        transport_factory=factory,
+        launcher=StubLauncher(),
+        sway=sway,
+        sleep=lambda _: None,
+    )
+
+    adapter.ensure_terminal(build_session(), role="test")
+
+    assert sway.moves == []
+
+
+def test_launch_window_ignores_pre_existing_hop_role_windows_when_diffing() -> None:
+    """Another session's ``hop:test`` window must not be mistaken for the
+    one this launch just created. The pre-launch snapshot excludes it."""
+    factory = StubKittyFactory([{"ok": True, "data": []}, {"ok": True}])
+    pre_existing = _hop_role_window(window_id=10, role="test", workspace_name="p:other")
+    new_window = _hop_role_window(window_id=20, role="test", workspace_name="p:other")
+    sway = StubSwayAdapter(
+        timeline=[
+            (pre_existing,),  # pre-launch
+            (pre_existing, new_window),  # post-launch
+        ]
+    )
+    adapter = KittyRemoteControlAdapter(
+        transport_factory=factory,
+        launcher=StubLauncher(),
+        sway=sway,
+        sleep=lambda _: None,
+    )
+
+    adapter.ensure_terminal(build_session(), role="test")
+
+    assert sway.moves == [(20, "p:demo")]
+    # The pre-existing window stays put; never moved.
+    assert not any(move[0] == 10 for move in sway.moves)
+
+
+def test_launch_window_adopt_times_out_without_raising_when_no_new_window_appears() -> None:
+    """Kitty's window may fail to register with Sway (binary crash, race
+    against an unrelated Wayland hiccup). The adopt step bails after the
+    timeout; it must not raise, since the kitty IPC launch already succeeded."""
+
+    factory = StubKittyFactory([{"ok": True, "data": []}, {"ok": True}])
+    sway = StubSwayAdapter(timeline=[()])  # no new windows ever appear
+    # Counter-driven clock crosses the 2-second deadline within a few ticks.
+    ticks = iter([0.0, 0.5, 1.0, 1.5, 2.0, 2.5, 3.0])
+    adapter = KittyRemoteControlAdapter(
+        transport_factory=factory,
+        launcher=StubLauncher(),
+        sway=sway,
+        sleep=lambda _: None,
+        clock=lambda: next(ticks),
+    )
+
+    # Must not raise.
+    adapter.ensure_terminal(build_session(), role="test")
+
+    assert sway.moves == []
+
+
+def test_no_sway_dep_skips_workspace_adopt() -> None:
+    """Backward compat: callers that construct the adapter without ``sway``
+    get the pre-fix behavior — kitty IPC launch happens, no Sway calls fire."""
+
+    factory = StubKittyFactory([{"ok": True, "data": []}, {"ok": True}])
+    adapter = KittyRemoteControlAdapter(
+        transport_factory=factory,
+        launcher=StubLauncher(),
+        sleep=lambda _: None,
+    )
+
+    # The absence of ``sway`` means no list_windows / move_window_to_workspace
+    # calls are dispatched. Simply not raising is the contract.
+    adapter.ensure_terminal(build_session(), role="test")
+
+
+def test_bootstrap_path_adopts_new_role_terminal_to_session_workspace() -> None:
+    """The cold-bootstrap path (no kitty listening yet) launches kitty via
+    subprocess, waits for the session socket, then must also run the
+    workspace-adopt step."""
+
+    factory = StubKittyFactory(
+        [
+            KittyConnectionError("no such socket"),  # _find_window's ls
+            KittyConnectionError("still not listening"),  # IPC launch fails
+            {"ok": True, "data": []},  # _wait_for_session_kitty ls succeeds
+            {"ok": True},  # set-user-vars
+        ]
+    )
+    launcher = StubLauncher()
+    sway = StubSwayAdapter(
+        timeline=[
+            # Two pre-launch snapshots: the IPC path takes one and discards it
+            # when IPC fails, then the bootstrap path takes its own (the
+            # meaningful one) after ``backend.prepare`` returns.
+            (),
+            (),
+            (_hop_role_window(window_id=7, role="shell", workspace_name="p:other"),),
+        ]
+    )
+    adapter = KittyRemoteControlAdapter(
+        transport_factory=factory,
+        launcher=launcher,
+        sway=sway,
+        sleep=lambda _: None,
+    )
+
+    adapter.ensure_terminal(build_session(), role="shell")
+
+    assert sway.moves == [(7, "p:demo")]

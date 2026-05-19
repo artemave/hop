@@ -447,6 +447,7 @@ def build_default_services() -> HopServices:
         session_backend_for=registry.for_session,
         session_windows_for=registry.resolve_windows_for_entry,
         on_session_bootstrap=_persist_bootstrap_record,
+        sway=sway,
     )
     neovim = SharedNeovimEditorAdapter(
         sway=sway,
@@ -477,6 +478,7 @@ def build_kitten_services(boss: object) -> HopServices:
         session_backend_for=registry.for_session,
         session_windows_for=registry.resolve_windows_for_entry,
         on_session_bootstrap=_persist_bootstrap_record,
+        sway=sway,
     )
     neovim = SharedNeovimEditorAdapter(
         sway=sway,

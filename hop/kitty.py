@@ -16,6 +16,7 @@ from hop.config import SHELL_ROLE
 from hop.errors import HopError
 from hop.layouts import WindowSpec, find_window
 from hop.session import ProjectSession
+from hop.sway import SwayWindow
 
 # `shell-2`, `shell-3`, ... — ad-hoc shells spawned by `hop` from inside an
 # existing session. These are shells, not user commands, so they don't get
@@ -29,6 +30,13 @@ KITTY_COMMAND_SUFFIX = b"\x1b\\"
 HOP_ROLE_VAR = "hop_role"
 KITTY_BOOTSTRAP_TIMEOUT_SECONDS = 5.0
 KITTY_BOOTSTRAP_POLL_INTERVAL_SECONDS = 0.1
+# Bound on the post-launch Sway poll that finds the new role terminal's
+# window and moves it to the session workspace if focus drifted during
+# prepare. Generous because kitty's window registration with Sway can lag
+# the IPC ``launch`` response by several frames on slow systems; bailing
+# is harmless — the window stays wherever Sway placed it.
+ROLE_WINDOW_ADOPT_TIMEOUT_SECONDS = 2.0
+ROLE_WINDOW_ADOPT_POLL_INTERVAL_SECONDS = 0.05
 SESSION_SOCKET_FILENAME_PREFIX = "kitty-"
 SESSION_SOCKET_FILENAME_SUFFIX = ".sock"
 
@@ -168,6 +176,16 @@ def _in_shell_cwd_text(window_entry: Mapping[str, object]) -> str | None:
     return None
 
 
+class KittyAdapterSwayAdapter(Protocol):
+    """The slice of Sway IPC the kitty adapter needs to pin newly-launched
+    role terminals to the session workspace. Narrow on purpose so tests can
+    pass a minimal stub."""
+
+    def list_windows(self) -> Sequence[SwayWindow]: ...
+
+    def move_window_to_workspace(self, window_id: int, workspace_name: str) -> None: ...
+
+
 class KittyRemoteControlAdapter:
     def __init__(
         self,
@@ -177,6 +195,7 @@ class KittyRemoteControlAdapter:
         transport_factory: TransportFactory | None = None,
         launcher: KittyLauncher | None = None,
         on_session_bootstrap: SessionBootstrapHook | None = None,
+        sway: KittyAdapterSwayAdapter | None = None,
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -189,6 +208,12 @@ class KittyRemoteControlAdapter:
         self._session_windows_for: SessionWindowsFactory = session_windows_for or (lambda _session: ())
         self._transport_factory: TransportFactory = transport_factory or _default_transport_factory
         self._launcher: KittyLauncher = launcher or _default_launcher
+        # ``sway`` is optional so tests that don't care about workspace pinning
+        # can construct the adapter without a Sway dep. When ``None`` the
+        # post-launch adopt step is a no-op — equivalent to the pre-fix
+        # behavior. Production callers (``build_default_services``,
+        # ``build_kitten_services``) always pass a real ``SwayIpcAdapter``.
+        self._sway: KittyAdapterSwayAdapter | None = sway
         self._on_session_bootstrap: SessionBootstrapHook = on_session_bootstrap or (lambda _session, _backend: None)
         self._sleep = sleep
         self._clock = clock
@@ -332,6 +357,7 @@ class KittyRemoteControlAdapter:
         keep_focus: bool,
     ) -> None:
         backend = self._session_backend_for(session)
+        pre_snapshot = self._role_window_ids(role)
         try:
             self._send_to(
                 session.session_name,
@@ -339,12 +365,17 @@ class KittyRemoteControlAdapter:
                 self._launch_payload(session, backend=backend, role=role, keep_focus=keep_focus),
             )
         except KittyConnectionError:
+            # Bootstrap does its own adopt-to-workspace step after its own
+            # launch; the pre_snapshot captured above is discarded — the
+            # bootstrap path is the one that ends up creating the window.
             self._bootstrap_session_kitty(
                 session_socket_address(session.session_name),
                 session,
                 backend=backend,
                 role=role,
             )
+            return
+        self._adopt_role_window_to_workspace(session, role, pre_snapshot_ids=pre_snapshot)
 
     def _bootstrap_session_kitty(
         self,
@@ -355,6 +386,7 @@ class KittyRemoteControlAdapter:
         role: str,
     ) -> None:
         backend.prepare(session)
+        pre_snapshot = self._role_window_ids(role)
 
         # Ensure the parent dir for the filesystem socket exists; kitty
         # creates the socket itself, but its parent must be writable.
@@ -396,6 +428,7 @@ class KittyRemoteControlAdapter:
             "set-user-vars",
             {"match": "all", "var": [f"{HOP_ROLE_VAR}={role}"]},
         )
+        self._adopt_role_window_to_workspace(session, role, pre_snapshot_ids=pre_snapshot)
         self._on_session_bootstrap(session, backend)
 
     def _wait_for_session_kitty(self, addr: str) -> None:
@@ -413,6 +446,68 @@ class KittyRemoteControlAdapter:
         except (KittyConnectionError, KittyCommandError):
             return False
         return True
+
+    def _role_window_ids(self, role: str) -> set[int]:
+        """Snapshot Sway con_ids for windows with ``app_id == hop:<role>``.
+
+        Used by ``_adopt_role_window_to_workspace`` to distinguish the
+        just-launched window from any pre-existing role windows (e.g.
+        another live session's matching role terminal). Empty set when no
+        Sway adapter is configured — disables the adopt step entirely.
+        """
+
+        if self._sway is None:
+            return set()
+        target_app_id = _os_window_name(role)
+        return {window.id for window in self._sway.list_windows() if window.app_id == target_app_id}
+
+    def _adopt_role_window_to_workspace(
+        self,
+        session: ProjectSession,
+        role: str,
+        *,
+        pre_snapshot_ids: set[int],
+    ) -> None:
+        """Poll Sway for a newly-appeared ``hop:<role>`` window, then move it
+        to ``session.workspace_name`` if it landed elsewhere.
+
+        Kitty places its window on whatever Sway workspace is focused at
+        registration time, so if the user has wandered off ``p:<session>``
+        during ``prepare`` the role terminal lands on the wrong workspace.
+        This recovers that case by:
+
+        1. Diffing the current Sway window set against the pre-launch snapshot
+           to identify the newly-appeared con_id (picks the smallest new id,
+           mirroring the editor / browser adoption pattern).
+        2. Issuing ``move container to workspace p:<session>`` against it if
+           it isn't already on the session workspace.
+
+        Best-effort: if no new window appears within
+        ``ROLE_WINDOW_ADOPT_TIMEOUT_SECONDS`` the call returns. The role
+        terminal still works via kitty IPC; it just stays wherever Sway put
+        it. A no-op when no Sway adapter is configured.
+        """
+
+        if self._sway is None:
+            return
+        target_app_id = _os_window_name(role)
+        deadline = self._clock() + ROLE_WINDOW_ADOPT_TIMEOUT_SECONDS
+        while self._clock() < deadline:
+            new_candidates = [
+                window
+                for window in self._sway.list_windows()
+                if window.id not in pre_snapshot_ids and window.app_id == target_app_id
+            ]
+            if new_candidates:
+                window = min(new_candidates, key=lambda candidate: candidate.id)
+                if window.workspace_name != session.workspace_name:
+                    self._sway.move_window_to_workspace(window.id, session.workspace_name)
+                return
+            self._sleep(ROLE_WINDOW_ADOPT_POLL_INTERVAL_SECONDS)
+        debug.log(
+            f"kitty: role terminal {role!r} for {session.session_name!r} "
+            "did not register with Sway in time; skipping workspace adopt"
+        )
 
     def _send_to(
         self,
