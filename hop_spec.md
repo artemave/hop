@@ -80,14 +80,18 @@ Each session has exactly one Neovim instance.
 
 Each session has a **backend** that decides *where* its windows run. The default is **host** (shells spawned by kitty as the user's default shell, neovim running on the host). Non-host backends are user-defined in `~/.config/hop/config.toml` and/or a project's `.hop.toml` — both files use the same schema and are merged at session entry. Each backend's command fields are shell command strings hop runs through `sh -c` after substituting placeholders:
 
-- `prepare` (optional) — command hop runs once before bootstrapping kitty. Idempotent.
-- `teardown` (optional) — command hop runs at `hop kill` after closing windows. Closing kitty windows first sends SIGHUP to in-backend shells so they exit cleanly before any teardown command runs.
-- `port_translate` (optional) — command hop runs lazily when the kitten dispatch resolves a URL whose host is `localhost`, `127.0.0.1`, or `0.0.0.0`. Stripped stdout is the host-reachable port number that should replace the URL's port. Hop substitutes `{port}` with the URL's original port (or empty string when the URL has no port).
-- `host_translate` (optional) — command hop runs lazily for the same set of localhost URLs. Stripped stdout is the hostname that should replace `localhost` / `127.0.0.1` / `0.0.0.0` in the URL. Both `port_translate` and `host_translate` are independently optional; either or both may be configured.
+- `prepare` (optional) — command(s) hop runs once before bootstrapping kitty. Idempotent.
+- `teardown` (optional) — command(s) hop runs at `hop kill` after closing windows. Closing kitty windows first sends SIGHUP to in-backend shells so they exit cleanly before any teardown command runs.
+- `port_translate` (optional) — command(s) hop runs lazily when the kitten dispatch resolves a URL whose host is `localhost`, `127.0.0.1`, or `0.0.0.0`. Stripped stdout is the host-reachable port number that should replace the URL's port. Hop substitutes `{port}` with the URL's original port (or empty string when the URL has no port).
+- `host_translate` (optional) — command(s) hop runs lazily for the same set of localhost URLs. Stripped stdout is the hostname that should replace `localhost` / `127.0.0.1` / `0.0.0.0` in the URL. Both `port_translate` and `host_translate` are independently optional; either or both may be configured.
 - `interactive_prefix` (required) — shell snippet hop prepends to every window's command launched in this backend's environment (e.g. `podman-compose -f docker-compose.dev.yml exec devcontainer`). Empty for the built-in `host` backend.
 - `noninteractive_prefix` (required) — prefix hop uses for non-interactive backend operations like the file-existence check that drives the open-selection kitten's highlight filter. Backends that allocate a TTY by default (e.g. `podman-compose exec`) must set this to the no-TTY variant (`podman-compose exec -T <service>`); backends that don't (ssh) pass the same string as `interactive_prefix`. Empty for the built-in `host` backend.
 
 Hop ships an implicit `host` backend (`interactive_prefix = ""`, `noninteractive_prefix = ""`, `activate = "true"`) layered below user config. Users can override any field by declaring `[backends.host]` in either config file — `host` is not a reserved name.
+
+The four lifecycle and translate fields (`prepare`, `teardown`, `port_translate`, `host_translate`) accept either a single string or an array of strings. The array form runs each element as its own `sh -c` invocation in declaration order; for `prepare` and `teardown` the sequence aborts on the first non-zero exit (the popup's held shell shows the failing step), and for the translate fields the **last** element's stripped stdout is the translated value (earlier elements run for their side effects). Single-string and one-element-array forms are equivalent. Empty arrays are rejected at parse time so omission stays the only "unset" signal.
+
+`interactive_prefix` and `noninteractive_prefix` remain string-only — they are wraps, not sequences. Use a triple-quoted string for multi-line pipelines.
 
 All commands are run via `sh -c <substituted-string>`, so pipes, redirects, and `$(...)` are part of the contract. Substitution placeholders supported inside any command: `{project_root}`. `{port}` is additionally available inside `port_translate` and `host_translate` (the URL's original port, or empty string when absent). Substituted values are shell-quoted before insertion so paths with spaces or shell metacharacters round-trip safely.
 
@@ -108,7 +112,7 @@ Per-role launch commands live outside the backend, in two top-level config secti
 
 Each window declaration carries:
 
-- `command` (string) — the role command. **No backend wrap inside this string** — the active backend's `interactive_prefix` is prepended at launch time. For built-in roles, hop ships a default; the user can override.
+- `command` (string) — the role command. **No backend wrap inside this string** — the active backend's `interactive_prefix` is prepended at launch time. For built-in roles, hop ships a default; the user can override. An empty string on a non-shell role (e.g. `[layouts.rails.windows.test] command = ""`) is the "just an empty shell" sentinel: hop substitutes the **shell role's** command at launch time, so any wrap configured on the shell role (e.g. `kitten run-shell --shell=${SHELL:-sh}` to enable OSC 133 inside a backend) propagates to every other empty-command role uniformly. The shell role's own empty command remains the host-default sentinel (kitty's platform default on host; `${SHELL:-sh}` inside a backend prefix). Non-shell roles with a non-empty primary command still drop into the shell-role command as the post-exit fallback (`<primary>; <shell-role-command>`) so the kitty window stays usable after the primary process exits.
 - `activate` (`"true"` or `"false"`, optional) — opt-in / opt-out only. No probe at the per-window level; the gate is whatever the window's container decides:
   - **Built-in window** (shell / editor / browser) with no top-level override: hop's default (active for shell/editor, inactive for browser).
   - **Top-level window**: defaults active unless the entry sets `activate = "false"`.

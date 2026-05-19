@@ -27,10 +27,10 @@ class CommandBackendRecord:
     name: str
     interactive_prefix: str
     noninteractive_prefix: str
-    prepare: str | None = None
-    teardown: str | None = None
-    port_translate_command: str | None = None
-    host_translate_command: str | None = None
+    prepare: tuple[str, ...] | None = None
+    teardown: tuple[str, ...] | None = None
+    port_translate_command: tuple[str, ...] | None = None
+    host_translate_command: tuple[str, ...] | None = None
     # Cached result of ``<noninteractive_prefix> pwd`` captured at bootstrap.
     # Used as a fallback base cwd in ``hop.focused.paths_exist`` when the
     # focused window's OSC-7-driven ``cwd_of_child`` is unset.
@@ -45,13 +45,13 @@ class CommandBackendRecord:
             "noninteractive_prefix": self.noninteractive_prefix,
         }
         if self.prepare is not None:
-            payload["prepare"] = self.prepare
+            payload["prepare"] = list(self.prepare)
         if self.teardown is not None:
-            payload["teardown"] = self.teardown
+            payload["teardown"] = list(self.teardown)
         if self.port_translate_command is not None:
-            payload["port_translate_command"] = self.port_translate_command
+            payload["port_translate_command"] = list(self.port_translate_command)
         if self.host_translate_command is not None:
-            payload["host_translate_command"] = self.host_translate_command
+            payload["host_translate_command"] = list(self.host_translate_command)
         if self.workspace_path is not None:
             payload["workspace_path"] = self.workspace_path
         return payload
@@ -150,10 +150,10 @@ def _decode_backend_record(raw: object) -> BackendRecord:
                     name=backend_name,
                     interactive_prefix=interactive_prefix,
                     noninteractive_prefix=noninteractive_prefix,
-                    prepare=_optional_str(record.get("prepare")),
-                    teardown=_optional_str(record.get("teardown")),
-                    port_translate_command=_optional_str(record.get("port_translate_command")),
-                    host_translate_command=_optional_str(record.get("host_translate_command")),
+                    prepare=_optional_steps(record.get("prepare")),
+                    teardown=_optional_steps(record.get("teardown")),
+                    port_translate_command=_optional_steps(record.get("port_translate_command")),
+                    host_translate_command=_optional_steps(record.get("host_translate_command")),
                     workspace_path=_optional_str(record.get("workspace_path")),
                 )
     # Anything we can't decode (legacy ``{"type": "host"}`` records, malformed
@@ -165,4 +165,27 @@ def _decode_backend_record(raw: object) -> BackendRecord:
 def _optional_str(value: object) -> str | None:
     if isinstance(value, str):
         return value
+    return None
+
+
+def _optional_steps(value: object) -> tuple[str, ...] | None:
+    """Decode a persisted lifecycle/translate field.
+
+    New shape is a JSON list of strings; the legacy string shape (from records
+    written before the list form landed) decodes to a one-element tuple so
+    in-flight sessions keep working. Anything else — including an empty list,
+    a list with non-string elements, or other types — degrades to ``None``;
+    a missing field is indistinguishable from an undecodable one at the record
+    boundary, and the consumer treats both as "unset" anyway.
+    """
+
+    if isinstance(value, str):
+        return (value,)
+    if isinstance(value, list):
+        elements = cast(list[object], value)
+        if not elements:
+            return None
+        if not all(isinstance(element, str) for element in elements):
+            return None
+        return tuple(cast(list[str], elements))
     return None

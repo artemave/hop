@@ -31,8 +31,8 @@ def _devcontainer_backend() -> CommandBackend:
         name="devcontainer",
         interactive_prefix="compose exec devcontainer",
         noninteractive_prefix="compose exec -T devcontainer",
-        prepare_command="compose up -d devcontainer",
-        teardown_command="compose down",
+        prepare_command=("compose up -d devcontainer",),
+        teardown_command=("compose down",),
     )
 
 
@@ -336,7 +336,7 @@ def test_show_error_does_not_raise_when_launcher_exits_non_zero() -> None:
 
 def test_lifecycle_script_prepare_shape(tmp_path: Path) -> None:
     session = _make_session(tmp_path)
-    script = _lifecycle_script(session, "compose up -d devcontainer", kind="prepare")
+    script = _lifecycle_script(session, ("compose up -d devcontainer",), kind="prepare")
 
     assert f"cd {session.project_root}" in script
     assert f"Preparing {session.session_name}" in script
@@ -352,8 +352,25 @@ def test_lifecycle_script_prepare_shape(tmp_path: Path) -> None:
     # "prepare succeeded".
     assert "prepare" in script
     assert "exec sh" not in script
-    assert "\nsh\n" in script
+    assert "    sh" in script
     assert 'exit "$status"' in script
+
+
+def test_lifecycle_script_multi_step_emits_per_step_blocks(tmp_path: Path) -> None:
+    """Each step renders its own announcement + flock + per-step failure guard.
+    The held-open ``sh`` fires *only* for the failing step; later steps don't
+    execute. Successful steps fall through to the next without dropping the
+    user into a shell."""
+    session = _make_session(tmp_path)
+    script = _lifecycle_script(session, ("compose up", "install hop", "install kitten"), kind="prepare")
+
+    assert "compose up" in script
+    assert "install hop" in script
+    assert "install kitten" in script
+    # One per-step failure guard per step (three total).
+    assert script.count('if [ "$status" -ne 0 ]; then') == 3
+    # The terminal `exit 0` only fires if every step succeeded.
+    assert script.rstrip().endswith("exit 0")
 
 
 def test_lifecycle_script_preserves_failure_status_through_held_shell(tmp_path: Path) -> None:
@@ -365,7 +382,7 @@ def test_lifecycle_script_preserves_failure_status_through_held_shell(tmp_path: 
     session = _make_session(tmp_path)
     # Substitute a command that always fails (the `flock` invocation runs
     # `sh -c "false"`).
-    script = _lifecycle_script(session, "false", kind="prepare")
+    script = _lifecycle_script(session, ("false",), kind="prepare")
 
     result = subprocess.run(
         ["sh", "-c", script],
@@ -388,7 +405,7 @@ def test_lifecycle_script_success_does_not_hold_shell(tmp_path: Path) -> None:
     import subprocess
 
     session = _make_session(tmp_path)
-    script = _lifecycle_script(session, "true", kind="prepare")
+    script = _lifecycle_script(session, ("true",), kind="prepare")
 
     result = subprocess.run(
         ["sh", "-c", script],
@@ -406,7 +423,7 @@ def test_lifecycle_script_success_does_not_hold_shell(tmp_path: Path) -> None:
 
 def test_lifecycle_script_teardown_shape(tmp_path: Path) -> None:
     session = _make_session(tmp_path)
-    script = _lifecycle_script(session, "compose down", kind="teardown")
+    script = _lifecycle_script(session, ("compose down",), kind="teardown")
 
     assert f"Tearing down {session.session_name}" in script
     assert "compose down" in script
@@ -424,7 +441,7 @@ def test_lifecycle_script_quotes_shell_metacharacters(tmp_path: Path) -> None:
     session = _make_session(tmp_path)
     nasty = "echo $(date) > /tmp/'foo bar'.log && true"
 
-    script = _lifecycle_script(session, nasty, kind="prepare")
+    script = _lifecycle_script(session, (nasty,), kind="prepare")
 
     # Slice out everything up to (and including) the announcement printfs —
     # before `flock` actually runs the user command. Running the full script

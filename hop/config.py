@@ -95,10 +95,10 @@ class BackendConfig:
 
     name: str
     activate: str | None = None
-    prepare: str | None = None
-    teardown: str | None = None
-    port_translate: str | None = None
-    host_translate: str | None = None
+    prepare: tuple[str, ...] | None = None
+    teardown: tuple[str, ...] | None = None
+    port_translate: tuple[str, ...] | None = None
+    host_translate: tuple[str, ...] | None = None
     interactive_prefix: str | None = None
     noninteractive_prefix: str | None = None
 
@@ -447,10 +447,10 @@ def _parse_backend(name: str, table: dict[str, Any], *, source: Path) -> Backend
     return BackendConfig(
         name=name,
         activate=_parse_command(table, key="activate", context=f"backend {name!r}", source=source),
-        prepare=_parse_command(table, key="prepare", context=f"backend {name!r}", source=source),
-        teardown=_parse_command(table, key="teardown", context=f"backend {name!r}", source=source),
-        port_translate=_parse_command(table, key="port_translate", context=f"backend {name!r}", source=source),
-        host_translate=_parse_command(table, key="host_translate", context=f"backend {name!r}", source=source),
+        prepare=_parse_command_steps(table, key="prepare", context=f"backend {name!r}", source=source),
+        teardown=_parse_command_steps(table, key="teardown", context=f"backend {name!r}", source=source),
+        port_translate=_parse_command_steps(table, key="port_translate", context=f"backend {name!r}", source=source),
+        host_translate=_parse_command_steps(table, key="host_translate", context=f"backend {name!r}", source=source),
         interactive_prefix=_parse_command(table, key="interactive_prefix", context=f"backend {name!r}", source=source),
         noninteractive_prefix=_parse_command(
             table,
@@ -561,9 +561,9 @@ def _parse_command(
     value = table[key]
     if isinstance(value, list):
         msg = (
-            f"{source}: {context} field {key!r} is a list; "
-            "commands are now strings (write the value as a single shell command). "
-            'TOML triple-quoted strings ("""…""") work for multi-line pipelines.'
+            f"{source}: {context} field {key!r} is a list; this field only accepts "
+            "a single shell command string. Use a triple-quoted string for multi-line "
+            "pipelines; list form is reserved for lifecycle and translate fields."
         )
         raise HopConfigError(msg)
     if not isinstance(value, str):
@@ -573,3 +573,49 @@ def _parse_command(
         msg = f"{source}: {context} field {key!r} must not be empty"
         raise HopConfigError(msg)
     return value
+
+
+def _parse_command_steps(
+    table: dict[str, Any],
+    *,
+    key: str,
+    context: str,
+    source: Path,
+) -> tuple[str, ...] | None:
+    """Parse a lifecycle/translate field that accepts ``string | list[str]``.
+
+    Returns ``None`` when the key is absent (the "unset" signal preserved
+    across the codebase). A single-string value normalizes to a one-element
+    tuple so consumers iterate a single shape. Empty lists are rejected so
+    ``None`` remains the only "unset" signal; individual empty/whitespace
+    elements are also rejected with their index reported for legibility.
+    """
+
+    if key not in table:
+        return None
+    value = table[key]
+    if isinstance(value, str):
+        if not value.strip():
+            msg = f"{source}: {context} field {key!r} must not be empty"
+            raise HopConfigError(msg)
+        return (value,)
+    if isinstance(value, list):
+        elements = cast(list[object], value)
+        if not elements:
+            msg = f"{source}: {context} field {key!r} must not be an empty list"
+            raise HopConfigError(msg)
+        steps: list[str] = []
+        for index, element in enumerate(elements):
+            if not isinstance(element, str):
+                msg = (
+                    f"{source}: {context} field {key!r} element at index {index} "
+                    f"must be a string, got {type(element).__name__}"
+                )
+                raise HopConfigError(msg)
+            if not element.strip():
+                msg = f"{source}: {context} field {key!r} element at index {index} must not be empty"
+                raise HopConfigError(msg)
+            steps.append(element)
+        return tuple(steps)
+    msg = f"{source}: {context} field {key!r} must be a string or list of strings, got {type(value).__name__}"
+    raise HopConfigError(msg)

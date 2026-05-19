@@ -114,12 +114,12 @@ class KittyHopPopup:
     def _run_lifecycle(
         self,
         session: ProjectSession,
-        command_str: str,
+        steps: Sequence[str],
         *,
         kind: Literal["prepare", "teardown"],
     ) -> None:
         exit_code = self._spawn_and_wait(
-            _lifecycle_script(session, command_str, kind=kind),
+            _lifecycle_script(session, steps, kind=kind),
             workspace_name=session.workspace_name,
         )
         if exit_code != 0:
@@ -214,33 +214,45 @@ def _kitty_argv(script: str) -> tuple[str, ...]:
 
 def _lifecycle_script(
     session: ProjectSession,
-    command_str: str,
+    steps: Sequence[str],
     *,
     kind: Literal["prepare", "teardown"],
 ) -> str:
+    """Render the popup-side shell script for an N-step lifecycle sequence.
+
+    Each step renders as ``printf '$ ...'`` + ``flock ... sh -c '<step>'``
+    followed by a per-step status check that drops into a held-open ``sh``
+    on failure (so the user sees the failing step's output, can scroll, and
+    Ctrl-D closes the popup). A non-zero step short-circuits the rest of the
+    sequence by ``exit "$status"`` after the held shell returns.
+
+    Held-open-on-failure: don't ``exec sh`` — the user dismissing it (sh
+    exiting 0) would clobber the captured non-zero status and silently
+    signal success to the parent hop process.
+    """
+
     verb = "Preparing" if kind == "prepare" else "Tearing down"
     noun = kind
     lock_path = str(backend_lock_path(session))
-    substituted = substitute(command_str, session=session)
-    # Held-open-on-failure: drop into `sh` so the user can read the error and
-    # scroll back, then `exit "$status"` so the kitty window's exit code
-    # carries the *original* lifecycle command's status. Using `exec sh`
-    # would clobber the captured status when the user dismisses (sh exits 0),
-    # silently signalling success to the parent hop process.
-    return (
-        "set -u\n"
-        f"cd {shlex.quote(str(session.project_root))}\n"
-        f"printf '%s\\n' {shlex.quote(f'{verb} {session.session_name}')}\n"
-        f"printf '$ %s\\n\\n' {shlex.quote(command_str)}\n"
-        f"flock -o {shlex.quote(lock_path)} sh -c {shlex.quote(substituted)}\n"
-        "status=$?\n"
-        'if [ "$status" -eq 0 ]; then\n'
-        "    exit 0\n"
-        "fi\n"
-        f"printf '\\n%s failed (exit %d). Press Ctrl-D to close.\\n' {shlex.quote(noun)} \"$status\"\n"
-        "sh\n"
-        'exit "$status"\n'
-    )
+    lines: list[str] = [
+        "set -u",
+        f"cd {shlex.quote(str(session.project_root))}",
+        f"printf '%s\\n' {shlex.quote(f'{verb} {session.session_name}')}",
+    ]
+    for index, step in enumerate(steps):
+        substituted = substitute(step, session=session)
+        if index > 0:
+            lines.append("")
+        lines.append(f"printf '$ %s\\n\\n' {shlex.quote(step)}")
+        lines.append(f"flock -o {shlex.quote(lock_path)} sh -c {shlex.quote(substituted)}")
+        lines.append("status=$?")
+        lines.append('if [ "$status" -ne 0 ]; then')
+        lines.append(f"    printf '\\n%s failed (exit %d). Press Ctrl-D to close.\\n' {shlex.quote(noun)} \"$status\"")
+        lines.append("    sh")
+        lines.append('    exit "$status"')
+        lines.append("fi")
+    lines.append("exit 0")
+    return "\n".join(lines) + "\n"
 
 
 def _error_script(error: HopError) -> str:

@@ -130,7 +130,12 @@ When you enter a session (bare `hop`), hop walks the configured backends in decl
 ```toml
 [backends.devcontainer]
 activate              = "test -f docker-compose.dev.yml"
-prepare               = "podman-compose -f docker-compose.dev.yml --in-pod=false up -d devcontainer"
+prepare               = [
+  "podman-compose -f docker-compose.dev.yml --in-pod=false up -d devcontainer",
+  """curl -fsSL https://github.com/kovidgoyal/kitty/releases/latest/download/kitten-linux-amd64 \\
+    | podman-compose -f docker-compose.dev.yml exec -T devcontainer \\
+        sudo install -m 755 /dev/stdin /usr/local/bin/kitten""",
+]
 teardown              = "podman-compose -f docker-compose.dev.yml down"
 port_translate        = """
   podman ps -q \\
@@ -144,15 +149,15 @@ interactive_prefix    = "podman-compose -f docker-compose.dev.yml exec devcontai
 noninteractive_prefix = "podman-compose -f docker-compose.dev.yml exec -T devcontainer"
 ```
 
-Each command is a single string. Hop runs it through `sh -c` after substituting placeholders, so pipes, redirects, and `$(...)` all work - write the value the way you'd type it at a terminal. Use TOML triple-quoted strings (`"""…"""`) for multi-line pipelines. Placeholder values are shell-quoted before insertion, so paths with spaces substitute safely.
+Each lifecycle / translate field is **either a single string or a list of strings**. Single-string values run as one `sh -c` invocation; list values run each element as its own `sh -c` invocation in declaration order. For `prepare` and `teardown` the sequence aborts on the first non-zero exit (the popup's held shell shows the failing step). For `port_translate` / `host_translate` the *last* element's stripped stdout is the translated value (earlier elements run for their side effects). Use TOML triple-quoted strings (`"""…"""`) for multi-line pipelines inside any element. Placeholder values are shell-quoted before insertion, so paths with spaces substitute safely. `interactive_prefix` and `noninteractive_prefix` stay string-only — they wrap, they don't sequence.
 
 Backend fields:
 
 - `activate` (optional) - auto-detect probe. Backends without `activate` can only be picked by name.
-- `prepare` (optional) - command run once at session creation, before launching kitty. Should be idempotent.
-- `teardown` (optional) - command run at `hop kill` after closing windows.
-- `port_translate` (optional) - command run lazily by the open_selection kitten when it dispatches a `localhost` / `127.0.0.1` / `0.0.0.0` URL. Stdout is the host-reachable port that should replace the URL's port. `{port}` is substituted with the URL's original port.
-- `host_translate` (optional) - command run lazily for the same set of localhost URLs. Stdout is the hostname that should replace `localhost` / `127.0.0.1` / `0.0.0.0` in the URL.
+- `prepare` (optional, string or list) - command(s) run once at session creation, before launching kitty. Should be idempotent. List form runs steps sequentially and aborts on the first failure.
+- `teardown` (optional, string or list) - command(s) run at `hop kill` after closing windows.
+- `port_translate` (optional, string or list) - command(s) run lazily by the open_selection kitten when it dispatches a `localhost` / `127.0.0.1` / `0.0.0.0` URL. The last step's stdout is the host-reachable port that should replace the URL's port. `{port}` is substituted with the URL's original port.
+- `host_translate` (optional, string or list) - command(s) run lazily for the same set of localhost URLs. The last step's stdout is the hostname that should replace `localhost` / `127.0.0.1` / `0.0.0.0` in the URL.
 - `interactive_prefix` (required) - shell snippet prepended to every window command launched in this backend's environment. Empty for the implicit host backend.
 - `noninteractive_prefix` (required) - prefix hop uses for non-interactive backend operations like file-existence checks. Backends that allocate a TTY by default (podman-compose exec) must set the no-TTY variant (e.g. `... exec -T devcontainer`); backends that don't (ssh) pass the same string as `interactive_prefix`. The implicit `host` backend ships with both prefixes set to `""` (empty).
 
@@ -184,7 +189,7 @@ The active backend's `interactive_prefix` wraps each window's `command` at launc
 
 Per-window fields:
 
-- `command` (string) - the role command, **without** any backend wrap. The active backend's `interactive_prefix` is prepended at launch.
+- `command` (string) - the role command, **without** any backend wrap. The active backend's `interactive_prefix` is prepended at launch. An empty string on a non-shell role (e.g. `[layouts.rails.windows.test] command = ""`) is the "just an empty shell" sentinel: hop substitutes the **shell role's** command at launch so any wrap configured on the shell role propagates uniformly. Non-shell roles with a non-empty primary command compose as `<primary>; <shell-role-command>` so the kitty window survives the primary process exiting.
 - `activate` (string, optional) - shell probe; the window auto-launches when it exits 0. Defaults to `"true"`.
 
 Built-in roles `shell`, `editor`, and `browser` ship with hop defaults:
@@ -196,6 +201,16 @@ Built-in roles `shell`, `editor`, and `browser` ship with hop defaults:
 | browser | xdg-detected default browser            | inactive         |
 
 To change a built-in, declare it as a top-level window: `[windows.editor] activate = "false"` opts out of the editor for this config; `[windows.browser] activate = "true"` activates the browser; `[windows.shell] command = "/usr/bin/zsh"` overrides the shell.
+
+To enable Kitty shell integration end-to-end inside a non-host backend (so `hop tail` and other OSC-133-dependent features work for in-container / over-ssh shells), wrap the shell role with kitty's recommended mechanism — `kitten run-shell` for container-style backends, `kitten ssh` as the prefix for ssh backends. The empty-command inheritance rule means every other role in the same session picks up the same wrap automatically:
+
+```toml
+[layouts.rails.windows.shell]
+command = "kitten run-shell --shell=${SHELL:-sh}"
+
+[layouts.rails.windows.test]
+command = ""  # inherits the shell role's kitten wrap
+```
 
 Multiple matching layouts compose: a Rails project that also has `vite.config.ts` activates both layouts and gets their windows.
 

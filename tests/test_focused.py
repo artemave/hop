@@ -29,11 +29,11 @@ class _FakeBackend:
         return ""
 
     @property
-    def prepare_command(self) -> str | None:
+    def prepare_command(self) -> tuple[str, ...] | None:
         return None
 
     @property
-    def teardown_command(self) -> str | None:
+    def teardown_command(self) -> tuple[str, ...] | None:
         return None
 
     def prepare(self, session: ProjectSession) -> None:

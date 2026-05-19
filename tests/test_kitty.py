@@ -557,6 +557,128 @@ def test_launch_payload_composes_through_backend_prefix() -> None:
     ]
 
 
+def test_empty_command_non_shell_role_inherits_shell_role_command() -> None:
+    """A role declared with ``command = ""`` (e.g. the ``test`` window in the
+    rails layout) inherits the shell role's command. The intent is that a
+    user wrap on the shell role (``kitten run-shell --shell=$SHELL`` to
+    enable OSC 133 inside a backend) propagates uniformly to every role
+    without per-role boilerplate."""
+    factory = StubKittyFactory(
+        [
+            {"ok": True, "data": []},
+            {"ok": True},
+        ]
+    )
+
+    from hop.layouts import WindowSpec
+
+    class FakeBackend:
+        def inline(self, command: str, _session: ProjectSession) -> str:
+            return command
+
+        def wrap(self, command: str, _session: ProjectSession) -> Sequence[str]:
+            return ("sh", "-c", command) if command else ()
+
+    adapter = KittyRemoteControlAdapter(
+        session_backend_for=lambda _session: FakeBackend(),  # type: ignore[arg-type]
+        session_windows_for=lambda _session: (
+            WindowSpec(role="shell", command="kitten run-shell --shell=/usr/bin/zsh", active=True),
+            WindowSpec(role="test", command="", active=True),
+        ),
+        transport_factory=factory,
+        launcher=StubLauncher(),
+    )
+
+    adapter.ensure_terminal(build_session(), role="test")
+
+    payload = factory.calls[1][2]
+    assert payload is not None
+    # The test role's empty command is replaced by the shell role's command,
+    # then wrapped — no `;` composition, no ${SHELL:-sh} fallback.
+    assert payload["args"] == ["sh", "-c", "kitten run-shell --shell=/usr/bin/zsh"]
+
+
+def test_shell_role_empty_command_does_not_self_inherit() -> None:
+    """The shell role's own empty command is the host-default sentinel that
+    ``backend.wrap`` interprets as "let kitty pick the user's login shell".
+    It must NOT fall through to its own empty command (no-op infinite loop in
+    spirit) — instead the wrap path returns empty argv and kitty falls back
+    to /etc/passwd."""
+    factory = StubKittyFactory(
+        [
+            {"ok": True, "data": []},
+            {"ok": True},
+        ]
+    )
+
+    from hop.layouts import WindowSpec
+
+    class FakeBackend:
+        def inline(self, command: str, _session: ProjectSession) -> str:
+            return command
+
+        def wrap(self, command: str, _session: ProjectSession) -> Sequence[str]:
+            # Mirrors host backend: empty command + empty prefix → empty argv.
+            return ("sh", "-c", command) if command else ()
+
+    adapter = KittyRemoteControlAdapter(
+        session_backend_for=lambda _session: FakeBackend(),  # type: ignore[arg-type]
+        session_windows_for=lambda _session: (WindowSpec(role="shell", command="", active=True),),
+        transport_factory=factory,
+        launcher=StubLauncher(),
+    )
+
+    adapter.ensure_terminal(build_session(), role="shell")
+
+    payload = factory.calls[1][2]
+    assert payload is not None
+    # Host-default sentinel: empty argv → kitty falls back to /etc/passwd.
+    assert "args" not in payload or payload.get("args") in (None, [], ())
+
+
+def test_non_shell_role_with_primary_command_composes_with_shell_role_wrap() -> None:
+    """A role with a real primary command (``log`` window running ``less``)
+    composes ``<primary>; <shell-fallback>`` so the window survives the primary
+    process exiting. The shell-fallback is the shell role's command — including
+    a user wrap like ``kitten run-shell``. After ``less`` exits the user lands
+    in an integrated shell with OSC 133 markers firing."""
+    factory = StubKittyFactory(
+        [
+            {"ok": True, "data": []},
+            {"ok": True},
+        ]
+    )
+
+    from hop.layouts import WindowSpec
+
+    class FakeBackend:
+        def inline(self, command: str, _session: ProjectSession) -> str:
+            return command
+
+        def wrap(self, command: str, _session: ProjectSession) -> Sequence[str]:
+            return ("sh", "-c", command) if command else ()
+
+    adapter = KittyRemoteControlAdapter(
+        session_backend_for=lambda _session: FakeBackend(),  # type: ignore[arg-type]
+        session_windows_for=lambda _session: (
+            WindowSpec(role="shell", command="kitten run-shell --shell=/usr/bin/zsh", active=True),
+            WindowSpec(role="log", command="less -R log/test.log", active=True),
+        ),
+        transport_factory=factory,
+        launcher=StubLauncher(),
+    )
+
+    adapter.ensure_terminal(build_session(), role="log")
+
+    payload = factory.calls[1][2]
+    assert payload is not None
+    assert payload["args"] == [
+        "sh",
+        "-c",
+        "less -R log/test.log; kitten run-shell --shell=/usr/bin/zsh",
+    ]
+
+
 def test_launch_payload_does_not_compose_for_shell_role() -> None:
     """The shell role IS the post-exit fallback — composition would just
     spawn an extra shell after exit. Verify the wrap path is used directly."""

@@ -55,8 +55,8 @@ noninteractive_prefix  = "podman-compose -f docker-compose.dev.yml exec -T devco
         BackendConfig(
             name="devcontainer",
             activate="test -f docker-compose.dev.yml",
-            prepare="podman-compose -f docker-compose.dev.yml up -d devcontainer",
-            teardown="podman-compose -f docker-compose.dev.yml down",
+            prepare=("podman-compose -f docker-compose.dev.yml up -d devcontainer",),
+            teardown=("podman-compose -f docker-compose.dev.yml down",),
             interactive_prefix="podman-compose -f docker-compose.dev.yml exec devcontainer",
             noninteractive_prefix="podman-compose -f docker-compose.dev.yml exec -T devcontainer",
         ),
@@ -501,20 +501,23 @@ server = "not-a-table"
         load_global_config(config_file)
 
 
-def test_load_global_config_rejects_legacy_list_command_form(tmp_path: Path) -> None:
+def test_load_global_config_rejects_list_for_string_only_command(tmp_path: Path) -> None:
+    """``interactive_prefix`` is a wrap, not a sequence — list form is reserved
+    for lifecycle and translate fields. The rejection message points users at
+    triple-quoted strings for multi-line content."""
     config_file = write(
         tmp_path / "config.toml",
         """
 [backends.devcontainer]
-prepare = ["compose", "up"]
+interactive_prefix = ["compose", "exec"]
 """,
     )
 
-    with pytest.raises(HopConfigError, match="commands are now strings"):
+    with pytest.raises(HopConfigError, match="reserved for lifecycle and translate fields"):
         load_global_config(config_file)
 
 
-def test_load_global_config_rejects_non_string_command(tmp_path: Path) -> None:
+def test_load_global_config_rejects_non_string_non_list_command(tmp_path: Path) -> None:
     config_file = write(
         tmp_path / "config.toml",
         """
@@ -523,7 +526,23 @@ prepare = 42
 """,
     )
 
-    with pytest.raises(HopConfigError, match="must be a string"):
+    with pytest.raises(HopConfigError, match="must be a string or list of strings"):
+        load_global_config(config_file)
+
+
+def test_load_global_config_rejects_non_string_for_string_only_field(tmp_path: Path) -> None:
+    """String-only fields (``interactive_prefix``, ``activate``, ``command``)
+    reject non-string non-list values with a "must be a string" error — a
+    different code path from the list/lifecycle parser."""
+    config_file = write(
+        tmp_path / "config.toml",
+        """
+[backends.devcontainer]
+interactive_prefix = 7
+""",
+    )
+
+    with pytest.raises(HopConfigError, match="must be a string, got int"):
         load_global_config(config_file)
 
 
@@ -537,6 +556,84 @@ prepare = "   "
     )
 
     with pytest.raises(HopConfigError, match="must not be empty"):
+        load_global_config(config_file)
+
+
+def test_load_global_config_accepts_list_form_lifecycle(tmp_path: Path) -> None:
+    """List-form prepare normalizes to a multi-element tuple. Single-string
+    form normalizes to a one-element tuple so consumers see one shape."""
+    config_file = write(
+        tmp_path / "config.toml",
+        """
+[backends.devcontainer]
+interactive_prefix = "compose exec devcontainer"
+noninteractive_prefix = "compose exec -T devcontainer"
+prepare = ["compose up", "install shim", "install kitten"]
+teardown = "compose down"
+""",
+    )
+
+    config = load_global_config(config_file)
+    backend = config.backends[0]
+    assert backend.prepare == ("compose up", "install shim", "install kitten")
+    assert backend.teardown == ("compose down",)
+
+
+def test_load_global_config_accepts_list_form_translate(tmp_path: Path) -> None:
+    config_file = write(
+        tmp_path / "config.toml",
+        """
+[backends.devcontainer]
+interactive_prefix = "compose exec devcontainer"
+noninteractive_prefix = "compose exec -T devcontainer"
+port_translate = ["probe", "translate {port}"]
+host_translate = ["echo platform.localhost"]
+""",
+    )
+
+    config = load_global_config(config_file)
+    backend = config.backends[0]
+    assert backend.port_translate == ("probe", "translate {port}")
+    assert backend.host_translate == ("echo platform.localhost",)
+
+
+def test_load_global_config_rejects_empty_lifecycle_list(tmp_path: Path) -> None:
+    """Empty list is rejected so ``None`` stays the single "unset" signal."""
+    config_file = write(
+        tmp_path / "config.toml",
+        """
+[backends.devcontainer]
+prepare = []
+""",
+    )
+
+    with pytest.raises(HopConfigError, match="must not be an empty list"):
+        load_global_config(config_file)
+
+
+def test_load_global_config_rejects_empty_lifecycle_list_element(tmp_path: Path) -> None:
+    config_file = write(
+        tmp_path / "config.toml",
+        """
+[backends.devcontainer]
+prepare = ["compose up", "   "]
+""",
+    )
+
+    with pytest.raises(HopConfigError, match="element at index 1 must not be empty"):
+        load_global_config(config_file)
+
+
+def test_load_global_config_rejects_non_string_lifecycle_list_element(tmp_path: Path) -> None:
+    config_file = write(
+        tmp_path / "config.toml",
+        """
+[backends.devcontainer]
+prepare = ["compose up", 7]
+""",
+    )
+
+    with pytest.raises(HopConfigError, match="element at index 1 must be a string, got int"):
         load_global_config(config_file)
 
 
@@ -612,7 +709,7 @@ def test_merge_backends_appends_global_only_after_project() -> None:
 def test_merge_backends_field_merges_per_field() -> None:
     project = HopConfig(backends=(_backend("alpha", activate="true"),))
     global_ = HopConfig(
-        backends=(_backend("alpha", interactive_prefix="prefix", activate="test -f marker", prepare="prep"),)
+        backends=(_backend("alpha", interactive_prefix="prefix", activate="test -f marker", prepare=("prep",)),)
     )
 
     merged = merge_backends(project, global_)
@@ -622,7 +719,7 @@ def test_merge_backends_field_merges_per_field() -> None:
             "alpha",
             interactive_prefix="prefix",  # inherited
             activate="true",  # project wins
-            prepare="prep",  # inherited
+            prepare=("prep",),  # inherited
         ),
     )
 

@@ -815,8 +815,8 @@ def _devcontainer_session(tmp_path: Path) -> tuple[Path, BackendConfig]:
     return project_root, BackendConfig(
         name="devcontainer",
         activate="test -f docker-compose.dev.yml",
-        prepare="compose up -d devcontainer",
-        teardown="compose down",
+        prepare=("compose up -d devcontainer",),
+        teardown=("compose down",),
         interactive_prefix="compose exec devcontainer",
         noninteractive_prefix="compose exec -T devcontainer",
     )
@@ -875,7 +875,7 @@ def test_create_headless_runs_prepare_in_popup_after_eager_workspace_switch(tmp_
     assert execute_command(EnterSessionCommand(), cwd=project_root, services=services) == 0
 
     # The popup ran prepare exactly once with the backend's prepare command.
-    assert popup.prepare_calls == [("demo", "compose up -d devcontainer")]
+    assert popup.prepare_calls == [("demo", ("compose up -d devcontainer",))]
     # The eager workspace switch happened BEFORE the popup runs prepare.
     assert sway_events == [("switch", "p:demo"), ("prepare", "demo")]
     # SessionBackendRegistry's runner skipped the prepare invocation
@@ -1080,8 +1080,8 @@ def _devcontainer_config() -> BackendConfig:
     return BackendConfig(
         name="devcontainer",
         activate="test -f docker-compose.dev.yml",
-        prepare="compose up -d devcontainer",
-        teardown="compose down",
+        prepare=("compose up -d devcontainer",),
+        teardown=("compose down",),
         interactive_prefix="compose exec devcontainer",
         noninteractive_prefix="compose exec -T devcontainer",
     )
@@ -1401,8 +1401,8 @@ def test_session_backend_registry_for_session_returns_persisted_command_backend(
             backend=CommandBackendRecord(
                 name="legacy",
                 interactive_prefix="legacy-prefix",
-                prepare="legacy-prepare",
-                teardown="legacy-teardown",
+                prepare=("legacy-prepare",),
+                teardown=("legacy-teardown",),
                 noninteractive_prefix="legacy-noninteractive",
             ),
         )
@@ -1451,8 +1451,8 @@ def test_record_for_backend_round_trips_command_backend(tmp_path: Path) -> None:
     command = CommandBackend(
         name="devcontainer",
         interactive_prefix="compose exec devcontainer",
-        prepare_command="compose up -d",
-        teardown_command="compose down",
+        prepare_command=("compose up -d",),
+        teardown_command=("compose down",),
         noninteractive_prefix="compose exec -T devcontainer",
     )
     record = _record_for_backend(command)
@@ -1460,8 +1460,8 @@ def test_record_for_backend_round_trips_command_backend(tmp_path: Path) -> None:
     assert record == CommandBackendRecord(
         name="devcontainer",
         interactive_prefix="compose exec devcontainer",
-        prepare="compose up -d",
-        teardown="compose down",
+        prepare=("compose up -d",),
+        teardown=("compose down",),
         noninteractive_prefix="compose exec -T devcontainer",
     )
 
@@ -1578,7 +1578,7 @@ def test_session_base_registry_re_resolves_when_kitty_dead(tmp_path: Path) -> No
             backend=CommandBackendRecord(
                 name="devcontainer",
                 interactive_prefix="compose exec devcontainer",
-                prepare="compose up -d devcontainer",
+                prepare=("compose up -d devcontainer",),
                 noninteractive_prefix="compose exec -T devcontainer",
             ),
         )

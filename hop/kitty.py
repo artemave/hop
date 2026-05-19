@@ -576,18 +576,31 @@ class KittyRemoteControlAdapter:
         backend: SessionBackend,
         role: str,
     ) -> Sequence[str]:
+        # "Shell-like" means: this role is meant to land at an interactive
+        # shell, not run a primary process and *then* drop to a shell. The
+        # `; <shell>` post-exit composition only applies to non-shell-like
+        # roles (server, log, console, custom).
+        #
+        # A role is shell-like when:
+        #   - It is the shell role, OR
+        #   - Its own ``spec.command`` is the empty sentinel (e.g. the
+        #     ``test`` role declared as ``command = ""``). The inheritance
+        #     fall-through in ``_command_for_role`` may give such a role a
+        #     non-empty *resolved* command (the shell role's wrap), but we
+        #     don't want to compose with a trailing shell on top of that —
+        #     the inherited wrap is *already* the shell.
+        windows = self._session_windows_for(session)
+        spec = find_window(windows, role)
+        own_command = spec.command if spec is not None else ""
+        is_shell_like = _is_shell_role(role) or not own_command
+
         command = self._command_for_role(session, role)
-        # The shell role IS the post-exit fallback, so no composition needed.
-        # An empty command (no resolved spec, no windows resolver wired) is
-        # also treated as shell-like — the wrap path's empty-command branch
-        # handles it (kitty default on host, ${SHELL:-sh} inside a prefix).
-        if _is_shell_role(role) or not command:
+        if is_shell_like:
             return backend.wrap(command, session)
-        # For everything else (server, log, console, custom, ...), compose
-        # `<command>; <shell>` so the kitty window stays open if the role's
-        # process exits cleanly or is Ctrl-C'd. Each piece is wrapped
-        # through the prefix individually (via inline) before a single
-        # outer sh -c, so the `;` runs each side as its own backend exec.
+        # Compose `<command>; <shell>` so the kitty window stays open if the
+        # role's process exits cleanly or is Ctrl-C'd. Each piece is wrapped
+        # through the prefix individually (via inline) before a single outer
+        # sh -c, so the `;` runs each side as its own backend exec.
         shell_command = self._command_for_role(session, SHELL_ROLE) or SHELL_FALLBACK
         command_inline = backend.inline(command, session)
         shell_inline = backend.inline(shell_command, session)
@@ -596,14 +609,23 @@ class KittyRemoteControlAdapter:
     def _command_for_role(self, session: ProjectSession, role: str) -> str:
         windows = self._session_windows_for(session)
         spec = find_window(windows, role)
-        if spec is not None:
+        if spec is not None and spec.command:
             return spec.command
-        # Ad-hoc role (e.g. shell-2) or no resolver wired (default factory):
-        # fall back to the shell role's command, then to the empty sentinel
-        # (handled by backend.wrap as "use platform default").
-        shell_spec = find_window(windows, SHELL_ROLE)
-        if shell_spec is not None:
-            return shell_spec.command
+        # Two fall-through cases land here:
+        #   1. The role has no spec at all (ad-hoc roles like shell-2, or no
+        #      resolver wired).
+        #   2. The role has a spec but its command is empty (e.g. a `test`
+        #      role declared as ``command = ""`` to mean "just an empty shell").
+        # Both inherit the shell role's command so any wrap the user puts on
+        # the shell role (e.g. ``kitten run-shell --shell=$SHELL`` to enable
+        # OSC 133 inside a backend) propagates to every other role uniformly.
+        # The shell role itself never falls through — its own empty command is
+        # the host-default sentinel that ``backend.wrap`` interprets as
+        # "let kitty pick the user's login shell".
+        if role != SHELL_ROLE:
+            shell_spec = find_window(windows, SHELL_ROLE)
+            if shell_spec is not None and shell_spec.command:
+                return shell_spec.command
         return ""
 
 

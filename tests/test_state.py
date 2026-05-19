@@ -57,8 +57,8 @@ def test_record_session_persists_command_backend_record(tmp_path: Path) -> None:
         backend=CommandBackendRecord(
             name="devcontainer",
             interactive_prefix="podman-compose -f docker-compose.dev.yml exec devcontainer",
-            prepare="podman-compose up -d devcontainer",
-            teardown="podman-compose down",
+            prepare=("podman-compose up -d devcontainer",),
+            teardown=("podman-compose down",),
             noninteractive_prefix="podman-compose -f docker-compose.dev.yml exec -T devcontainer",
         ),
         sessions_dir=sessions_dir,
@@ -69,10 +69,36 @@ def test_record_session_persists_command_backend_record(tmp_path: Path) -> None:
         "type": "command",
         "name": "devcontainer",
         "interactive_prefix": "podman-compose -f docker-compose.dev.yml exec devcontainer",
-        "prepare": "podman-compose up -d devcontainer",
-        "teardown": "podman-compose down",
+        "prepare": ["podman-compose up -d devcontainer"],
+        "teardown": ["podman-compose down"],
         "noninteractive_prefix": "podman-compose -f docker-compose.dev.yml exec -T devcontainer",
     }
+
+
+def test_record_session_persists_list_form_lifecycle(tmp_path: Path) -> None:
+    """Multi-step prepare and teardown round-trip as JSON arrays."""
+    sessions_dir = tmp_path / "sessions"
+    session = make_session(name="demo", project_root=tmp_path / "demo")
+
+    record_session(
+        session,
+        backend=CommandBackendRecord(
+            name="devcontainer",
+            interactive_prefix="compose exec devcontainer",
+            noninteractive_prefix="compose exec -T devcontainer",
+            prepare=("compose up", "install shim", "install kitten"),
+            teardown=("compose down",),
+        ),
+        sessions_dir=sessions_dir,
+    )
+
+    payload = json.loads((sessions_dir / "demo.json").read_text())
+    assert payload["backend"]["prepare"] == ["compose up", "install shim", "install kitten"]
+    assert payload["backend"]["teardown"] == ["compose down"]
+
+    loaded = load_sessions(sessions_dir=sessions_dir)
+    assert loaded["demo"].backend.prepare == ("compose up", "install shim", "install kitten")
+    assert loaded["demo"].backend.teardown == ("compose down",)
 
 
 def test_record_session_omits_optional_fields(tmp_path: Path) -> None:
@@ -106,15 +132,15 @@ def test_record_session_persists_translate_commands(tmp_path: Path) -> None:
             name="devcontainer",
             interactive_prefix="compose exec devcontainer",
             noninteractive_prefix="compose exec -T devcontainer",
-            port_translate_command="compose port devcontainer {port}",
-            host_translate_command="echo myserver",
+            port_translate_command=("compose port devcontainer {port}",),
+            host_translate_command=("echo myserver",),
         ),
         sessions_dir=sessions_dir,
     )
 
     payload = json.loads((sessions_dir / "demo.json").read_text())
-    assert payload["backend"]["port_translate_command"] == "compose port devcontainer {port}"
-    assert payload["backend"]["host_translate_command"] == "echo myserver"
+    assert payload["backend"]["port_translate_command"] == ["compose port devcontainer {port}"]
+    assert payload["backend"]["host_translate_command"] == ["echo myserver"]
 
 
 def test_record_session_round_trips_workspace_path(tmp_path: Path) -> None:
@@ -190,10 +216,36 @@ def test_load_sessions_decodes_command_backend_record(tmp_path: Path) -> None:
     assert sessions["alpha"].backend == CommandBackendRecord(
         name="devcontainer",
         interactive_prefix="compose exec devcontainer",
-        prepare="compose up -d devcontainer",
-        teardown="compose down",
+        prepare=("compose up -d devcontainer",),
+        teardown=("compose down",),
         noninteractive_prefix="compose exec -T devcontainer",
     )
+
+
+def test_load_sessions_accepts_list_form_lifecycle(tmp_path: Path) -> None:
+    """Records persisted in list form decode to multi-element tuples."""
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir()
+    (sessions_dir / "alpha.json").write_text(
+        json.dumps(
+            {
+                "name": "alpha",
+                "project_root": "/projects/alpha",
+                "backend": {
+                    "type": "command",
+                    "name": "devcontainer",
+                    "interactive_prefix": "compose exec devcontainer",
+                    "noninteractive_prefix": "compose exec -T devcontainer",
+                    "prepare": ["compose up", "install shim"],
+                    "teardown": ["compose down"],
+                },
+            }
+        )
+    )
+
+    sessions = load_sessions(sessions_dir=sessions_dir)
+    assert sessions["alpha"].backend.prepare == ("compose up", "install shim")
+    assert sessions["alpha"].backend.teardown == ("compose down",)
 
 
 def test_load_sessions_silently_drops_legacy_workspace_keys(tmp_path: Path) -> None:
@@ -273,10 +325,12 @@ def test_load_sessions_raises_on_malformed_json(tmp_path: Path) -> None:
         load_sessions(sessions_dir=sessions_dir)
 
 
-def test_load_sessions_drops_optional_command_fields_when_not_strings(tmp_path: Path) -> None:
-    """Non-string values in optional command fields decode as None. Required
-    fields (the two prefixes) are still respected — if any non-string value
-    appears there, the whole record falls back to host."""
+def test_load_sessions_drops_optional_command_fields_when_undecodable(tmp_path: Path) -> None:
+    """Undecodable values in optional lifecycle/translate fields decode as
+    None. ``None``, empty lists, lists with non-string elements, and other
+    types all degrade silently. Required fields (the two prefixes) are still
+    respected — if any non-string value appears there, the whole record falls
+    back to host."""
     sessions_dir = tmp_path / "sessions"
     sessions_dir.mkdir()
     (sessions_dir / "alpha.json").write_text(
@@ -289,9 +343,10 @@ def test_load_sessions_drops_optional_command_fields_when_not_strings(tmp_path: 
                     "name": "devcontainer",
                     "interactive_prefix": "compose exec devcontainer",
                     "noninteractive_prefix": "compose exec -T devcontainer",
-                    "prepare": ["legacy", "list"],
+                    "prepare": [],  # empty list — same "unset" signal as None
                     "teardown": None,
                     "port_translate_command": 42,
+                    "host_translate_command": ["foo", 7],  # mixed-type list
                 },
             }
         )
@@ -306,6 +361,7 @@ def test_load_sessions_drops_optional_command_fields_when_not_strings(tmp_path: 
         prepare=None,
         teardown=None,
         port_translate_command=None,
+        host_translate_command=None,
     )
 
 

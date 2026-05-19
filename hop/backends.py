@@ -56,10 +56,10 @@ class SessionBackend(Protocol):
     def interactive_prefix(self) -> str: ...
 
     @property
-    def prepare_command(self) -> str | None: ...
+    def prepare_command(self) -> tuple[str, ...] | None: ...
 
     @property
-    def teardown_command(self) -> str | None: ...
+    def teardown_command(self) -> tuple[str, ...] | None: ...
 
     def prepare(self, session: ProjectSession) -> None: ...
 
@@ -154,10 +154,10 @@ class CommandBackend:
     name: str
     interactive_prefix: str
     noninteractive_prefix: str
-    prepare_command: str | None = None
-    teardown_command: str | None = None
-    port_translate_command: str | None = None
-    host_translate_command: str | None = None
+    prepare_command: tuple[str, ...] | None = None
+    teardown_command: tuple[str, ...] | None = None
+    port_translate_command: tuple[str, ...] | None = None
+    host_translate_command: tuple[str, ...] | None = None
     # The backend's default working directory, captured by running
     # ``<noninteractive_prefix> pwd`` once at bootstrap. Used as a fallback
     # in ``hop.focused.paths_exist`` when the kitty window's ``cwd_of_child``
@@ -169,13 +169,7 @@ class CommandBackend:
     def prepare(self, session: ProjectSession) -> None:
         if self.prepare_command is None:
             return
-        argv = _flock_sh(self.prepare_command, session=session)
-        result = self.runner(argv, session.project_root)
-        debug.log_command(argv, session.project_root, result)
-        if result.returncode != 0:
-            stderr = (result.stderr or result.stdout or "").strip()
-            msg = f"backend {self.name!r} prepare failed for {session.session_name!r}: {stderr}"
-            raise SessionBackendError(msg)
+        self._run_lifecycle_steps(self.prepare_command, session=session, kind="prepare")
 
     def wrap(self, command: str, session: ProjectSession) -> Sequence[str]:
         if not command and not self.interactive_prefix:
@@ -245,36 +239,70 @@ class CommandBackend:
 
     def _run_translate(
         self,
-        command: str,
+        steps: tuple[str, ...],
         *,
         session: ProjectSession,
         port: int | None,
         kind: str,
     ) -> str:
-        substituted = _substitute_translate(command, session=session, port=port)
-        argv = _sh_c(substituted)
-        result = self.runner(argv, session.project_root)
-        debug.log_command(argv, session.project_root, result)
-        if result.returncode != 0:
-            stderr = (result.stderr or result.stdout or "").strip()
-            msg = f"backend {self.name!r} {kind} failed for {session.session_name!r}: {stderr}"
-            raise SessionBackendError(msg)
-        stdout = result.stdout.strip()
-        if not stdout:
+        """Run translate steps sequentially, returning the last step's stdout.
+
+        Earlier steps run for their side effects (probes, container lookups)
+        and their stdout is dropped — only the final step's stdout determines
+        the translated value. Any failing step aborts the sequence with the
+        same step-labeled error shape as ``_run_lifecycle_steps``.
+        """
+
+        multi_step = len(steps) > 1
+        last_stdout = ""
+        for index, step in enumerate(steps, start=1):
+            substituted = _substitute_translate(step, session=session, port=port)
+            argv = _sh_c(substituted)
+            result = self.runner(argv, session.project_root)
+            debug.log_command(argv, session.project_root, result)
+            if result.returncode != 0:
+                stderr = (result.stderr or result.stdout or "").strip()
+                label = f"{kind} step {index} ({step!r})" if multi_step else kind
+                msg = f"backend {self.name!r} {label} failed for {session.session_name!r}: {stderr}"
+                raise SessionBackendError(msg)
+            last_stdout = result.stdout.strip()
+        if not last_stdout:
             msg = f"backend {self.name!r} {kind} returned empty output for {session.session_name!r}"
             raise SessionBackendError(msg)
-        return stdout
+        return last_stdout
 
     def teardown(self, session: ProjectSession) -> None:
         if self.teardown_command is None:
             return
-        argv = _flock_sh(self.teardown_command, session=session)
-        result = self.runner(argv, session.project_root)
-        debug.log_command(argv, session.project_root, result)
-        if result.returncode != 0:
-            stderr = (result.stderr or result.stdout or "").strip()
-            msg = f"backend {self.name!r} teardown failed for {session.session_name!r}: {stderr}"
-            raise SessionBackendError(msg)
+        self._run_lifecycle_steps(self.teardown_command, session=session, kind="teardown")
+
+    def _run_lifecycle_steps(
+        self,
+        steps: tuple[str, ...],
+        *,
+        session: ProjectSession,
+        kind: str,
+    ) -> None:
+        """Run lifecycle steps sequentially under the per-session flock.
+
+        Each step is its own ``flock -o ... sh -c '<step>'`` invocation so
+        non-zero exits surface step-by-step (the popup's held-open shell shows
+        only the failing step's output, not the whole sequence). The
+        ``SessionBackendError`` message names the step by 1-indexed position
+        when there's more than one — single-step sequences keep the legacy
+        "<kind> failed" phrasing so existing error consumers don't churn.
+        """
+
+        multi_step = len(steps) > 1
+        for index, step in enumerate(steps, start=1):
+            argv = _flock_sh(step, session=session)
+            result = self.runner(argv, session.project_root)
+            debug.log_command(argv, session.project_root, result)
+            if result.returncode != 0:
+                stderr = (result.stderr or result.stdout or "").strip()
+                label = f"{kind} step {index} ({step!r})" if multi_step else kind
+                msg = f"backend {self.name!r} {label} failed for {session.session_name!r}: {stderr}"
+                raise SessionBackendError(msg)
 
     def probe_workspace_path(self, session: ProjectSession) -> str | None:
         """Return the backend's default working directory (``pwd``), or ``None``.

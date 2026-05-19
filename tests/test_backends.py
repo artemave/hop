@@ -59,8 +59,8 @@ def make_backend(**kwargs: object) -> BackendConfig:
     defaults: dict[str, object] = {
         "name": "devcontainer",
         "activate": "test -f docker-compose.dev.yml",
-        "prepare": "compose up -d devcontainer",
-        "teardown": "compose down",
+        "prepare": ("compose up -d devcontainer",),
+        "teardown": ("compose down",),
         "interactive_prefix": "compose exec devcontainer",
         "noninteractive_prefix": "compose exec devcontainer",
     }
@@ -212,6 +212,107 @@ def test_command_backend_prepare_raises_on_failure(tmp_path: Path) -> None:
 
     with pytest.raises(SessionBackendError, match="prepare failed"):
         backend.prepare(build_session(tmp_path))
+
+
+@dataclass
+class SequencedRunner:
+    """Runner that returns scripted (returncode, stdout, stderr) per call.
+
+    The script is consumed left-to-right; running past the end raises so a
+    test never silently fans out to an unintended extra invocation."""
+
+    script: list[tuple[int, str, str]]
+    calls: list[tuple[tuple[str, ...], Path, str | None]] = field(default_factory=lambda: [])
+
+    def __call__(
+        self,
+        args: Sequence[str],
+        cwd: Path,
+        *,
+        stdin: str | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        self.calls.append((tuple(args), cwd, stdin))
+        index = len(self.calls) - 1
+        if index >= len(self.script):
+            raise AssertionError(f"SequencedRunner consumed past its script: call #{index + 1} {tuple(args)}")
+        returncode, stdout, stderr = self.script[index]
+        return subprocess.CompletedProcess(
+            args=list(args),
+            returncode=returncode,
+            stdout=stdout,
+            stderr=stderr,
+        )
+
+
+def test_command_backend_prepare_runs_each_step_in_order(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Multi-step prepare iterates the tuple, wrapping each step in its own
+    flock-guarded ``sh -c``. The earliest failing step aborts; everything
+    after is skipped."""
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    runner = SequencedRunner(script=[(0, "", ""), (0, "", ""), (0, "", "")])
+    backend = backend_from_config(
+        make_backend(prepare=("compose up", "install hop", "install kitten")),
+        runner=runner,
+    )
+
+    backend.prepare(build_session(tmp_path))
+
+    lock = tmp_path / "hop" / f"backend-{tmp_path.name}.lock"
+    assert [call[0] for call in runner.calls] == [
+        ("flock", "-o", str(lock), "sh", "-c", "compose up"),
+        ("flock", "-o", str(lock), "sh", "-c", "install hop"),
+        ("flock", "-o", str(lock), "sh", "-c", "install kitten"),
+    ]
+
+
+def test_command_backend_prepare_aborts_on_first_step_failure(tmp_path: Path) -> None:
+    """When step 2 fails, step 3 must NOT be invoked. The error message names
+    the failing step (1-indexed) and the step's command."""
+    runner = SequencedRunner(script=[(0, "", ""), (1, "", "nope"), (0, "", "")])
+    backend = backend_from_config(
+        make_backend(prepare=("compose up", "install hop", "install kitten")),
+        runner=runner,
+    )
+
+    with pytest.raises(SessionBackendError, match=r"prepare step 2 \('install hop'\) failed"):
+        backend.prepare(build_session(tmp_path))
+
+    assert len(runner.calls) == 2
+
+
+def test_command_backend_translate_uses_last_step_stdout(tmp_path: Path) -> None:
+    """Multi-step translate runs each step in order; only the final step's
+    stdout is the result. Earlier stdout is captured in the debug log but
+    doesn't contribute to the translation."""
+    runner = SequencedRunner(script=[(0, "first\n", ""), (0, "42031\n", "")])
+    backend = backend_from_config(
+        make_backend(port_translate=("probe", "compose port devcontainer {port}")),
+        runner=runner,
+    )
+
+    translated = backend.translate_localhost_url(
+        build_session(tmp_path),
+        "http://localhost:3000/",
+    )
+
+    assert translated == "http://localhost:42031/"
+    assert [call[0] for call in runner.calls] == [
+        ("sh", "-c", "probe"),
+        ("sh", "-c", "compose port devcontainer 3000"),
+    ]
+
+
+def test_command_backend_translate_aborts_on_intermediate_step(tmp_path: Path) -> None:
+    """A failing intermediate translate step short-circuits the sequence and
+    raises with the step label, mirroring the prepare/teardown shape."""
+    runner = SequencedRunner(script=[(1, "", "probe broke")])
+    backend = backend_from_config(
+        make_backend(port_translate=("probe", "translate {port}")),
+        runner=runner,
+    )
+
+    with pytest.raises(SessionBackendError, match=r"port_translate step 1 \('probe'\) failed"):
+        backend.translate_localhost_url(build_session(tmp_path), "http://localhost:3000/")
 
 
 def test_command_backend_teardown_runs_teardown_command(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -380,7 +481,7 @@ def test_command_backend_translate_localhost_url_raises_when_port_translate_retu
     tmp_path: Path,
 ) -> None:
     runner = RecordingRunner(stdout="not-a-port\n")
-    backend = backend_from_config(make_backend(port_translate="p {port}"), runner=runner)
+    backend = backend_from_config(make_backend(port_translate=("p {port}",)), runner=runner)
 
     with pytest.raises(SessionBackendError, match="non-numeric"):
         backend.translate_localhost_url(build_session(tmp_path), "http://localhost:3000/")
@@ -393,7 +494,7 @@ def test_command_backend_translate_localhost_url_preserves_userinfo_when_port_dr
     rebuilds the netloc with userinfo + host but no port. Exercises the
     `port is None` branch of the userinfo-preserving rebuilder."""
     runner = RecordingRunner(stdout="myserver\n")
-    backend = backend_from_config(make_backend(host_translate="echo myserver"), runner=runner)
+    backend = backend_from_config(make_backend(host_translate=("echo myserver",)), runner=runner)
 
     translated = backend.translate_localhost_url(
         build_session(tmp_path),
@@ -406,7 +507,7 @@ def test_command_backend_translate_localhost_url_preserves_userinfo_when_port_dr
 def test_command_backend_translate_localhost_url_replaces_port(tmp_path: Path) -> None:
     runner = RecordingRunner(stdout="35231\n")
     backend = backend_from_config(
-        make_backend(port_translate="compose port devcontainer {port}"),
+        make_backend(port_translate=("compose port devcontainer {port}",)),
         runner=runner,
     )
 
@@ -422,7 +523,7 @@ def test_command_backend_translate_localhost_url_replaces_port(tmp_path: Path) -
 def test_command_backend_translate_localhost_url_replaces_host(tmp_path: Path) -> None:
     runner = RecordingRunner(stdout="myserver.example.com\n")
     backend = backend_from_config(
-        make_backend(host_translate="echo myserver.example.com"),
+        make_backend(host_translate=("echo myserver.example.com",)),
         runner=runner,
     )
 
@@ -436,7 +537,7 @@ def test_command_backend_translate_localhost_url_replaces_host(tmp_path: Path) -
 
 def test_command_backend_translate_localhost_url_skips_non_localhost(tmp_path: Path) -> None:
     runner = RecordingRunner(stdout="9999\n")
-    backend = backend_from_config(make_backend(port_translate="echo 9999"), runner=runner)
+    backend = backend_from_config(make_backend(port_translate=("echo 9999",)), runner=runner)
 
     assert (
         backend.translate_localhost_url(build_session(tmp_path), "https://example.com:3000/foo")
@@ -447,7 +548,7 @@ def test_command_backend_translate_localhost_url_skips_non_localhost(tmp_path: P
 
 def test_command_backend_translate_localhost_url_treats_127_0_0_1(tmp_path: Path) -> None:
     runner = RecordingRunner(stdout="35231")
-    backend = backend_from_config(make_backend(port_translate="compose port {port}"), runner=runner)
+    backend = backend_from_config(make_backend(port_translate=("compose port {port}",)), runner=runner)
 
     assert (
         backend.translate_localhost_url(build_session(tmp_path), "http://127.0.0.1:3000/") == "http://127.0.0.1:35231/"
@@ -456,7 +557,7 @@ def test_command_backend_translate_localhost_url_treats_127_0_0_1(tmp_path: Path
 
 def test_command_backend_translate_localhost_url_raises_on_nonzero_exit(tmp_path: Path) -> None:
     runner = RecordingRunner(returncode=1, stderr="container is gone")
-    backend = backend_from_config(make_backend(port_translate="p {port}"), runner=runner)
+    backend = backend_from_config(make_backend(port_translate=("p {port}",)), runner=runner)
 
     with pytest.raises(SessionBackendError, match="port_translate failed"):
         backend.translate_localhost_url(build_session(tmp_path), "http://localhost:3000/")
@@ -464,7 +565,7 @@ def test_command_backend_translate_localhost_url_raises_on_nonzero_exit(tmp_path
 
 def test_command_backend_translate_localhost_url_raises_on_empty_stdout(tmp_path: Path) -> None:
     runner = RecordingRunner(stdout="   \n")
-    backend = backend_from_config(make_backend(port_translate="p {port}"), runner=runner)
+    backend = backend_from_config(make_backend(port_translate=("p {port}",)), runner=runner)
 
     with pytest.raises(SessionBackendError, match="port_translate returned empty output"):
         backend.translate_localhost_url(build_session(tmp_path), "http://localhost:3000/")
@@ -472,7 +573,7 @@ def test_command_backend_translate_localhost_url_raises_on_empty_stdout(tmp_path
 
 def test_command_backend_translate_localhost_url_preserves_userinfo(tmp_path: Path) -> None:
     runner = RecordingRunner(stdout="35231")
-    backend = backend_from_config(make_backend(port_translate="p {port}"), runner=runner)
+    backend = backend_from_config(make_backend(port_translate=("p {port}",)), runner=runner)
 
     translated = backend.translate_localhost_url(
         build_session(tmp_path),
@@ -603,7 +704,7 @@ def test_select_backend_pinned_unknown_name_raises(tmp_path: Path) -> None:
 
 def test_default_runner_invokes_subprocess_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
-    backend = backend_from_config(make_backend(prepare="true"))
+    backend = backend_from_config(make_backend(prepare=("true",)))
 
     backend.prepare(build_session(tmp_path))
 

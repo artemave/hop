@@ -23,8 +23,8 @@ def make_backend(**kwargs: object) -> BackendConfig:
     defaults: dict[str, object] = {
         "name": "devcontainer",
         "activate": "test -f docker-compose.dev.yml",
-        "prepare": "compose up -d devcontainer",
-        "teardown": "compose down",
+        "prepare": ("compose up -d devcontainer",),
+        "teardown": ("compose down",),
         "interactive_prefix": "compose exec devcontainer",
         "noninteractive_prefix": "compose exec devcontainer",
     }
