@@ -211,11 +211,29 @@ class SessionBackendRegistry:
         # default working directory once — ``hop.focused.paths_exist`` uses it
         # as a fallback base cwd when OSC 7 isn't being emitted by the
         # in-shell shell (typical for fresh container/ssh shells).
+        #
+        # When ``skip_prepare`` is set the probe is also skipped: it requires
+        # the backend container to already be up, and the caller hasn't run
+        # prepare yet. Headless callers must invoke ``probe_workspace_path``
+        # *after* their popup-driven prepare returns.
         if not skip_prepare:
             backend.prepare(session)
+            backend = self.probe_workspace_path(session, backend)
+        return backend
+
+    def probe_workspace_path(self, session: ProjectSession, backend: SessionBackend) -> SessionBackend:
+        """Probe the backend's default cwd and attach it to ``backend``.
+
+        Idempotent. Called inline by ``resolve_for_entry`` for interactive
+        first entries, and explicitly by headless callers after their
+        out-of-band prepare step finishes (when the container is finally
+        up and ``<noninteractive_prefix> pwd`` can return a real path).
+        """
+
+        assert isinstance(backend, CommandBackend), "SessionBackend Protocol is implemented by CommandBackend"
         workspace_path = backend.probe_workspace_path(session)
         if workspace_path is not None:
-            backend = replace(backend, workspace_path=workspace_path)
+            return replace(backend, workspace_path=workspace_path)
         return backend
 
     def resolve_windows_for_entry(self, session: ProjectSession) -> tuple[WindowSpec, ...]:
@@ -340,6 +358,11 @@ def execute_command(
                 if headless_first_entry:
                     services.sway.switch_to_workspace(session.workspace_name)
                     services.popup.run_prepare(session, backend)
+                    # The popup-driven prepare just brought the backend up;
+                    # probe the workspace path now so it lands in the
+                    # persisted record (and the open-selection kitten has a
+                    # fallback base cwd when OSC 7 isn't being emitted).
+                    backend = services.session_backends.probe_workspace_path(session, backend)
                 services.session_backends.set_override(session.session_name, backend)
                 try:
                     windows = services.session_backends.resolve_windows_for_entry(session) if is_first_entry else ()

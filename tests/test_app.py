@@ -1174,11 +1174,13 @@ def test_session_base_registry_runs_activate_then_prepare(
     ]
 
 
-def test_session_base_registry_skip_prepare_omits_prepare_subprocess(tmp_path: Path) -> None:
+def test_session_base_registry_skip_prepare_omits_prepare_and_probe(tmp_path: Path) -> None:
     """The headless popup path runs prepare inside a kitten panel, so
-    `resolve_for_entry` is called with `skip_prepare=True` to avoid
-    invoking the backend's prepare subprocess inline. The activate
-    probe and workspace_path probe still run."""
+    `resolve_for_entry` is called with `skip_prepare=True`. In that mode both
+    the prepare subprocess AND the workspace_path probe must be skipped — the
+    probe needs the container up, which only happens after the popup-driven
+    prepare. The caller is expected to invoke ``probe_workspace_path``
+    explicitly once the popup returns."""
     import subprocess
 
     from hop.app import SessionBackendRegistry
@@ -1201,11 +1203,19 @@ def test_session_base_registry_skip_prepare_omits_prepare_subprocess(tmp_path: P
     backend = registry.resolve_for_entry(_make_session(tmp_path), backend_name=None, skip_prepare=True)
 
     assert isinstance(backend, CommandBackend)
-    # Activate and workspace_path probes ran; the prepare flock invocation did NOT.
+    # Only the activate probe ran; the prepare flock invocation and
+    # workspace_path probe did NOT.
     assert calls == [
         ("sh", "-c", "test -f docker-compose.dev.yml"),  # activate
-        ("sh", "-c", "compose exec -T devcontainer pwd"),  # workspace_path probe
     ]
+    assert backend.workspace_path is None
+
+    # Now simulate the popup-driven prepare completing and the caller
+    # invoking probe_workspace_path explicitly: the workspace_path probe
+    # runs here, and the returned backend carries the captured path.
+    backend = registry.probe_workspace_path(_make_session(tmp_path), backend)
+    assert isinstance(backend, CommandBackend)
+    assert calls[-1] == ("sh", "-c", "compose exec -T devcontainer pwd")
 
 
 def test_session_base_registry_captures_workspace_path_from_probe(tmp_path: Path) -> None:
