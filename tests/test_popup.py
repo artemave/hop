@@ -150,6 +150,12 @@ def test_run_prepare_launches_plain_kitty_with_popup_app_id(tmp_path: Path) -> N
     assert "panel" not in argv  # not a layer-shell overlay
     assert "--class" in argv
     assert argv[argv.index("--class") + 1] == POPUP_APP_ID
+    # Cap the launch size so the popup is usable even when the sway-IPC
+    # resize loses the race against kitty's window registration. Cells, not
+    # pixels, so it scales with the user's font.
+    overrides = [argv[i + 1] for i, a in enumerate(argv) if a == "-o"]
+    assert any(o.startswith("initial_window_width=") and o.endswith("c") for o in overrides)
+    assert any(o.startswith("initial_window_height=") and o.endswith("c") for o in overrides)
     # Script is the last arg after `-- sh -c`.
     assert argv[-3:-1] == ("sh", "-c")
     script = argv[-1]

@@ -47,6 +47,14 @@ POPUP_APP_ID = "hop:popup"
 # spans across monitor boundaries.
 _POPUP_WIDTH_PPT = 60
 _POPUP_HEIGHT_PPT = 50
+# Fallback initial size baked into kitty's launch flags (cell units, scales
+# with the user's font). The sway-IPC ``resize set ... ppt`` is the primary
+# sizing path, but it races kitty's window registration — if kitty is slow
+# to register (cold start), the resize never fires and the popup is stuck
+# at whatever kitty defaulted to. Capping the launch size keeps the popup
+# usable even when the race is lost.
+_POPUP_INITIAL_WIDTH_CELLS = 120
+_POPUP_INITIAL_HEIGHT_CELLS = 30
 # Window-discovery bound: kitty typically registers its window within ~200 ms;
 # 2 s of polling at 50 ms is comfortable headroom without making a kitty
 # failure-to-start hang hop for long.
@@ -205,6 +213,10 @@ def _kitty_argv(script: str) -> tuple[str, ...]:
         "kitty",
         "--class",
         POPUP_APP_ID,
+        "-o",
+        f"initial_window_width={_POPUP_INITIAL_WIDTH_CELLS}c",
+        "-o",
+        f"initial_window_height={_POPUP_INITIAL_HEIGHT_CELLS}c",
         "--",
         "sh",
         "-c",
