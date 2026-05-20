@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1280" y2="640" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#08080f"/>
+      <stop offset="100%" stop-color="#100a1a"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="270" cy="320" r="320" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#6d28d9" stop-opacity="0.22"/>
+      <stop offset="100%" stop-color="#6d28d9" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="hopgrad" x1="500" y1="0" x2="800" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#22d3ee"/>
+      <stop offset="100%" stop-color="#a855f7"/>
+    </linearGradient>
+    <linearGradient id="iconG" x1="62.5" y1="0" x2="193.5" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#22d3ee"/>
+      <stop offset="100%" stop-color="#a855f7"/>
+    </linearGradient>
+    <linearGradient id="divider" x1="504" y1="0" x2="724" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#22d3ee"/>
+      <stop offset="100%" stop-color="#a855f7"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1280" height="640" fill="url(#bg)"/>
+  <rect width="1280" height="640" fill="url(#glow)"/>
+
+  <g transform="translate(120,160) scale(1.25)">
+    <rect width="256" height="256" rx="56" fill="#0d0d1a"/>
+    <path d="M 62.5 56 L 86.5 56 L 102.5 72 L 102.5 200 L 78.5 200 L 62.5 184 Z" fill="url(#iconG)"/>
+    <path d="M 153.5 56 L 177.5 56 L 193.5 72 L 193.5 200 L 169.5 200 L 153.5 184 Z" fill="url(#iconG)"/>
+    <path d="M 132.5 87 L 155.5 110 L 155.5 122 L 100.5 122 L 100.5 110 L 132.5 110 Z" fill="url(#iconG)"/>
+    <path d="M 123.5 169 L 100.5 146 L 100.5 134 L 155.5 134 L 155.5 146 L 123.5 146 Z" fill="url(#iconG)"/>
+  </g>
+
+  <text x="500" y="302" font-family="DejaVu Sans Mono" font-weight="bold" font-size="158" fill="url(#hopgrad)">hop</text>
+  <text x="506" y="372" font-family="DejaVu Sans" font-size="40" fill="#c7cad8">A project session manager</text>
+  <rect x="506" y="404" width="220" height="4" rx="2" fill="url(#divider)"/>
+  <text x="506" y="452" font-family="DejaVu Sans Mono" font-size="26" fill="#7c8294">sway &#183; kitty &#183; neovim</text>
+</svg>

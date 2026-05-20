@@ -33,6 +33,11 @@ CREATE_FILENAME = "hop-create"
 DAEMON_DOWN_FILENAME = "hop-_daemon-down"
 _DAEMON_DOWN_DESCRIPTION_MAX = 200
 
+# Vicinae renders `@vicinae.icon` paths absolutely; `__file__` resolves
+# next to the shipped `hop/assets/` directory in both editable and wheel
+# installs, so we don't need importlib.resources gymnastics.
+_ICON_PATH = Path(__file__).parent / "assets" / "hop-mark-64.png"
+
 
 class VicinaeSwayAdapter(Protocol):
     def get_focused_workspace(self) -> str: ...
@@ -227,6 +232,7 @@ def _create_script() -> GeneratedScript:
             "# @vicinae.title Hop create session\n"
             "# @vicinae.description Create or attach to a hop session for any directory under home.\n"
             "# @vicinae.packageName \n"
+            f"# @vicinae.icon {_ICON_PATH}\n"
             "# @vicinae.mode silent\n"
             "\n"
             "set -euo pipefail\n"
@@ -285,6 +291,7 @@ def _render(*, title: str, description: str, package_name: str, project_root: Pa
         f"# @vicinae.title {title}\n"
         f"# @vicinae.description {description}\n"
         f"# @vicinae.packageName {package_name}\n"
+        f"# @vicinae.icon {_ICON_PATH}\n"
         "# @vicinae.mode silent\n"
         "\n"
         "set -euo pipefail\n"
@@ -300,6 +307,7 @@ def _render_no_cd(*, title: str, description: str, package_name: str, body: str)
         f"# @vicinae.title {title}\n"
         f"# @vicinae.description {description}\n"
         f"# @vicinae.packageName {package_name}\n"
+        f"# @vicinae.icon {_ICON_PATH}\n"
         "# @vicinae.mode silent\n"
         "\n"
         "set -euo pipefail\n"
@@ -322,6 +330,7 @@ def _render_kill(*, title: str, description: str, package_name: str, project_roo
         f"# @vicinae.title {title}\n"
         f"# @vicinae.description {description}\n"
         f"# @vicinae.packageName {package_name}\n"
+        f"# @vicinae.icon {_ICON_PATH}\n"
         "# @vicinae.mode silent\n"
         "\n"
         "exec setsid -f bash -c '\n"
@@ -358,6 +367,7 @@ def write_daemon_down_script(scripts_dir: Path, *, error: BaseException) -> None
         "# @vicinae.title Hop daemon stopped — restart\n"
         f"# @vicinae.description {description}\n"
         "# @vicinae.packageName \n"
+        f"# @vicinae.icon {_ICON_PATH}\n"
         "# @vicinae.mode silent\n"
         "\n"
         "exec setsid -f hopd </dev/null >/dev/null 2>&1\n"

@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="62.5 56 131 144" width="131" height="144">
+  <defs>
+    <linearGradient id="hop-grad" x1="62.5" y1="0" x2="193.5" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#22d3ee"/>
+      <stop offset="100%" stop-color="#a855f7"/>
+    </linearGradient>
+  </defs>
+  <path d="M 62.5 56 L 86.5 56 L 102.5 72 L 102.5 200 L 78.5 200 L 62.5 184 Z" fill="url(#hop-grad)"/>
+  <path d="M 153.5 56 L 177.5 56 L 193.5 72 L 193.5 200 L 169.5 200 L 153.5 184 Z" fill="url(#hop-grad)"/>
+  <path d="M 132.5 87 L 155.5 110 L 155.5 122 L 100.5 122 L 100.5 110 L 132.5 110 Z" fill="url(#hop-grad)"/>
+  <path d="M 123.5 169 L 100.5 146 L 100.5 134 L 155.5 134 L 155.5 146 L 123.5 146 Z" fill="url(#hop-grad)"/>
+</svg>

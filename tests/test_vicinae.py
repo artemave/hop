@@ -211,6 +211,27 @@ def test_filename_collisions_skip_taken_suffixes() -> None:
     assert filenames == ["hop-window-test_int", "hop-window-test_int-2", "hop-window-test_int-3"]
 
 
+def test_every_generated_script_advertises_the_hop_icon_with_a_resolvable_path() -> None:
+    sessions = (
+        SessionListing(name="rails", workspace="p:rails", project_root=Path("/tmp/rails")),
+        SessionListing(name="other", workspace="p:other", project_root=Path("/tmp/other")),
+    )
+
+    scripts = compute_target_scripts(
+        "p:rails",
+        sessions,
+        windows_for=lambda _: _builtin_windows(),
+    )
+
+    # window-* / kill / switch-* / create all share one icon — vicinae
+    # surfaces them side-by-side, so a coherent visual identity matters.
+    for script in scripts:
+        icon_line = next(line for line in script.content.splitlines() if line.startswith("# @vicinae.icon "))
+        icon_path = Path(icon_line.removeprefix("# @vicinae.icon ").strip())
+        assert icon_path.is_absolute(), f"{script.filename} icon path is not absolute: {icon_path}"
+        assert icon_path.is_file(), f"{script.filename} icon path does not resolve: {icon_path}"
+
+
 def test_generated_script_has_directive_header_and_atomic_chmod_markers() -> None:
     sessions = (SessionListing(name="rails", workspace="p:rails", project_root=Path("/tmp/rails")),)
 
@@ -411,6 +432,20 @@ def test_write_daemon_down_script_writes_single_restart_entry(tmp_path: Path) ->
     # The action detaches a fresh hopd so vicinae closing its UI doesn't
     # take the new daemon down with it.
     assert "setsid -f hopd" in content
+
+
+def test_write_daemon_down_script_advertises_the_hop_icon(tmp_path: Path) -> None:
+    """The daemon-down entry is the only hop-* card the user sees when the
+    daemon is dead — it still needs the hop logo so it's identifiable in
+    the vicinae result list rather than reading as some unrelated tool."""
+    from hop.vicinae import DAEMON_DOWN_FILENAME, write_daemon_down_script
+
+    write_daemon_down_script(tmp_path, error=RuntimeError("x"))
+
+    content = (tmp_path / DAEMON_DOWN_FILENAME).read_text()
+    icon_line = next(line for line in content.splitlines() if line.startswith("# @vicinae.icon "))
+    icon_path = Path(icon_line.removeprefix("# @vicinae.icon ").strip())
+    assert icon_path.is_file()
 
 
 def test_write_daemon_down_script_clears_existing_hop_scripts(tmp_path: Path) -> None:
