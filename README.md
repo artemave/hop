@@ -1,5 +1,7 @@
 # hop
 
+<img src="./hop/assets/hop-social-card.png" />
+
 hop is a project session manager. A project is a collection of windows sharing a working directory.
 
 hop is conceptually similar to tmux sessions, except session/window management is delegated to an actual system window manager (and optionally app launcher). That means:
