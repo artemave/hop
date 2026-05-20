@@ -229,6 +229,73 @@ def test_ensure_terminal_bootstraps_session_kitty_when_socket_is_not_listening()
     )
 
 
+def test_bootstrap_runs_backend_prepare_by_default() -> None:
+    """The default ``ensure_terminal`` call (no ``already_prepared``) is the
+    recovery path — kitty died inside an existing session, the caller has not
+    just run ``backend.prepare``, so the bootstrap must do it."""
+    factory = StubKittyFactory(
+        [
+            KittyConnectionError("no such socket"),  # _find_window's ls
+            KittyConnectionError("still not listening"),  # _launch_window's launch send
+            {"ok": True, "data": []},  # poll succeeds
+            {"ok": True},  # set-user-vars
+        ]
+    )
+    prepared: list[ProjectSession] = []
+
+    class RecordingBackend:
+        def wrap(self, command: str, _session: ProjectSession) -> Sequence[str]:
+            return ("sh", "-c", command or "${SHELL:-sh}")
+
+        def prepare(self, session: ProjectSession) -> None:
+            prepared.append(session)
+
+    adapter = KittyRemoteControlAdapter(
+        session_backend_for=lambda _session: RecordingBackend(),  # type: ignore[arg-type]
+        transport_factory=factory,
+        launcher=StubLauncher(),
+        sleep=lambda _: None,
+    )
+
+    adapter.ensure_terminal(build_session(), role="shell")
+
+    assert prepared == [build_session()]
+
+
+def test_bootstrap_skips_backend_prepare_when_already_prepared() -> None:
+    """``enter_project_session`` passes ``already_prepared=True`` because the
+    headless popup (or ``resolve_for_entry``) just ran prepare. Re-running
+    ``compose up -d`` can stall 20+ seconds on an up container; this test
+    pins the short-circuit."""
+    factory = StubKittyFactory(
+        [
+            KittyConnectionError("no such socket"),  # _find_window's ls
+            KittyConnectionError("still not listening"),  # _launch_window's launch send
+            {"ok": True, "data": []},  # poll succeeds
+            {"ok": True},  # set-user-vars
+        ]
+    )
+    prepared: list[ProjectSession] = []
+
+    class RecordingBackend:
+        def wrap(self, command: str, _session: ProjectSession) -> Sequence[str]:
+            return ("sh", "-c", command or "${SHELL:-sh}")
+
+        def prepare(self, session: ProjectSession) -> None:
+            prepared.append(session)
+
+    adapter = KittyRemoteControlAdapter(
+        session_backend_for=lambda _session: RecordingBackend(),  # type: ignore[arg-type]
+        transport_factory=factory,
+        launcher=StubLauncher(),
+        sleep=lambda _: None,
+    )
+
+    adapter.ensure_terminal(build_session(), role="shell", already_prepared=True)
+
+    assert prepared == []
+
+
 def test_ensure_terminal_raises_when_kitty_never_listens() -> None:
     responses: list[object | KittyConnectionError] = [
         KittyConnectionError("no socket"),  # _find_window

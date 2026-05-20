@@ -102,6 +102,7 @@ class StubKittyAdapter:
         alive_session_names: tuple[str, ...] = (),
     ) -> None:
         self.ensured_roles: list[tuple[str, str, Path]] = []
+        self.already_prepared_flags: list[bool] = []
         self.runs: list[tuple[str, str, str, Path, bool]] = []
         self.closed_windows: list[int] = []
         self._last_cmd_output = last_cmd_output
@@ -111,8 +112,9 @@ class StubKittyAdapter:
     def is_alive(self, session: ProjectSession) -> bool:
         return session.session_name in self._alive_session_names
 
-    def ensure_terminal(self, session: ProjectSession, *, role: str) -> None:
+    def ensure_terminal(self, session: ProjectSession, *, role: str, already_prepared: bool = False) -> None:
         self.ensured_roles.append((session.session_name, role, session.project_root))
+        self.already_prepared_flags.append(already_prepared)
 
     def run_in_terminal(
         self,
@@ -402,8 +404,11 @@ def test_execute_command_applies_workspace_layout_from_config_on_first_entry(tmp
     project_root = tmp_path / "demo"
     project_root.mkdir()
 
+    # Shell window must be visible to sway by the end of the sweep — the
+    # layout pass is gated on ``_focus_shell_if_present`` finding it.
+    shell_window = SwayWindow(id=1, workspace_name="p:demo", app_id="hop:shell", window_class=None)
     services = StubHopServices(
-        sway=StubSwayAdapter(focused_workspace="p:other"),
+        sway=StubSwayAdapter(focused_workspace="p:other", windows=(shell_window,)),
         kitty=StubKittyAdapter(),
         neovim=StubNeovimAdapter(),
         browser=StubBrowserAdapter(),

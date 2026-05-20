@@ -51,7 +51,8 @@ class StubKittyAdapter:
     def is_alive(self, session: ProjectSession) -> bool:
         raise AssertionError("is_alive should not be called for hop run")
 
-    def ensure_terminal(self, session: ProjectSession, *, role: str) -> None:
+    def ensure_terminal(self, session: ProjectSession, *, role: str, already_prepared: bool = False) -> None:
+        del already_prepared
         raise AssertionError("ensure_terminal should not be called for hop run")
 
     def run_in_terminal(

@@ -59,6 +59,7 @@ class StubTerminalAdapter:
         kitty_alive: bool = True,
     ) -> None:
         self.ensured_terminals: list[tuple[str, str, Path]] = []
+        self.already_prepared_flags: list[bool] = []
         self._existing_windows = existing_windows
         self._kitty_alive = kitty_alive
 
@@ -66,8 +67,9 @@ class StubTerminalAdapter:
         del session
         return self._kitty_alive
 
-    def ensure_terminal(self, session: ProjectSession, *, role: str) -> None:
+    def ensure_terminal(self, session: ProjectSession, *, role: str, already_prepared: bool = False) -> None:
         self.ensured_terminals.append((session.session_name, role, session.project_root))
+        self.already_prepared_flags.append(already_prepared)
 
     def list_session_windows(self, session: ProjectSession) -> tuple[KittyWindow, ...]:
         return self._existing_windows
@@ -110,6 +112,10 @@ def test_enter_project_session_switches_to_workspace_and_bootstraps_shell(tmp_pa
     assert session.session_name == "src"
     assert sway.switched_workspaces == [f"p:{nested_directory.name}"]
     assert terminals.ensured_terminals == [("src", "shell", nested_directory)]
+    # Caller has already run prepare (resolve_for_entry inline or the headless
+    # popup) — the bootstrap path must not re-run it. Re-running ``compose up
+    # -d`` on an up container can stall 20+ seconds.
+    assert terminals.already_prepared_flags == [True]
 
 
 def test_enter_project_session_ensures_editor_when_one_is_supplied(tmp_path: Path) -> None:
@@ -185,9 +191,9 @@ def test_enter_project_session_launches_terminal_before_editor(tmp_path: Path) -
     call_log: list[str] = []
 
     class OrderedTerminalAdapter(StubTerminalAdapter):
-        def ensure_terminal(self, session: ProjectSession, *, role: str) -> None:
+        def ensure_terminal(self, session: ProjectSession, *, role: str, already_prepared: bool = False) -> None:
             call_log.append("terminal")
-            super().ensure_terminal(session, role=role)
+            super().ensure_terminal(session, role=role, already_prepared=already_prepared)
 
     class OrderedEditorAdapter(StubEditorAdapter):
         def ensure(self, session: ProjectSession, *, keep_focus: bool = True) -> bool:
@@ -361,10 +367,39 @@ def test_enter_project_session_skips_inactive_window(tmp_path: Path) -> None:
     assert terminals.ensured_terminals == [("demo", "shell", project_root)]
 
 
-def test_enter_project_session_sets_workspace_layout_before_launching_windows(tmp_path: Path) -> None:
-    """When `workspace_layout` is configured, hop sends it to sway *before*
-    ensuring any windows so the first window lands in the configured
-    arrangement instead of getting reflowed afterwards."""
+def test_enter_project_session_applies_workspace_layout_after_refocusing_shell(tmp_path: Path) -> None:
+    """``workspace_layout`` is applied *after* ``_focus_shell_if_present`` has
+    refocused the session workspace, not before window launches. Reason: sway
+    reaps empty named workspaces — a slow ``prepare`` can leave ``p:<session>``
+    empty long enough to be destroyed, and the recreated workspace loses any
+    earlier layout. Refocusing the shell first brings us back to a populated
+    ``p:<session>`` so the ``layout <mode>`` command sticks."""
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+
+    shell_window = SwayWindow(id=42, workspace_name="p:demo", app_id="hop:shell", window_class=None)
+    sway = StubSwayAdapter(windows=(shell_window,))
+    terminals = StubTerminalAdapter()
+    editor = StubEditorAdapter()
+
+    enter_project_session(
+        project_root,
+        sway=sway,
+        terminals=terminals,
+        editor=editor,
+        workspace_layout="tabbed",
+    )
+
+    assert sway.focused_window_ids == [42]
+    assert sway.layout_calls == [("p:demo", "tabbed")]
+    assert sway.switched_workspaces == ["p:demo"]
+
+
+def test_enter_project_session_skips_workspace_layout_when_no_shell_on_session_workspace(tmp_path: Path) -> None:
+    """If no shell window has registered on ``p:<session>`` by the end of the
+    activation sweep, ``_focus_shell_if_present`` can't refocus — and applying
+    ``layout`` against whatever workspace the user is currently on would
+    silently corrupt that workspace's layout. Skip in that case."""
     project_root = tmp_path / "demo"
     project_root.mkdir()
 
@@ -380,8 +415,8 @@ def test_enter_project_session_sets_workspace_layout_before_launching_windows(tm
         workspace_layout="tabbed",
     )
 
-    assert sway.layout_calls == [("p:demo", "tabbed")]
-    assert sway.switched_workspaces == ["p:demo"]
+    assert sway.layout_calls == []
+    assert sway.focused_window_ids == []
 
 
 def test_enter_project_session_focuses_shell_window_after_sweep(tmp_path: Path) -> None:

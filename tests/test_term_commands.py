@@ -9,7 +9,8 @@ class StubKittyAdapter:
     def __init__(self) -> None:
         self.ensured: list[tuple[str, str, Path]] = []
 
-    def ensure_terminal(self, session: ProjectSession, *, role: str) -> None:
+    def ensure_terminal(self, session: ProjectSession, *, role: str, already_prepared: bool = False) -> None:
+        del already_prepared
         self.ensured.append((session.session_name, role, session.project_root))
 
 

@@ -43,7 +43,8 @@ class IdempotentKittyAdapter:
         self.focused_windows: list[tuple[str, str]] = []
         self.runs: list[tuple[str, str, str]] = []
 
-    def ensure_terminal(self, session: ProjectSession, *, role: str) -> None:
+    def ensure_terminal(self, session: ProjectSession, *, role: str, already_prepared: bool = False) -> None:
+        del already_prepared
         key = (session.session_name, role)
         if key not in self._windows:
             self._windows.add(key)

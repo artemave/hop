@@ -39,7 +39,7 @@ class SessionSwayAdapter(Protocol):
 
 
 class SessionTerminalAdapter(Protocol):
-    def ensure_terminal(self, session: ProjectSession, *, role: str) -> None: ...
+    def ensure_terminal(self, session: ProjectSession, *, role: str, already_prepared: bool = False) -> None: ...
 
 
 class SpawnTerminalAdapter(SessionTerminalAdapter, Protocol):
@@ -78,11 +78,6 @@ def enter_project_session(
     # user currently is.
     if sway.get_focused_workspace() != session.workspace_name:
         sway.switch_to_workspace(session.workspace_name)
-    if workspace_layout is not None:
-        # Apply before launching any windows so the first one lands in the
-        # configured arrangement (tabbed, stacking, splith, splitv) instead
-        # of getting placed under sway's default layout and then reflowed.
-        sway.set_workspace_layout(session.workspace_name, workspace_layout)
     # Terminal must come first: on first entry the per-session kitty isn't
     # running yet, and only ensure_terminal knows how to bootstrap it (catch
     # KittyConnectionError → spawn kitty listening on the session socket).
@@ -90,7 +85,12 @@ def enter_project_session(
     # ensuring the editor first would fail with "Could not talk to Kitty".
     # `editor` is only passed on first entry to a session — re-entry from
     # another workspace must not resurrect a deliberately-closed editor.
-    terminals.ensure_terminal(session, role=SHELL_TERMINAL_ROLE)
+    # ``already_prepared=True`` short-circuits the redundant ``backend.prepare``
+    # call inside the bootstrap path: the caller (resolve_for_entry inline, or
+    # popup.run_prepare for headless) has already brought the backend up. A
+    # repeat ``compose up -d`` on an up container can stall 20+ seconds doing
+    # nothing useful.
+    terminals.ensure_terminal(session, role=SHELL_TERMINAL_ROLE, already_prepared=True)
     if editor is None:
         # Re-entry path: caller signals "shell only" by omitting the editor
         # adapter. The activation sweep is gated on the same signal.
@@ -112,17 +112,30 @@ def enter_project_session(
                 if browser is not None:
                     browser.ensure_browser(session, url=None)
             else:
-                terminals.ensure_terminal(session, role=window.role)
+                terminals.ensure_terminal(session, role=window.role, already_prepared=True)
     # Each kitty `launch` IPC steals focus by default, so after the
     # activation sweep the focused window is whichever role landed last
     # (typically the editor or a layout window). Refocus the shell so the
     # session lands on a sensible starting point — and in a tabbed
     # workspace, makes the shell the visible tab.
-    _focus_shell_if_present(session, sway=sway)
+    focused_on_session = _focus_shell_if_present(session, sway=sway)
+    if workspace_layout is not None and focused_on_session:
+        # Apply layout *after* the activation sweep, not before: sway reaps
+        # empty named workspaces when focus leaves them, and a slow
+        # ``prepare`` (devcontainer up, popup) can leave ``p:<session>`` empty
+        # for the gap between the popup closing and the role window
+        # registering. If the user has wandered to another workspace by then,
+        # ``p:<session>`` gets destroyed and re-created at sway's default
+        # layout when ``_adopt_role_window_to_workspace`` moves the role
+        # window back. Setting layout here — after ``_focus_shell_if_present``
+        # has refocused us onto ``p:<session>``, which now has the shell —
+        # guarantees the layout sticks. The one-frame reflow as the shell
+        # transitions from default to tabbed/stacking is imperceptible.
+        sway.set_workspace_layout(session.workspace_name, workspace_layout)
     return session
 
 
-def _focus_shell_if_present(session: ProjectSession, *, sway: SessionSwayAdapter) -> None:
+def _focus_shell_if_present(session: ProjectSession, *, sway: SessionSwayAdapter) -> bool:
     shell_app_id = f"hop:{SHELL_ROLE}"
     candidates = [
         window
@@ -131,8 +144,9 @@ def _focus_shell_if_present(session: ProjectSession, *, sway: SessionSwayAdapter
         and window.workspace_name == session.workspace_name
     ]
     if not candidates:
-        return
+        return False
     sway.focus_window(min(candidates, key=lambda window: window.id).id)
+    return True
 
 
 def spawn_session_terminal(

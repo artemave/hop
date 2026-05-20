@@ -82,7 +82,7 @@ class SwayAdapter(Protocol):
 
 
 class KittyAdapter(Protocol):
-    def ensure_terminal(self, session: ProjectSession, *, role: str) -> None: ...
+    def ensure_terminal(self, session: ProjectSession, *, role: str, already_prepared: bool = False) -> None: ...
 
     def run_in_terminal(
         self,

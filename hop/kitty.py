@@ -218,13 +218,13 @@ class KittyRemoteControlAdapter:
         self._sleep = sleep
         self._clock = clock
 
-    def ensure_terminal(self, session: ProjectSession, *, role: str) -> None:
+    def ensure_terminal(self, session: ProjectSession, *, role: str, already_prepared: bool = False) -> None:
         window = self._find_window(session, role=role)
         if window is not None:
             self._send_to(session.session_name, "focus-window", {"match": f"id:{window.id}"})
             return
 
-        self._launch_window(session, role=role, keep_focus=False)
+        self._launch_window(session, role=role, keep_focus=False, already_prepared=already_prepared)
 
     def is_alive(self, session: ProjectSession) -> bool:
         # Truth of "this session's kitty is reachable": probe the per-session
@@ -355,6 +355,7 @@ class KittyRemoteControlAdapter:
         *,
         role: str,
         keep_focus: bool,
+        already_prepared: bool = False,
     ) -> None:
         backend = self._session_backend_for(session)
         pre_snapshot = self._role_window_ids(role)
@@ -373,6 +374,7 @@ class KittyRemoteControlAdapter:
                 session,
                 backend=backend,
                 role=role,
+                already_prepared=already_prepared,
             )
             return
         self._adopt_role_window_to_workspace(session, role, pre_snapshot_ids=pre_snapshot)
@@ -384,8 +386,15 @@ class KittyRemoteControlAdapter:
         *,
         backend: SessionBackend,
         role: str,
+        already_prepared: bool = False,
     ) -> None:
-        backend.prepare(session)
+        # Skip prepare when the caller has just run it (e.g. ``enter_project_session``
+        # after the headless popup or after ``resolve_for_entry``'s inline prepare).
+        # Re-running ``compose up -d`` on an already-up container can eat 20+ seconds
+        # checking image/network/healthchecks, which the user perceives as a stall
+        # between the prepare popup closing and session windows appearing.
+        if not already_prepared:
+            backend.prepare(session)
         pre_snapshot = self._role_window_ids(role)
 
         # Ensure the parent dir for the filesystem socket exists; kitty

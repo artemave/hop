@@ -8,7 +8,7 @@ from hop.sway import SwayWindow
 
 
 class TermKittyAdapter(Protocol):
-    def ensure_terminal(self, session: ProjectSession, *, role: str) -> None: ...
+    def ensure_terminal(self, session: ProjectSession, *, role: str, already_prepared: bool = False) -> None: ...
 
 
 class TermSwayAdapter(Protocol):
