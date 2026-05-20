@@ -16,12 +16,15 @@ fullscreen overlay that persists across workspace changes.
 
 from __future__ import annotations
 
+import os
 import shlex
 import subprocess
 import sys
 import time
+from pathlib import Path
 from typing import Callable, Literal, Protocol, Sequence
 
+from hop import debug
 from hop.backends import SessionBackend, SessionBackendError, backend_lock_path, substitute
 from hop.errors import HopError
 from hop.session import ProjectSession
@@ -182,12 +185,18 @@ class KittyHopPopup:
         ``proc.wait()`` will then surface the exit code.
         """
         assert self._sway is not None
-        deadline = self._clock() + _FLOAT_POLL_TIMEOUT_SECONDS
+        start = self._clock()
+        deadline = start + _FLOAT_POLL_TIMEOUT_SECONDS
+        debug.log(
+            f"popup: float poll begin; workspace={workspace_name!r} "
+            f"seen_before={sorted(seen_before)} timeout={_FLOAT_POLL_TIMEOUT_SECONDS}s"
+        )
         while self._clock() < deadline:
             current = self._popup_window_ids()
             new_ids = current - seen_before
             if new_ids:
                 target = max(new_ids)
+                elapsed = self._clock() - start
                 steps: list[str] = []
                 if workspace_name is not None:
                     steps.append(f"move container to workspace {workspace_name}")
@@ -198,9 +207,20 @@ class KittyHopPopup:
                         "move position center",
                     ]
                 )
-                self._sway.run_command(f"[con_id={target}] " + ", ".join(steps))
+                command = f"[con_id={target}] " + ", ".join(steps)
+                debug.log(
+                    f"popup: float poll found con_id={target} after {elapsed:.3f}s; "
+                    f"all_new_ids={sorted(new_ids)} issuing: {command}"
+                )
+                self._sway.run_command(command)
+                debug.log(f"popup: sway accepted IPC chain for con_id={target}")
                 return
             self._sleep(_FLOAT_POLL_INTERVAL_SECONDS)
+        elapsed = self._clock() - start
+        debug.log(
+            f"popup: float poll TIMED OUT after {elapsed:.3f}s "
+            "(no new popup window registered with sway); popup stays at kitty's launch size"
+        )
 
 
 def _kitty_argv(script: str) -> tuple[str, ...]:
@@ -209,6 +229,11 @@ def _kitty_argv(script: str) -> tuple[str, ...]:
     # user can navigate away from (workspace switch hides it). The class
     # is the app_id sway sees; the floating + center commands are issued
     # via sway IPC after the window registers.
+    #
+    # ``bash`` (not ``sh``) so the lifecycle script can use process
+    # substitution (``> >(tee …)``) to stream output to both the popup
+    # terminal and an on-disk log file — POSIX sh has no portable way to
+    # do that.
     return (
         "kitty",
         "--class",
@@ -218,10 +243,24 @@ def _kitty_argv(script: str) -> tuple[str, ...]:
         "-o",
         f"initial_window_height={_POPUP_INITIAL_HEIGHT_CELLS}c",
         "--",
-        "sh",
+        "bash",
         "-c",
         script,
     )
+
+
+def popup_log_path(session: ProjectSession, kind: str) -> Path:
+    """Where lifecycle popups stream their output.
+
+    One file per (session, kind), overwritten on each invocation — so
+    ``cat $(xdg-runtime-dir)/hop/popup-<session>-prepare.log`` always shows
+    the most recent prepare run. Lets the user inspect what the prepare
+    script actually printed without having to keep the popup open.
+    """
+
+    base_env = os.environ.get("XDG_RUNTIME_DIR")
+    base = Path(base_env) if base_env else Path("/tmp")
+    return base / "hop" / f"popup-{session.session_name}-{kind}.log"
 
 
 def _lifecycle_script(
@@ -246,8 +285,15 @@ def _lifecycle_script(
     verb = "Preparing" if kind == "prepare" else "Tearing down"
     noun = kind
     lock_path = str(backend_lock_path(session))
+    log_path = popup_log_path(session, kind)
+    # `tee` (no `-a`) truncates each run so the file always holds the most
+    # recent invocation's output. The directory is created via the parent
+    # shell's `mkdir -p` ahead of the `exec` so the redirect can't fail on a
+    # missing parent.
     lines: list[str] = [
         "set -u",
+        f"mkdir -p {shlex.quote(str(log_path.parent))}",
+        f"exec > >(tee {shlex.quote(str(log_path))}) 2>&1",
         f"cd {shlex.quote(str(session.project_root))}",
         f"printf '%s\\n' {shlex.quote(f'{verb} {session.session_name}')}",
     ]

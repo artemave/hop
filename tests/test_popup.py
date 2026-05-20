@@ -157,7 +157,9 @@ def test_run_prepare_launches_plain_kitty_with_popup_app_id(tmp_path: Path) -> N
     assert any(o.startswith("initial_window_width=") and o.endswith("c") for o in overrides)
     assert any(o.startswith("initial_window_height=") and o.endswith("c") for o in overrides)
     # Script is the last arg after `-- sh -c`.
-    assert argv[-3:-1] == ("sh", "-c")
+    # `bash` (not `sh`) so the lifecycle script can use process substitution
+    # to tee output to a per-session log file.
+    assert argv[-3:-1] == ("bash", "-c")
     script = argv[-1]
     assert f"cd {session.project_root}" in script
     assert f"Preparing {session.session_name}" in script
@@ -391,7 +393,7 @@ def test_lifecycle_script_preserves_failure_status_through_held_shell(tmp_path: 
     script = _lifecycle_script(session, ("false",), kind="prepare")
 
     result = subprocess.run(
-        ["sh", "-c", script],
+        ["bash", "-c", script],
         input="",  # EOF immediately — simulates Ctrl-D on the held shell
         capture_output=True,
         text=True,
@@ -414,7 +416,7 @@ def test_lifecycle_script_success_does_not_hold_shell(tmp_path: Path) -> None:
     script = _lifecycle_script(session, ("true",), kind="prepare")
 
     result = subprocess.run(
-        ["sh", "-c", script],
+        ["bash", "-c", script],
         input="",
         capture_output=True,
         text=True,
@@ -425,6 +427,44 @@ def test_lifecycle_script_success_does_not_hold_shell(tmp_path: Path) -> None:
     # Failure-path banner must NOT appear when prepare succeeded.
     assert "failed" not in result.stdout
     assert "Press Ctrl-D" not in result.stdout
+
+
+def test_lifecycle_script_writes_output_to_per_session_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Running the lifecycle script produces a log file under
+    ``$XDG_RUNTIME_DIR/hop/`` containing the user-visible output — so prepare
+    failures can be diagnosed after the transient popup has closed."""
+    import subprocess
+
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    session = _make_session(tmp_path)
+    script = _lifecycle_script(session, ("printf 'hello-from-prepare\\n'",), kind="prepare")
+
+    subprocess.run(["bash", "-c", script], input="", capture_output=True, text=True, check=True)
+
+    log_file = tmp_path / "hop" / f"popup-{session.session_name}-prepare.log"
+    assert log_file.exists()
+    contents = log_file.read_text()
+    assert f"Preparing {session.session_name}" in contents
+    assert "hello-from-prepare" in contents
+
+
+def test_lifecycle_script_log_overwrites_on_each_invocation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The log file is truncated on each popup run (``tee`` without ``-a``) so
+    stale output from a prior invocation never masks the current one."""
+    import subprocess
+
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    session = _make_session(tmp_path)
+
+    first = _lifecycle_script(session, ("printf 'FIRST\\n'",), kind="prepare")
+    subprocess.run(["bash", "-c", first], input="", capture_output=True, text=True, check=True)
+
+    second = _lifecycle_script(session, ("printf 'SECOND\\n'",), kind="prepare")
+    subprocess.run(["bash", "-c", second], input="", capture_output=True, text=True, check=True)
+
+    contents = (tmp_path / "hop" / f"popup-{session.session_name}-prepare.log").read_text()
+    assert "FIRST" not in contents
+    assert "SECOND" in contents
 
 
 def test_lifecycle_script_teardown_shape(tmp_path: Path) -> None:
@@ -451,12 +491,15 @@ def test_lifecycle_script_quotes_shell_metacharacters(tmp_path: Path) -> None:
 
     # Slice out everything up to (and including) the announcement printfs —
     # before `flock` actually runs the user command. Running the full script
-    # would invoke `flock` and the user's prepare command for real.
+    # would invoke `flock` and the user's prepare command for real. Drop `cd`
+    # (would change the test process's dir) and the `mkdir -p`/`exec > >(tee
+    # …)` log-redirect prelude (would create a stray log file in this test).
     announcement = script.split("flock -o", 1)[0]
-    # cd would otherwise leave the test in a different dir; drop it.
-    runnable = "\n".join(line for line in announcement.splitlines() if not line.startswith("cd "))
+    runnable = "\n".join(
+        line for line in announcement.splitlines() if not line.startswith(("cd ", "mkdir ", "exec > >(tee"))
+    )
 
-    result = subprocess.run(["sh", "-c", runnable], capture_output=True, text=True, check=True)
+    result = subprocess.run(["bash", "-c", runnable], capture_output=True, text=True, check=True)
 
     # The user-visible announcement contains the verbatim command despite
     # the embedded `'`, `$(...)`, `&&`.
