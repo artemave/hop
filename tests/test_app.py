@@ -145,18 +145,13 @@ class StubKittyAdapter:
 
 
 class StubNeovimAdapter:
-    def __init__(self, *, editor_was_closed: bool = False) -> None:
+    def __init__(self) -> None:
         self.ensured_sessions: list[tuple[str, Path]] = []
         self.focused_sessions: list[tuple[str, Path]] = []
         self.opened_targets: list[tuple[str, str, Path]] = []
-        # When True, the next ensure() simulates "editor was missing, just
-        # launched a new one" by returning True. Otherwise reports "editor
-        # already running" with False.
-        self._editor_was_closed = editor_was_closed
 
-    def ensure(self, session: ProjectSession, *, keep_focus: bool = True) -> bool:
+    def ensure(self, session: ProjectSession, *, keep_focus: bool = True) -> None:
         self.ensured_sessions.append((session.session_name, session.project_root))
-        return self._editor_was_closed
 
     def focus(self, session: ProjectSession) -> None:
         self.focused_sessions.append((session.session_name, session.project_root))
@@ -360,10 +355,10 @@ def test_execute_command_spawns_extra_shell_when_focused_on_session_workspace(tm
 
     # Sway reports we're already focused on this session's workspace, so bare
     # `hop` should spawn another shell rather than re-enter. The editor is
-    # also ensured so a previously-closed editor is resurrected on the next
-    # `hop` invocation. Kitty is alive — the dead-kitty branch in
-    # spawn_session_terminal does not fire and no extra `shell` ensure is
-    # added before `shell-2`.
+    # *not* implicitly resurrected — a closed editor stays closed until the
+    # user explicitly runs `hop edit` (or picks the vicinae `Hop editor`
+    # entry). Kitty is alive — the dead-kitty branch in spawn_session_terminal
+    # does not fire and no extra `shell` ensure is added before `shell-2`.
     services = build_services(focused_workspace="p:demo", alive_session_names=("demo",))
 
     assert (
@@ -376,7 +371,7 @@ def test_execute_command_spawns_extra_shell_when_focused_on_session_workspace(tm
     )
     assert services.sway.switched_workspaces == []
     assert services.kitty.ensured_roles == [("demo", "shell-2", project_root.resolve())]
-    assert services.neovim.ensured_sessions == [("demo", project_root.resolve())]
+    assert services.neovim.ensured_sessions == []
 
 
 def test_execute_command_first_entry_brings_up_both_editor_and_shell(tmp_path: Path) -> None:

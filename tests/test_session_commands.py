@@ -76,19 +76,13 @@ class StubTerminalAdapter:
 
 
 class StubEditorAdapter:
-    def __init__(self, *, editor_was_closed: bool = False) -> None:
+    def __init__(self) -> None:
         self.ensured: list[str] = []
         self.keep_focus_calls: list[bool] = []
-        # Whether ensure() should report "I just launched a new editor".
-        # spawn_session_terminal short-circuits when this is True so the
-        # user gets exactly one window back — the editor — instead of
-        # editor + a new shell.
-        self._editor_was_closed = editor_was_closed
 
-    def ensure(self, session: ProjectSession, *, keep_focus: bool = True) -> bool:
+    def ensure(self, session: ProjectSession, *, keep_focus: bool = True) -> None:
         self.ensured.append(session.session_name)
         self.keep_focus_calls.append(keep_focus)
-        return self._editor_was_closed
 
 
 class StubBrowserAdapter:
@@ -196,9 +190,9 @@ def test_enter_project_session_launches_terminal_before_editor(tmp_path: Path) -
             super().ensure_terminal(session, role=role, already_prepared=already_prepared)
 
     class OrderedEditorAdapter(StubEditorAdapter):
-        def ensure(self, session: ProjectSession, *, keep_focus: bool = True) -> bool:
+        def ensure(self, session: ProjectSession, *, keep_focus: bool = True) -> None:
             call_log.append("editor")
-            return super().ensure(session, keep_focus=keep_focus)
+            super().ensure(session, keep_focus=keep_focus)
 
     enter_project_session(
         project_root,
@@ -550,9 +544,8 @@ def test_spawn_session_terminal_picks_first_unused_shell_role(tmp_path: Path) ->
     project_root = tmp_path / "demo"
     project_root.mkdir()
     terminals = StubTerminalAdapter(existing_windows=(_make_window(role="shell"),))
-    editor = StubEditorAdapter()
 
-    session = spawn_session_terminal(project_root, terminals=terminals, editor=editor)
+    session = spawn_session_terminal(project_root, terminals=terminals)
 
     assert session.session_name == "demo"
     assert terminals.ensured_terminals == [("demo", "shell-2", project_root)]
@@ -568,9 +561,8 @@ def test_spawn_session_terminal_skips_used_numbered_shells(tmp_path: Path) -> No
             _make_window(role="shell-3"),
         ),
     )
-    editor = StubEditorAdapter()
 
-    spawn_session_terminal(project_root, terminals=terminals, editor=editor)
+    spawn_session_terminal(project_root, terminals=terminals)
 
     assert terminals.ensured_terminals == [("demo", "shell-4", project_root)]
 
@@ -581,66 +573,28 @@ def test_spawn_session_terminal_does_not_switch_workspace(tmp_path: Path) -> Non
     project_root = tmp_path / "demo"
     project_root.mkdir()
     terminals = StubTerminalAdapter()
-    editor = StubEditorAdapter()
 
-    spawn_session_terminal(project_root, terminals=terminals, editor=editor)
+    spawn_session_terminal(project_root, terminals=terminals)
 
     assert terminals.ensured_terminals == [("demo", "shell-2", project_root)]
 
 
-def test_spawn_session_terminal_resurrects_a_closed_editor_without_extra_shell(
-    tmp_path: Path,
-) -> None:
-    """When the editor was closed, `hop` should bring back exactly one
-    window — the editor — not editor + another shell. Spawning both at
-    once would clutter the workspace whenever the user's intent was just
-    to recover the editor."""
-    project_root = tmp_path / "demo"
-    project_root.mkdir()
-    terminals = StubTerminalAdapter()
-    editor = StubEditorAdapter(editor_was_closed=True)
-
-    spawn_session_terminal(project_root, terminals=terminals, editor=editor)
-
-    assert editor.ensured == ["demo"]
-    assert terminals.ensured_terminals == []
-
-
-def test_spawn_session_terminal_spawns_shell_when_editor_already_open(tmp_path: Path) -> None:
-    """When the editor is already up, `hop` falls through to spawning a
-    numbered shell — the user's other reason for invoking `hop` from
-    inside an existing session."""
-    project_root = tmp_path / "demo"
-    project_root.mkdir()
-    terminals = StubTerminalAdapter(existing_windows=(_make_window(role="shell"),))
-    editor = StubEditorAdapter(editor_was_closed=False)
-
-    spawn_session_terminal(project_root, terminals=terminals, editor=editor)
-
-    assert editor.ensured == ["demo"]
-    assert terminals.ensured_terminals == [("demo", "shell-2", project_root)]
-
-
-def test_spawn_session_terminal_bootstraps_shell_when_kitty_socket_is_dead(
+def test_spawn_session_terminal_bootstraps_canonical_shell_when_kitty_socket_is_dead(
     tmp_path: Path,
 ) -> None:
     """The `p:<session>` workspace can outlive its kitty (e.g. only a
-    browser window remains). `editor.ensure` would otherwise hit the
-    dead socket directly — `spawn_session_terminal` ensures the shell
-    role first so the bootstrap fallback in the terminal adapter
-    relaunches kitty before any editor IPC is sent."""
+    browser window remains). `spawn_session_terminal` revives the kitty
+    via the terminal adapter's bootstrap fallback (which catches
+    `KittyConnectionError` and spawns a fresh kitty listening on the
+    session socket) and stops there — no extra ad-hoc shell, and no
+    implicit editor resurrection."""
     project_root = tmp_path / "demo"
     project_root.mkdir()
     terminals = StubTerminalAdapter(kitty_alive=False)
-    editor = StubEditorAdapter(editor_was_closed=True)
 
-    spawn_session_terminal(project_root, terminals=terminals, editor=editor)
+    spawn_session_terminal(project_root, terminals=terminals)
 
-    # Shell ensured first (revives kitty), then editor.ensure brings the
-    # editor back. No ad-hoc shell is spawned because editor.ensure
-    # returned True.
     assert terminals.ensured_terminals == [("demo", "shell", project_root)]
-    assert editor.ensured == ["demo"]
 
 
 def test_list_sessions_returns_sorted_listings_with_workspace_and_known_project_roots() -> None:

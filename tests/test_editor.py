@@ -161,29 +161,24 @@ def make_adapter(
     )
 
 
-def test_ensure_returns_false_when_editor_already_running() -> None:
-    """ensure() reports whether it had to launch a new editor. With a
-    marked window already present, it must return False so callers
-    (spawn_session_terminal) know they can fall through to spawning a
-    shell rather than treating this as a resurrection."""
+def test_ensure_is_a_noop_when_editor_already_running() -> None:
+    """With a marked editor window already present, ensure() does no work:
+    no focus shift, no kitty IPC. The first-entry bootstrap relies on this
+    so re-entering an already-prepared session is cheap."""
     factory = TransportFactory()
     sway = StubSwayAdapter([build_marked_editor_window(23)])
     adapter = make_adapter(sway=sway, factory=factory)
 
-    was_launched = adapter.ensure(build_session())
+    adapter.ensure(build_session())
 
-    assert was_launched is False
-    # No focus shift on ensure() — that's the whole point vs focus().
     assert sway.focused == []
-    # And no kitty IPC: if we already have a window, we don't ping kitty.
     assert factory.transports == {}
 
 
-def test_ensure_returns_true_when_editor_was_just_launched() -> None:
-    """ensure() returns True when it has to spawn a fresh editor
-    window. spawn_session_terminal short-circuits on True so the user
-    gets exactly one window back — the editor — instead of editor + a
-    new shell."""
+def test_ensure_launches_an_editor_when_none_exists() -> None:
+    """With no editor window, ensure() asks kitty to launch one. ensure()
+    doesn't call sway.focus_window — the bootstrap relies on kitty's
+    keep_focus=True to leave the shell focused."""
     sway = StubSwayAdapter()
 
     def on_launch(_payload: dict[str, object]) -> None:
@@ -199,11 +194,8 @@ def test_ensure_returns_true_when_editor_was_just_launched() -> None:
     factory = TransportFactory(on_launch=on_launch)
     adapter = make_adapter(sway=sway, factory=factory)
 
-    was_launched = adapter.ensure(build_session())
+    adapter.ensure(build_session())
 
-    assert was_launched is True
-    # ensure() doesn't call sway.focus_window — the freshly spawned shell
-    # alongside should keep focus, kitty's keep_focus=True takes care of it.
     assert sway.focused == []
     transport = factory.for_session("demo")
     assert len(transport.commands) == 1

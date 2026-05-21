@@ -83,7 +83,7 @@ class StubKittyAdapter:
 
 
 class StubNeovimAdapter:
-    def ensure(self, session: ProjectSession, *, keep_focus: bool = True) -> bool:
+    def ensure(self, session: ProjectSession, *, keep_focus: bool = True) -> None:
         raise AssertionError("Neovim should not be called in this test")
 
     def focus(self, session: ProjectSession) -> None:

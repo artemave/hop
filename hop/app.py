@@ -107,7 +107,7 @@ class KittyAdapter(Protocol):
 
 
 class NeovimAdapter(Protocol):
-    def ensure(self, session: ProjectSession, *, keep_focus: bool = True) -> bool: ...
+    def ensure(self, session: ProjectSession, *, keep_focus: bool = True) -> None: ...
 
     def focus(self, session: ProjectSession) -> None: ...
 
@@ -320,12 +320,11 @@ def execute_command(
             if services.sway.get_focused_workspace() == session.workspace_name:
                 # Spawning an additional terminal in an already-live session:
                 # the backend is fixed at session creation; --backend is ignored.
-                # An editor is ensured alongside so a closed editor comes back
-                # on the next `hop`.
+                # A closed editor stays closed — recover it explicitly via
+                # `hop edit` (or the vicinae `Hop editor` entry).
                 spawn_session_terminal(
                     current_directory,
                     terminals=services.kitty,
-                    editor=services.neovim,
                 )
             else:
                 # First entry creates both shell and editor; re-entry from

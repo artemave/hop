@@ -49,7 +49,7 @@ class SpawnTerminalAdapter(SessionTerminalAdapter, Protocol):
 
 
 class SessionEditorAdapter(Protocol):
-    def ensure(self, session: ProjectSession, *, keep_focus: bool = True) -> bool: ...
+    def ensure(self, session: ProjectSession, *, keep_focus: bool = True) -> None: ...
 
 
 class SessionBrowserAutostartAdapter(Protocol):
@@ -153,24 +153,19 @@ def spawn_session_terminal(
     cwd: Path | str,
     *,
     terminals: SpawnTerminalAdapter,
-    editor: SessionEditorAdapter,
 ) -> ProjectSession:
     session = resolve_project_session(cwd)
-    # `hop` from inside a session does at most one thing: if the editor
-    # has been closed, resurrect it; otherwise spawn a numbered shell. The
-    # user expectation is "one keystroke, one new window" — bringing back
-    # the editor and *also* opening another shell would clutter the
-    # workspace whenever the user's intent was just to recover the editor.
+    # `hop` from inside a session always spawns a shell — the canonical
+    # `shell` role when the session's kitty has died and we're bootstrapping
+    # a fresh one, otherwise the next free `shell-<N>`. Re-creating a
+    # closed editor is the user's explicit choice via `hop edit` (or the
+    # vicinae `Hop editor` entry, which calls `hop edit`).
     if not terminals.is_alive(session):
         # The session's kitty has died but the workspace is still alive
-        # (e.g. only a browser window remains). The editor adapter talks
-        # to the kitty socket directly with no bootstrap fallback, so a
-        # bare editor.ensure here would surface KittyConnectionError to
-        # the user. Bootstrap a fresh kitty + shell first via the
-        # terminal adapter (which does have the fallback), then continue
-        # the normal resurrect-editor-or-spawn-shell flow.
+        # (e.g. only a browser window remains). Bootstrap a fresh kitty +
+        # canonical shell via the terminal adapter (which has the
+        # KittyConnectionError fallback) and stop there.
         terminals.ensure_terminal(session, role=SHELL_TERMINAL_ROLE)
-    if editor.ensure(session):
         return session
     existing_roles = {window.role for window in terminals.list_session_windows(session) if window.role}
     role = _next_adhoc_shell_role(existing_roles)
