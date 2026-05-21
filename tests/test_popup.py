@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Sequence
 
 import pytest
 
@@ -78,25 +78,34 @@ class _RecordingSway:
         self.commands.append(command)
 
 
-def _popup_window(con_id: int) -> SwayWindow:
-    return SwayWindow(id=con_id, workspace_name="p:demo", app_id=POPUP_APP_ID, window_class=None)
+class _OrderedLauncher:
+    """Like ``_RecordingLauncher`` but appends to a shared event log so a test
+    can assert the ``for_window`` rule was installed *before* kitty launched —
+    sway only honors ``for_window`` rules that are in place when the window
+    registers, so the ordering is load-bearing."""
 
-
-class _LauncherWithSpawnHook:
-    """Like `_RecordingLauncher` but invokes `on_spawn` *before* returning
-    the fake Popen — used to simulate kitty registering its sway window
-    between Popen and wait."""
-
-    def __init__(self, *, exit_code: int = 0, on_spawn: Callable[[], None] | None = None) -> None:
+    def __init__(self, *, exit_code: int, events: list[tuple[str, object]]) -> None:
         self.exit_code = exit_code
         self.calls: list[tuple[str, ...]] = []
-        self._on_spawn = on_spawn
+        self._events = events
 
     def __call__(self, argv: Sequence[str]) -> _FakePopen:
         self.calls.append(tuple(argv))
-        if self._on_spawn is not None:
-            self._on_spawn()
+        self._events.append(("launch", tuple(argv)))
         return _FakePopen(self.exit_code)
+
+
+class _OrderedSway(_RecordingSway):
+    """``_RecordingSway`` + shared event log so tests can pin command ordering
+    relative to ``_OrderedLauncher``."""
+
+    def __init__(self, *, events: list[tuple[str, object]]) -> None:
+        super().__init__()
+        self._events = events
+
+    def run_command(self, command: str) -> None:
+        super().run_command(command)
+        self._events.append(("sway", command))
 
 
 def test_kitty_hop_popup_is_interactive_keys_on_injected_stderr_isatty() -> None:
@@ -143,22 +152,16 @@ def test_run_prepare_launches_plain_kitty_with_popup_app_id(tmp_path: Path) -> N
     assert len(launcher.calls) == 1
     argv = launcher.calls[0]
     # Plain `kitty` (NOT `kitten panel`) so the window is a regular
-    # xdg-shell toplevel that sway can place on a specific workspace; the
-    # popup floats via sway IPC issued after the window registers (see the
-    # sway-side test). `--class` sets the Wayland app_id.
+    # xdg-shell toplevel; sway floats and centers it via a `for_window` rule
+    # installed before launch (see the sway-side test). `--class` sets the
+    # Wayland app_id the `for_window` rule matches on.
     assert argv[0] == "kitty"
     assert "panel" not in argv  # not a layer-shell overlay
     assert "--class" in argv
     assert argv[argv.index("--class") + 1] == POPUP_APP_ID
-    # Cap the launch size so the popup is usable even when the sway-IPC
-    # resize loses the race against kitty's window registration. Cells, not
-    # pixels, so it scales with the user's font.
-    overrides = [argv[i + 1] for i, a in enumerate(argv) if a == "-o"]
-    assert any(o.startswith("initial_window_width=") and o.endswith("c") for o in overrides)
-    assert any(o.startswith("initial_window_height=") and o.endswith("c") for o in overrides)
-    # Script is the last arg after `-- sh -c`.
-    # `bash` (not `sh`) so the lifecycle script can use process substitution
-    # to tee output to a per-session log file.
+    # Script is the last arg after `-- bash -c`. ``bash`` (not ``sh``) so the
+    # lifecycle script can use process substitution to tee output to a
+    # per-session log file.
     assert argv[-3:-1] == ("bash", "-c")
     script = argv[-1]
     assert f"cd {session.project_root}" in script
@@ -167,104 +170,61 @@ def test_run_prepare_launches_plain_kitty_with_popup_app_id(tmp_path: Path) -> N
     assert "compose up -d devcontainer" in script
 
 
-def test_run_prepare_moves_floats_resizes_and_centers_the_popup_window_via_sway(tmp_path: Path) -> None:
-    """After kitty spawns the popup window, hop must pin it to the session's
-    workspace *first*, then float / resize / center — so the ``ppt`` resize is
-    measured against the session's output rather than whichever monitor was
-    focused when kitty happened to register the window. Without the move step,
-    focusing away from ``p:<session>`` during ``prepare`` left the popup on
-    the wrong display."""
-    sway = _RecordingSway()
+def test_run_prepare_installs_for_window_rules_before_launching_kitty(tmp_path: Path) -> None:
+    """The float / resize / center happens via sway ``for_window`` rules
+    issued *before* kitty launches. Sway evaluates ``for_window`` as the
+    window registers, so the float must already be in place at registration
+    time — installing it afterwards (the old polling approach) raced kitty's
+    cold-start and left the popup tiled at full workspace size when the
+    user's ``workspace_layout`` was ``tabbed``.
 
-    def appear() -> None:
-        # Simulate kitty registering its window with sway between Popen and
-        # the first poll iteration.
-        sway.windows = (_popup_window(con_id=77),)
-
-    launcher = _LauncherWithSpawnHook(exit_code=0, on_spawn=appear)
-    popup = KittyHopPopup(sway=sway, launcher=launcher, sleep=lambda _s: None)
-    session = _make_session(tmp_path)
-
-    popup.run_prepare(session, _devcontainer_backend())
-
-    assert len(sway.commands) == 1
-    cmd = sway.commands[0]
-    assert cmd.startswith("[con_id=77] ")
-    # Order is load-bearing: workspace move must precede the resize so the
-    # percentage-based resize uses the session's output dimensions.
-    move_idx = cmd.index(f"move container to workspace {session.workspace_name}")
-    resize_idx = cmd.index("resize set")
-    floating_idx = cmd.index("floating enable")
-    assert move_idx < floating_idx < resize_idx
-    assert "ppt" in cmd  # percentage of the workspace's output, not raw px
-    assert cmd.endswith("move position center")
-
-
-def test_show_error_floats_without_workspace_pin(tmp_path: Path) -> None:
-    """``show_error`` has no session in scope — the popup floats on whichever
-    workspace it registered on, no move-to-workspace step."""
-    del tmp_path  # unused
-    sway = _RecordingSway()
-
-    def appear() -> None:
-        sway.windows = (_popup_window(con_id=99),)
-
-    launcher = _LauncherWithSpawnHook(exit_code=0, on_spawn=appear)
-    popup = KittyHopPopup(sway=sway, launcher=launcher, sleep=lambda _s: None)
-
-    popup.show_error(HopError("boom"))
-
-    assert len(sway.commands) == 1
-    cmd = sway.commands[0]
-    assert "move container to workspace" not in cmd
-    assert "floating enable" in cmd
-    assert cmd.endswith("move position center")
-
-
-def test_run_prepare_ignores_pre_existing_popup_windows(tmp_path: Path) -> None:
-    """A stale popup window left over from an earlier invocation must not be
-    re-floated; only the window that appears between Popen and the poll."""
-    stale = _popup_window(con_id=11)
-    sway = _RecordingSway(windows=(stale,))
-
-    def appear() -> None:
-        sway.windows = (stale, _popup_window(con_id=99))
-
-    launcher = _LauncherWithSpawnHook(exit_code=0, on_spawn=appear)
-    popup = KittyHopPopup(sway=sway, launcher=launcher, sleep=lambda _s: None)
+    Three rules, not one comma-chained rule: sway's parser binds only the
+    first command to the ``for_window`` rule and runs the rest immediately
+    against the currently focused container — which errors for ``move
+    position center`` because the focused container isn't floating."""
+    events: list[tuple[str, object]] = []
+    sway = _OrderedSway(events=events)
+    launcher = _OrderedLauncher(exit_code=0, events=events)
+    popup = KittyHopPopup(sway=sway, launcher=launcher)
 
     popup.run_prepare(_make_session(tmp_path), _devcontainer_backend())
 
-    assert len(sway.commands) == 1
-    assert sway.commands[0].startswith("[con_id=99] ")
+    criteria = f'[app_id="{POPUP_APP_ID}"]'
+    assert sway.commands == [
+        f"for_window {criteria} floating enable",
+        f"for_window {criteria} resize set 60 ppt 50 ppt",
+        f"for_window {criteria} move position center",
+    ]
+    # Ordering: all rules must be installed before kitty launches.
+    assert [kind for kind, _payload in events] == ["sway", "sway", "sway", "launch"]
 
 
-def test_run_prepare_skips_floating_when_kitty_never_registers_a_window(tmp_path: Path) -> None:
-    """If kitty fails to bring up a window (binary missing, crash on
-    startup), the polling loop should time out gracefully — the outer
-    `proc.wait()` exit code is the failure signal."""
-    sway = _RecordingSway()
-    # Launcher returns a fake Popen whose wait() reports failure; the spawn
-    # hook is omitted so `sway.windows` stays empty for the whole poll.
-    launcher = _LauncherWithSpawnHook(exit_code=1)
+def test_show_error_installs_same_for_window_rules(tmp_path: Path) -> None:
+    """``show_error`` shares the same ``hop:popup`` app_id, so the same
+    ``for_window`` rules cover it — no workspace pinning is needed (errors
+    have no session in scope and float on the user's current workspace)."""
+    del tmp_path  # unused
+    events: list[tuple[str, object]] = []
+    sway = _OrderedSway(events=events)
+    launcher = _OrderedLauncher(exit_code=0, events=events)
+    popup = KittyHopPopup(sway=sway, launcher=launcher)
 
-    elapsed = [0.0]
+    popup.show_error(HopError("boom"))
 
-    def fake_clock() -> float:
-        return elapsed[0]
+    assert len(sway.commands) == 3
+    assert all(cmd.startswith(f'for_window [app_id="{POPUP_APP_ID}"] ') for cmd in sway.commands)
+    assert [kind for kind, _payload in events] == ["sway", "sway", "sway", "launch"]
 
-    def fake_sleep(seconds: float) -> None:
-        elapsed[0] += seconds
 
-    popup = KittyHopPopup(sway=sway, launcher=launcher, clock=fake_clock, sleep=fake_sleep)
+def test_run_prepare_works_without_sway_adapter(tmp_path: Path) -> None:
+    """Tests / non-sway contexts can omit the sway adapter; the popup still
+    launches kitty and waits, just without the ``for_window`` install."""
+    launcher = _RecordingLauncher(exit_code=0)
+    popup = KittyHopPopup(launcher=launcher)  # sway omitted
 
-    with pytest.raises(SessionBackendError):
-        popup.run_prepare(_make_session(tmp_path), _devcontainer_backend())
+    popup.run_prepare(_make_session(tmp_path), _devcontainer_backend())
 
-    # No sway commands issued (no window to target), but the poll did exit
-    # promptly via the timeout — the elapsed clock is bounded.
-    assert sway.commands == []
-    assert elapsed[0] >= 2.0  # _FLOAT_POLL_TIMEOUT_SECONDS
+    assert len(launcher.calls) == 1
 
 
 def test_run_teardown_announces_tearing_down_in_script(tmp_path: Path) -> None:

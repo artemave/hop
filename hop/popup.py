@@ -3,10 +3,10 @@
 When `hop` runs without a controlling TTY (vicinae's detached `setsid -f hop`,
 sway keybindings, launcher scripts), `default_runner` captures subprocess
 stderr and `cli.main`'s `HopError` catch prints to a stderr nobody is watching.
-This module replaces the missing UI with a regular kitty OS window — marked
-floating + centered via sway IPC after it appears — that streams `prepare` /
-`teardown` output and surfaces unhandled errors so the user can see what
-happened.
+This module replaces the missing UI with a regular kitty OS window — floated
+and centered by a sway ``for_window`` rule installed at the moment of window
+registration — that streams `prepare` / `teardown` output and surfaces
+unhandled errors so the user can see what happened.
 
 A regular floating window (not a `kitten panel` layer-shell overlay) is the
 chosen surface so the user can navigate away from it (switching to another
@@ -20,7 +20,6 @@ import os
 import shlex
 import subprocess
 import sys
-import time
 from pathlib import Path
 from typing import Callable, Literal, Protocol, Sequence
 
@@ -45,24 +44,40 @@ StderrIsatty = Callable[[], bool]
 POPUP_APP_ID = "hop:popup"
 # Size of the floating popup, as a percentage of the workspace's output (sway's
 # `ppt` unit). 60% × 50% gives a comfortable popup that fits inside a single
-# monitor on common 16:9 / 16:10 layouts — kitty's default `initial_window_*`
-# can otherwise be set large enough that an unconstrained floating window
-# spans across monitor boundaries.
+# monitor on common 16:9 / 16:10 layouts.
 _POPUP_WIDTH_PPT = 60
 _POPUP_HEIGHT_PPT = 50
-# Fallback initial size baked into kitty's launch flags (cell units, scales
-# with the user's font). The sway-IPC ``resize set ... ppt`` is the primary
-# sizing path, but it races kitty's window registration — if kitty is slow
-# to register (cold start), the resize never fires and the popup is stuck
-# at whatever kitty defaulted to. Capping the launch size keeps the popup
-# usable even when the race is lost.
-_POPUP_INITIAL_WIDTH_CELLS = 120
-_POPUP_INITIAL_HEIGHT_CELLS = 30
-# Window-discovery bound: kitty typically registers its window within ~200 ms;
-# 2 s of polling at 50 ms is comfortable headroom without making a kitty
-# failure-to-start hang hop for long.
-_FLOAT_POLL_TIMEOUT_SECONDS = 2.0
-_FLOAT_POLL_INTERVAL_SECONDS = 0.05
+
+
+def popup_for_window_commands() -> tuple[str, ...]:
+    """The ``for_window`` rules that float and size every hop popup.
+
+    Issued via sway IPC before each ``kitty`` launch. Sway evaluates
+    ``for_window`` *as the window registers*, which sidesteps the polling
+    race the previous implementation had (kitty cold-start could miss the
+    polling window, leaving the popup tiled at the workspace's full size
+    when the user's ``workspace_layout`` is ``tabbed`` / ``stacking``).
+
+    Three separate rules rather than one comma-chained rule because sway's
+    parser binds only the first command after ``for_window [criteria]`` to
+    the rule; subsequent comma-chained commands are evaluated immediately
+    against the currently focused container, which fails for ``move
+    position center`` ("Only floating containers can be moved to an
+    absolute position").
+
+    Rules accumulate in sway's runtime state — three per ``hop`` invocation
+    until sway exits or reloads — but every rule is identical and runs the
+    same idempotent commands, so a duplicate just costs an extra IPC
+    dispatch when the next popup appears. Sway IPC has no query for
+    installed rules, so de-duplicating across invocations isn't possible.
+    """
+
+    criteria = f'[app_id="{POPUP_APP_ID}"]'
+    return (
+        f"for_window {criteria} floating enable",
+        f"for_window {criteria} resize set {_POPUP_WIDTH_PPT} ppt {_POPUP_HEIGHT_PPT} ppt",
+        f"for_window {criteria} move position center",
+    )
 
 
 class HopPopup(Protocol):
@@ -76,9 +91,9 @@ class HopPopup(Protocol):
 
 
 class PopupSwayAdapter(Protocol):
-    """Sway surface KittyHopPopup needs: enumerate windows (to find the popup's
-    `con_id` after it appears) and issue a raw command (to float and center
-    it). Kept narrow so tests can pass a minimal fake."""
+    """Sway surface KittyHopPopup needs: a single ``run_command`` to install
+    the ``for_window`` rule that floats / sizes / centers the popup as it
+    registers."""
 
     def list_windows(self) -> Sequence[SwayWindow]: ...
 
@@ -92,14 +107,10 @@ class KittyHopPopup:
         sway: PopupSwayAdapter | None = None,
         launcher: PopupLauncher | None = None,
         stderr_isatty: StderrIsatty | None = None,
-        clock: Callable[[], float] = time.monotonic,
-        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self._sway: PopupSwayAdapter | None = sway
         self._launcher: PopupLauncher = launcher or _default_launcher
         self._stderr_isatty: StderrIsatty = stderr_isatty or (lambda: sys.stderr.isatty())
-        self._clock = clock
-        self._sleep = sleep
 
     def is_interactive(self) -> bool:
         return self._stderr_isatty()
@@ -129,106 +140,32 @@ class KittyHopPopup:
         *,
         kind: Literal["prepare", "teardown"],
     ) -> None:
-        exit_code = self._spawn_and_wait(
-            _lifecycle_script(session, steps, kind=kind),
-            workspace_name=session.workspace_name,
-        )
+        exit_code = self._spawn_and_wait(_lifecycle_script(session, steps, kind=kind))
         if exit_code != 0:
             msg = f"session {kind} did not succeed for {session.session_name!r}; see the popup for details"
             raise SessionBackendError(msg, surfaced_by_popup=True)
 
-    def _spawn_and_wait(self, script: str, *, workspace_name: str | None = None) -> int:
-        argv = _kitty_argv(script)
-        # Snapshot existing popup-app-id windows so the polling loop can pick
-        # out *our* new window even when a stale one is still being torn down
-        # by sway (rare but possible if a prior popup raced exit/destroy).
-        seen_before: set[int] = self._popup_window_ids() if self._sway is not None else set()
-        proc = self._launcher(argv)
+    def _spawn_and_wait(self, script: str) -> int:
+        # Install the ``for_window`` rules *before* launching kitty: sway
+        # evaluates them when the popup window registers, so the float +
+        # resize + center happens as part of registration rather than being
+        # raced by polling afterwards.
         if self._sway is not None:
-            self._float_new_popup_window(seen_before, workspace_name=workspace_name)
+            for rule in popup_for_window_commands():
+                debug.log(f"popup: installing for_window rule: {rule}")
+                self._sway.run_command(rule)
+            debug.log("popup: sway accepted for_window rules")
+        proc = self._launcher(_kitty_argv(script))
         return proc.wait()
-
-    def _popup_window_ids(self) -> set[int]:
-        assert self._sway is not None
-        return {w.id for w in self._sway.list_windows() if w.app_id == POPUP_APP_ID}
-
-    def _float_new_popup_window(
-        self,
-        seen_before: set[int],
-        *,
-        workspace_name: str | None,
-    ) -> None:
-        """Poll sway's window tree for the kitty window we just spawned, then
-        issue `move container to workspace p:<session>, floating enable,
-        resize set <w>ppt <h>ppt, move position center` against it.
-
-        The move-to-workspace step is the load-bearing fix for the "popup
-        spills onto a different monitor" symptom: kitty creates the toplevel
-        on whatever workspace happens to be focused at registration time, so
-        if the user has wandered off ``p:<session>`` during ``prepare`` the
-        popup lands on the wrong output and the subsequent ``ppt`` resize is
-        measured against that wrong output. Moving first pins the popup to
-        the session's workspace; the resize+center then applies to the
-        session's output.
-
-        Resizing is needed because kitty's default ``initial_window_*`` can
-        produce a window that spans multiple monitors; ``resize set`` with
-        ``ppt`` scales to the workspace's output. ``move position center``
-        re-centers after the resize.
-
-        ``workspace_name`` may be ``None`` (currently only the ``show_error``
-        path), in which case the popup floats on whichever workspace the
-        kitty window happened to register on.
-
-        Bounded by a short timeout so a kitty that fails to register a window
-        (typically because the binary crashed at startup) doesn't hang hop —
-        ``proc.wait()`` will then surface the exit code.
-        """
-        assert self._sway is not None
-        start = self._clock()
-        deadline = start + _FLOAT_POLL_TIMEOUT_SECONDS
-        debug.log(
-            f"popup: float poll begin; workspace={workspace_name!r} "
-            f"seen_before={sorted(seen_before)} timeout={_FLOAT_POLL_TIMEOUT_SECONDS}s"
-        )
-        while self._clock() < deadline:
-            current = self._popup_window_ids()
-            new_ids = current - seen_before
-            if new_ids:
-                target = max(new_ids)
-                elapsed = self._clock() - start
-                steps: list[str] = []
-                if workspace_name is not None:
-                    steps.append(f"move container to workspace {workspace_name}")
-                steps.extend(
-                    [
-                        "floating enable",
-                        f"resize set {_POPUP_WIDTH_PPT} ppt {_POPUP_HEIGHT_PPT} ppt",
-                        "move position center",
-                    ]
-                )
-                command = f"[con_id={target}] " + ", ".join(steps)
-                debug.log(
-                    f"popup: float poll found con_id={target} after {elapsed:.3f}s; "
-                    f"all_new_ids={sorted(new_ids)} issuing: {command}"
-                )
-                self._sway.run_command(command)
-                debug.log(f"popup: sway accepted IPC chain for con_id={target}")
-                return
-            self._sleep(_FLOAT_POLL_INTERVAL_SECONDS)
-        elapsed = self._clock() - start
-        debug.log(
-            f"popup: float poll TIMED OUT after {elapsed:.3f}s "
-            "(no new popup window registered with sway); popup stays at kitty's launch size"
-        )
 
 
 def _kitty_argv(script: str) -> tuple[str, ...]:
     # Plain `kitty`, not `kitten panel` — we want a regular xdg-shell
     # toplevel that sway can place on the focused workspace and that the
     # user can navigate away from (workspace switch hides it). The class
-    # is the app_id sway sees; the floating + center commands are issued
-    # via sway IPC after the window registers.
+    # is the app_id sway sees; floating / sizing / centering is handled by
+    # the ``for_window`` rule installed before launch (see
+    # ``popup_for_window_command``).
     #
     # ``bash`` (not ``sh``) so the lifecycle script can use process
     # substitution (``> >(tee …)``) to stream output to both the popup
@@ -238,10 +175,6 @@ def _kitty_argv(script: str) -> tuple[str, ...]:
         "kitty",
         "--class",
         POPUP_APP_ID,
-        "-o",
-        f"initial_window_width={_POPUP_INITIAL_WIDTH_CELLS}c",
-        "-o",
-        f"initial_window_height={_POPUP_INITIAL_HEIGHT_CELLS}c",
         "--",
         "bash",
         "-c",
