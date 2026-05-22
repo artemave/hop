@@ -337,31 +337,11 @@ class SharedNeovimEditorAdapter:
         return ("sh", "-c", f"{editor_inline}; {shell_inline}")
 
     def _find_editor_window(self, session: ProjectSession) -> SwayWindow | None:
-        # The session's editor is identified across hop runs by a Sway mark.
-        # On first sighting (or after a hop crash that lost the mark) fall back
-        # to discovering the unmarked editor on this session's workspace, then
-        # re-mark it for fast lookup later — and to survive drift onto other
-        # workspaces.
         mark = _editor_mark(session)
-        windows = list(self._sway.list_windows())
-
-        marked = [window for window in windows if mark in window.marks]
-        if marked:
-            return min(marked, key=lambda candidate: candidate.id)
-
-        candidates = [
-            window
-            for window in windows
-            if (window.app_id == EDITOR_OS_WINDOW_NAME or window.window_class == EDITOR_OS_WINDOW_NAME)
-            and window.workspace_name == session.workspace_name
-            and not any(other_mark.startswith(EDITOR_MARK_PREFIX) for other_mark in window.marks)
-        ]
-        if not candidates:
+        marked = [window for window in self._sway.list_windows() if mark in window.marks]
+        if not marked:
             return None
-
-        window = min(candidates, key=lambda candidate: candidate.id)
-        self._sway.mark_window(window.id, mark)
-        return window
+        return min(marked, key=lambda candidate: candidate.id)
 
     def _adopt_new_editor_window(
         self,

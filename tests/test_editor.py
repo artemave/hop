@@ -249,6 +249,30 @@ def test_focus_launches_editor_when_window_missing() -> None:
     assert sway.focused == [101]
 
 
+def test_focus_adopts_xwayland_editor_via_window_class_after_launch() -> None:
+    """XWayland-launched editors expose `hop:editor` via `window_class` rather
+    than `app_id`. The adoption poll must accept either."""
+    sway = StubSwayAdapter()
+
+    def on_launch(_payload: dict[str, object]) -> None:
+        sway.add_window(
+            SwayWindow(
+                id=101,
+                workspace_name=build_session().workspace_name,
+                app_id=None,
+                window_class="hop:editor",
+            )
+        )
+
+    factory = TransportFactory(on_launch=on_launch)
+    adapter = make_adapter(sway=sway, factory=factory)
+
+    adapter.focus(build_session())
+
+    assert sway.marked == [(101, "_hop_editor:demo")]
+    assert sway.focused == [101]
+
+
 def test_open_target_sends_drop_keystrokes_to_editor_window() -> None:
     factory = TransportFactory(ls_response=make_ls_response(kitty_window_id=77))
     sway = StubSwayAdapter([build_marked_editor_window(31)])

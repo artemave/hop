@@ -124,21 +124,41 @@ def test_focus_picks_lowest_id_when_multiple_marked_editor_windows_exist() -> No
     assert sway.marked == []
 
 
-def test_focus_marks_unmarked_editor_on_first_sighting() -> None:
+def test_focus_picks_marked_editor_over_an_unmarked_sibling() -> None:
+    """An unmarked `hop:editor` window alongside the marked one is ignored —
+    lookup is mark-based, not app_id-based."""
     factory = TransportFactory()
-    sway = StubSwayAdapter([_unmarked_editor(42)])
+    sway = StubSwayAdapter([_unmarked_editor(29), _marked_editor(31)])
     adapter = SharedNeovimEditorAdapter(sway=sway, kitty_io=IpcKittyEditorIO(transport_factory=factory))
 
     adapter.focus(build_session())
 
-    assert sway.marked == [(42, "_hop_editor:demo")]
-    assert sway.focused == [42]
+    assert sway.focused == [31]
+    assert sway.marked == []
+
+
+def test_focus_triggers_launch_when_only_unmarked_editor_is_present() -> None:
+    """An unmarked editor-class window on the session ws is no longer adopted;
+    focus drives a fresh launch instead. The stub launch adds no window, so
+    the adoption poll times out."""
+    factory = TransportFactory()  # on_launch deliberately does not add a window
+    sway = StubSwayAdapter([_unmarked_editor(42)])
+    adapter = SharedNeovimEditorAdapter(
+        sway=sway,
+        kitty_io=IpcKittyEditorIO(transport_factory=factory),
+        ready_timeout_seconds=0.05,
+        ready_poll_interval_seconds=0.01,
+    )
+
+    with pytest.raises(NeovimCommandError, match="Sway did not register"):
+        adapter.focus(build_session())
+
+    assert sway.marked == []
 
 
 def test_focus_skips_unmarked_editor_belonging_to_a_different_session() -> None:
-    """An editor window already marked for another session must not be adopted —
-    even though the launch transport adds no new window, so the launched-then-
-    not-found path raises."""
+    """An editor window marked for another session is ignored. The launch
+    transport adds no new window, so the launch-then-poll path times out."""
     foreign_editor = SwayWindow(
         id=42,
         workspace_name=build_session().workspace_name,
@@ -157,26 +177,6 @@ def test_focus_skips_unmarked_editor_belonging_to_a_different_session() -> None:
 
     with pytest.raises(NeovimCommandError, match="Sway did not register"):
         adapter.focus(build_session())
-
-
-def test_focus_matches_xwayland_editor_via_window_class() -> None:
-    factory = TransportFactory()
-    sway = StubSwayAdapter(
-        [
-            SwayWindow(
-                id=42,
-                workspace_name=build_session().workspace_name,
-                app_id=None,
-                window_class="hop:editor",
-            )
-        ]
-    )
-    adapter = SharedNeovimEditorAdapter(sway=sway, kitty_io=IpcKittyEditorIO(transport_factory=factory))
-
-    adapter.focus(build_session())
-
-    assert sway.marked == [(42, "_hop_editor:demo")]
-    assert sway.focused == [42]
 
 
 def test_open_target_raises_when_no_editor_window_after_launch() -> None:
