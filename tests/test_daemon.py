@@ -57,9 +57,14 @@ class StubSubscribingSway:
         *,
         events: tuple[dict[str, object], ...] = (),
         raise_on_subscribe: Exception | None = None,
+        window_events: tuple[dict[str, object], ...] = (),
+        windows: tuple[Any, ...] = (),
     ) -> None:
         self.events = events
         self.raise_on_subscribe = raise_on_subscribe
+        self.window_events = window_events
+        self.windows = windows
+        self.unmarked: list[tuple[int, str]] = []
 
     def get_focused_workspace(self) -> str:
         return ""
@@ -68,10 +73,20 @@ class StubSubscribingSway:
         del prefix
         return ()
 
+    def list_windows(self) -> tuple[Any, ...]:
+        return self.windows
+
+    def unmark_window(self, window_id: int, mark: str) -> None:
+        self.unmarked.append((window_id, mark))
+
     def subscribe_to_workspace_events(self) -> Iterator[dict[str, object]]:
         if self.raise_on_subscribe is not None:
             raise self.raise_on_subscribe
         for event in self.events:
+            yield event
+
+    def subscribe_to_window_events(self) -> Iterator[dict[str, object]]:
+        for event in self.window_events:
             yield event
 
 
@@ -96,6 +111,102 @@ def test_daemon_runs_initial_regen_and_one_per_event(
     # Stream ends without exception → still non-zero so the user knows
     # to revive the daemon (sway does not auto-respawn it).
     assert exit_code == 1
+
+
+def test_daemon_runs_reconcile_marks_at_startup(
+    monkeypatch: pytest.MonkeyPatch,
+    regen_recorder: list[None],
+    stub_sessions: None,
+) -> None:
+    """Even with no Sway events, hopd reconciles marks once at startup so
+    drift from before the daemon was running is corrected immediately."""
+    calls: list[None] = []
+
+    def fake_reconcile(_sway: Any) -> None:
+        calls.append(None)
+
+    monkeypatch.setattr(daemon, "reconcile_marks", fake_reconcile)
+    monkeypatch.setattr(daemon, "SwayIpcAdapter", lambda: StubSubscribingSway())
+
+    exit_code = daemon.main([])
+
+    assert exit_code == 1
+    # No window events, so the only reconcile is the startup one.
+    assert len(calls) == 1
+
+
+def test_serve_mark_reconciler_runs_reconcile_per_window_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The reconciler serve loop calls ``reconcile_marks`` once per event
+    yielded by ``subscribe_to_window_events`` and returns when the stream
+    ends."""
+    calls: list[None] = []
+
+    def fake_reconcile(_sway: Any) -> None:
+        calls.append(None)
+
+    monkeypatch.setattr(daemon, "reconcile_marks", fake_reconcile)
+    sway = StubSubscribingSway(
+        window_events=(
+            {"change": "move", "container": {"id": 1}},
+            {"change": "close", "container": {"id": 2}},
+        ),
+    )
+
+    daemon._serve_mark_reconciler(sway)  # pyright: ignore[reportPrivateUsage]  # type: ignore[arg-type]
+
+    assert len(calls) == 2
+
+
+def test_serve_mark_reconciler_logs_unhandled_exception(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Exceptions inside the reconciler serve loop are caught and logged
+    rather than vanishing silently."""
+    log_path = tmp_path / "debug.log"
+    from hop import debug as _debug
+
+    _debug.configure(str(log_path))
+
+    class _RaisingSway(StubSubscribingSway):
+        def subscribe_to_window_events(self) -> Iterator[dict[str, object]]:
+            raise RuntimeError("reconciler boom")
+            yield  # pragma: no cover  # makes this a generator
+
+    daemon._serve_mark_reconciler(_RaisingSway())  # pyright: ignore[reportPrivateUsage]  # type: ignore[arg-type]
+
+    contents = log_path.read_text()
+    assert "mark reconciler crashed" in contents
+    assert "reconciler boom" in contents
+
+
+def test_serve_bridge_acceptor_logs_unhandled_exception(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Same shape as the reconciler crash path: bridge.serve_forever
+    raising lands in the debug log."""
+    from hop import bridge
+    from hop import debug as _debug
+
+    log_path = tmp_path / "debug.log"
+    _debug.configure(str(log_path))
+
+    def fake_serve_forever(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("bridge boom")
+
+    monkeypatch.setattr(bridge, "serve_forever", fake_serve_forever)
+
+    daemon._serve_bridge_acceptor(  # pyright: ignore[reportPrivateUsage]
+        tmp_path / "ignored.sock",
+        StubSubscribingSway(),  # type: ignore[arg-type]
+    )
+
+    contents = log_path.read_text()
+    assert "bridge acceptor crashed" in contents
+    assert "bridge boom" in contents
 
 
 def test_daemon_returns_one_when_subscription_drops_with_hop_error(

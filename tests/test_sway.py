@@ -222,11 +222,13 @@ def test_window_commands_use_sway_criteria_by_container_id() -> None:
     sway.focus_window(17)
     sway.move_window_to_workspace(17, "p:demo")
     sway.mark_window(17, "_hop_browser:demo")
+    sway.unmark_window(17, "_hop_browser:demo")
 
     assert transport.requests == [
         (SwayMessageType.RUN_COMMAND, b"[con_id=17] focus"),
         (SwayMessageType.RUN_COMMAND, b'[con_id=17] move container to workspace "p:demo"'),
         (SwayMessageType.RUN_COMMAND, b'[con_id=17] mark --add "_hop_browser:demo"'),
+        (SwayMessageType.RUN_COMMAND, b'[con_id=17] unmark "_hop_browser:demo"'),
     ]
 
 
@@ -283,6 +285,20 @@ def test_subscribe_to_workspace_events_yields_decoded_event_dicts() -> None:
         {"change": "focus", "current": {"name": "scratch"}},
     ]
     assert transport.subscribe_payloads == [b'["workspace"]']
+
+
+def test_subscribe_to_window_events_yields_decoded_event_dicts() -> None:
+    event = json.dumps({"change": "move", "container": {"id": 42}}).encode()
+    transport = StubSwayTransport(
+        subscribe_acks=json.dumps({"success": True}).encode(),
+        subscribe_events=(event,),
+    )
+    sway = SwayIpcAdapter(transport=transport)
+
+    events = list(sway.subscribe_to_window_events())
+
+    assert events == [{"change": "move", "container": {"id": 42}}]
+    assert transport.subscribe_payloads == [b'["window"]']
 
 
 def test_subscribe_raises_when_sway_refuses_subscription() -> None:

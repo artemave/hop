@@ -165,7 +165,7 @@ Each session may have a browser window.
 - browser usage is scoped to the current session
 - `hop` reuses the user's default browser windowing model instead of a dedicated profile
 - the session browser is rediscovered through a session-specific Sway mark rather than by visible title alone
-- if the session browser drifts to another workspace, `hop browser` reattaches it to the session workspace instead of adopting a different browser window
+- raw Sway moves of the browser off `p:<session>` clear that mark — `hopd` reconciles marks against current placement on every Sway `window` event. The window stops being the session's browser, and the next `hop browser` launches a fresh one
 - opening URLs should reuse or create a browser window within the session workspace
 
 ---
@@ -579,7 +579,8 @@ Changing vigun is outside of the scope of hop, but we need to have a contract do
 
 - Neovim is started when needed (e.g. via `hop edit`)
 - the shared editor is driven by writing keystrokes into kitty's pty via `kitty @ send-text`, matched by the `hop_role=editor` user var on the kitty window — no nvim remote-control socket is involved, so backends with a private filesystem (devcontainer, ssh) work without any cross-namespace socket coordination
-- the editor window is rediscovered through its `_hop_editor:<session>` Sway mark (set on first sighting via `app_id == hop:editor` on `p:<session>`) so repeated `hop edit` calls — and kitten dispatches into the editor — focus the same OS window via Sway and switch to its workspace when needed, even if the user dragged the editor onto a different workspace
+- the editor window is rediscovered through its `_hop_editor:<session>` Sway mark, which `hop edit` sets at launch time
+- raw Sway moves of the editor off `p:<session>` clear that mark — `hopd` reconciles marks against current placement on every Sway `window` event. The window stops being the session's editor, and the next `hop edit` launches a fresh one
 - if Neovim is closed (`:qa`), it can be recreated by:
 
 ```bash

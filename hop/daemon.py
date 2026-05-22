@@ -29,6 +29,7 @@ from hop.daemon_lock import (
     write_status,
 )
 from hop.errors import HopError
+from hop.reconciler import reconcile_marks
 from hop.state import SessionState, forget_session, load_sessions
 from hop.sway import SwayIpcAdapter
 from hop.vicinae import default_scripts_dir, regenerate, write_daemon_down_script
@@ -100,20 +101,52 @@ def _start_bridge_acceptor(sway: SwayIpcAdapter) -> None:
     """
 
     socket_path = bridge.default_api_socket_path()
-
-    def serve() -> None:
-        try:
-            bridge.serve_forever(
-                socket_path,
-                sway_source=sway.list_windows,
-                dispatcher=bridge.dispatch_via_subprocess,
-            )
-        except Exception:
-            debug.log(f"hopd: bridge acceptor crashed\n{traceback.format_exc()}")
-
-    thread = threading.Thread(target=serve, name="hopd-bridge", daemon=True)
+    thread = threading.Thread(
+        target=_serve_bridge_acceptor,
+        args=(socket_path, sway),
+        name="hopd-bridge",
+        daemon=True,
+    )
     thread.start()
     debug.log(f"hopd: bridge acceptor listening on {socket_path}")
+
+
+def _serve_bridge_acceptor(socket_path: Path, sway: SwayIpcAdapter) -> None:
+    try:
+        bridge.serve_forever(
+            socket_path,
+            sway_source=sway.list_windows,
+            dispatcher=bridge.dispatch_via_subprocess,
+        )
+    except Exception:
+        debug.log(f"hopd: bridge acceptor crashed\n{traceback.format_exc()}")
+
+
+def _start_mark_reconciler(sway: SwayIpcAdapter) -> None:
+    """Drive ``reconcile_marks`` from a Sway ``window``-event subscription.
+
+    Runs on a daemon thread so it dies with the process. Each event triggers
+    one reconcile pass — sway's window event is what surfaces user moves
+    (raw Sway keybinding sends the editor off ``p:<session>``), so a sweep
+    per event keeps marks aligned with placement without explicit filtering.
+    """
+
+    thread = threading.Thread(
+        target=_serve_mark_reconciler,
+        args=(sway,),
+        name="hopd-reconciler",
+        daemon=True,
+    )
+    thread.start()
+    debug.log("hopd: mark reconciler subscribed to window events")
+
+
+def _serve_mark_reconciler(sway: SwayIpcAdapter) -> None:
+    try:
+        for _event in sway.subscribe_to_window_events():
+            reconcile_marks(sway)
+    except Exception:
+        debug.log(f"hopd: mark reconciler crashed\n{traceback.format_exc()}")
 
 
 def _spawn_detached_hopd() -> None:
@@ -150,6 +183,7 @@ def _run_main_loop(scripts_dir: Path) -> int:
     sway = SwayIpcAdapter()
     registry = SessionBackendRegistry()
     _start_bridge_acceptor(sway)
+    _start_mark_reconciler(sway)
 
     def sessions_loader() -> Sequence[SessionListing]:
         return list_sessions(sway=sway)
@@ -158,6 +192,7 @@ def _run_main_loop(scripts_dir: Path) -> int:
 
     try:
         sweep_stale_persisted_sessions(sway=sway)
+        reconcile_marks(sway)
         regenerate(
             sway=sway,
             sessions_loader=sessions_loader,

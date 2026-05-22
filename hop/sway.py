@@ -219,6 +219,9 @@ class SwayIpcAdapter:
     def mark_window(self, window_id: int, mark: str) -> None:
         self.run_command(f"[con_id={window_id}] mark --add {json.dumps(mark)}")
 
+    def unmark_window(self, window_id: int, mark: str) -> None:
+        self.run_command(f"[con_id={window_id}] unmark {json.dumps(mark)}")
+
     def close_window(self, window_id: int) -> None:
         self.run_command(f"[con_id={window_id}] kill")
 
@@ -227,6 +230,11 @@ class SwayIpcAdapter:
 
     def subscribe_to_workspace_events(self) -> Iterator[dict[str, Any]]:
         payload = json.dumps(["workspace"]).encode()
+        for raw_event in self._transport.subscribe(payload):
+            yield cast(dict[str, Any], json.loads(raw_event.decode()))
+
+    def subscribe_to_window_events(self) -> Iterator[dict[str, Any]]:
+        payload = json.dumps(["window"]).encode()
         for raw_event in self._transport.subscribe(payload):
             yield cast(dict[str, Any], json.loads(raw_event.decode()))
 
