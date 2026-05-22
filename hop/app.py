@@ -25,6 +25,7 @@ from hop.commands import (
     KillCommand,
     ListSessionsCommand,
     ListWindowsCommand,
+    MoveCommand,
     RunCommand,
     SwitchSessionCommand,
     TailCommand,
@@ -33,6 +34,7 @@ from hop.commands import (
 from hop.commands.browser import focus_browser
 from hop.commands.edit import edit_in_session
 from hop.commands.kill import kill_session
+from hop.commands.move import move_focused_window
 from hop.commands.run import run_command
 from hop.commands.session import (
     enter_project_session,
@@ -73,6 +75,8 @@ class SwayAdapter(Protocol):
     def list_windows(self) -> Sequence[SwayWindow]: ...
 
     def focus_window(self, window_id: int) -> None: ...
+
+    def move_window_to_workspace(self, window_id: int, workspace_name: str) -> None: ...
 
     def close_window(self, window_id: int) -> None: ...
 
@@ -381,6 +385,8 @@ def execute_command(
                     services.session_backends.clear_override(session.session_name)
         case SwitchSessionCommand(session_name=session_name):
             switch_session(session_name, sway=services.sway)
+        case MoveCommand(session_name=session_name):
+            move_focused_window(session_name, sway=services.sway)
         case ListSessionsCommand(as_json=as_json):
             listings = list_sessions(sway=services.sway)
             if as_json:

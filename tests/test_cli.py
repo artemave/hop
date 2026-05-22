@@ -9,6 +9,7 @@ from hop.commands import (
     KillCommand,
     ListSessionsCommand,
     ListWindowsCommand,
+    MoveCommand,
     RunCommand,
     SwitchSessionCommand,
     TailCommand,
@@ -21,6 +22,7 @@ from hop.commands import (
     [
         ([], EnterSessionCommand()),
         (["switch", "demo"], SwitchSessionCommand(session_name="demo")),
+        (["move", "demo"], MoveCommand(session_name="demo")),
         (["list"], ListSessionsCommand()),
         (["list", "--json"], ListSessionsCommand(as_json=True)),
         (["windows"], ListWindowsCommand()),
@@ -84,6 +86,7 @@ def test_backend_flag_rejected_on_term_with_role() -> None:
     "argv",
     [
         ["--backend", "host", "switch", "demo"],
+        ["--backend", "host", "move", "demo"],
         ["--backend", "host", "list"],
         ["--backend", "host", "edit"],
         ["--backend", "host", "run", "ls"],

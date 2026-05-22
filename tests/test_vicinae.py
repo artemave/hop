@@ -51,6 +51,7 @@ def test_focused_session_emits_window_kill_and_other_session_switch_scripts() ->
         "hop-kill",
         "hop-switch-other",
         "hop-create",
+        "hop-move",
     ]
 
 
@@ -101,12 +102,27 @@ def test_off_session_workspace_emits_only_session_switch_scripts() -> None:
     )
 
     filenames = [script.filename for script in scripts]
-    assert filenames == ["hop-switch-rails", "hop-switch-other", "hop-switch-third", "hop-create"]
+    assert filenames == ["hop-switch-rails", "hop-switch-other", "hop-switch-third", "hop-create", "hop-move"]
 
 
-def test_no_sessions_and_no_session_focus_still_emits_create_script() -> None:
+def test_no_sessions_and_no_session_focus_still_emits_create_and_move_scripts() -> None:
     scripts = compute_target_scripts("scratch", (), windows_for=lambda _: _builtin_windows())
-    assert [s.filename for s in scripts] == ["hop-create"]
+    assert [s.filename for s in scripts] == ["hop-create", "hop-move"]
+
+
+def test_move_script_dispatches_to_vicinae_dmenu_over_hop_list() -> None:
+    scripts = compute_target_scripts("scratch", (), windows_for=lambda _: ())
+    move = next(s for s in scripts if s.filename == "hop-move")
+
+    assert "# @vicinae.title Hop move window to session\n" in move.content
+    assert "# @vicinae.mode silent\n" in move.content
+    # Candidates come from `hop list` (one session name per line); the user
+    # picks the destination in a `vicinae dmenu`.
+    assert "candidates=$(hop list)\n" in move.content
+    assert 'vicinae dmenu --placeholder "Move window to session"' in move.content
+    # `setsid -f` survives vicinae's SIGTERM-on-UI-close, matching the rest
+    # of the hop-* script set.
+    assert 'exec setsid -f hop move "$chosen"\n' in move.content
 
 
 def test_create_script_dispatches_to_vicinae_dmenu_over_home_directories() -> None:
@@ -143,7 +159,7 @@ def test_focused_workspace_with_unregistered_session_falls_back_to_off_session_s
         windows_for=lambda _: _builtin_windows(),
     )
 
-    assert [s.filename for s in scripts] == ["hop-switch-other", "hop-create"]
+    assert [s.filename for s in scripts] == ["hop-switch-other", "hop-create", "hop-move"]
 
 
 def test_session_without_project_root_does_not_emit_window_scripts() -> None:
@@ -158,7 +174,7 @@ def test_session_without_project_root_does_not_emit_window_scripts() -> None:
         windows_for=lambda _: _builtin_windows(),
     )
 
-    assert [s.filename for s in scripts] == ["hop-switch-other", "hop-create"]
+    assert [s.filename for s in scripts] == ["hop-switch-other", "hop-create", "hop-move"]
 
 
 def test_role_filename_sanitization_replaces_disallowed_characters() -> None:

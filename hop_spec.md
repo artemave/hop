@@ -229,6 +229,20 @@ Behavior:
 
 ---
 
+### Move window to session
+
+```bash
+hop move <session>
+```
+
+Behavior:
+
+- move the currently-focused Sway window onto the named session's `p:<session>` workspace
+- switch the user's view to `p:<session>` after the move, so the moved window is visible at its destination
+- error if no session named `<session>` is live, or if no window is focused
+
+---
+
 ### List sessions
 
 ```bash

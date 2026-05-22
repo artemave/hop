@@ -28,6 +28,7 @@ WINDOW_FILENAME_PREFIX = "hop-window-"
 SWITCH_FILENAME_PREFIX = "hop-switch-"
 KILL_FILENAME = "hop-kill"
 CREATE_FILENAME = "hop-create"
+MOVE_FILENAME = "hop-move"
 # Leading-underscore suffix keeps this entry from colliding with sanitized
 # session names (which derive from path basenames and don't start with `_`).
 DAEMON_DOWN_FILENAME = "hop-_daemon-down"
@@ -69,9 +70,9 @@ def compute_target_scripts(
     On a `p:<session>` workspace: per-window scripts for every declared
     role, `hop-kill`, plus `hop-switch-<other-session>` for every other
     live session. Off any `p:*` workspace: only `hop-switch-<session>`
-    for every live session. `hop-create` is always emitted — it falls
-    through to a second vicinae dmenu over directories under `$HOME`
-    and either creates a new session or attaches to an existing one.
+    for every live session. `hop-create` and `hop-move` are always
+    emitted — both fall through to a `vicinae dmenu` pick over their
+    own candidate list.
     """
 
     scripts: list[GeneratedScript] = []
@@ -99,6 +100,7 @@ def compute_target_scripts(
         scripts.append(_switch_script(session, used=used_filenames))
 
     scripts.append(_create_script())
+    scripts.append(_move_script())
 
     return tuple(scripts)
 
@@ -261,6 +263,47 @@ def _create_script() -> GeneratedScript:
             # A slow first-time `prepare` (compose recreate, image pull) is
             # otherwise enough to lose the whole bootstrap.
             "exec setsid -f hop\n"
+        ),
+    )
+
+
+def _move_script() -> GeneratedScript:
+    # Single entry that delegates the destination pick to `vicinae dmenu`
+    # over `hop list` output, mirroring `_create_script`'s pattern. Setting
+    # the destination per session would require one entry per session (the
+    # `_switch_script` shape) and force the user to disambiguate at picker
+    # time; one entry + dmenu keeps the launcher root uncluttered.
+    return GeneratedScript(
+        filename=MOVE_FILENAME,
+        content=(
+            "#!/usr/bin/env bash\n"
+            "# @vicinae.schemaVersion 1\n"
+            "# @vicinae.title Hop move window to session\n"
+            "# @vicinae.description Move the focused window to a hop session's workspace.\n"
+            "# @vicinae.packageName \n"
+            f"# @vicinae.icon {_ICON_PATH}\n"
+            "# @vicinae.mode silent\n"
+            "\n"
+            "set -euo pipefail\n"
+            "\n"
+            "candidates=$(hop list)\n"
+            'if [ -z "$candidates" ]; then\n'
+            "    exit 0\n"
+            "fi\n"
+            "\n"
+            "if ! chosen=$(printf '%s\\n' \"$candidates\" "
+            '| vicinae dmenu --placeholder "Move window to session"); then\n'
+            "    exit 0\n"
+            "fi\n"
+            "\n"
+            'if [ -z "$chosen" ]; then\n'
+            "    exit 0\n"
+            "fi\n"
+            "\n"
+            # `setsid -f` mirrors the rationale in `_window_script` — vicinae
+            # SIGTERMs the action on UI close, and we don't want that to
+            # interrupt the IPC sequence.
+            'exec setsid -f hop move "$chosen"\n'
         ),
     )
 

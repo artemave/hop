@@ -34,6 +34,9 @@ class StubSwayAdapter:
     def focus_window(self, window_id: int) -> None:
         raise AssertionError("focus_window should not be called for hop run")
 
+    def move_window_to_workspace(self, window_id: int, workspace_name: str) -> None:
+        raise AssertionError("move_window_to_workspace should not be called for hop run")
+
     def close_window(self, window_id: int) -> None:
         raise AssertionError("close_window should not be called in this test")
 

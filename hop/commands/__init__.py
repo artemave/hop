@@ -16,6 +16,11 @@ class SwitchSessionCommand:
 
 
 @dataclass(frozen=True, slots=True)
+class MoveCommand:
+    session_name: str
+
+
+@dataclass(frozen=True, slots=True)
 class ListSessionsCommand:
     as_json: bool = False
 
@@ -65,6 +70,7 @@ class BridgeShimCommand:
 Command = (
     EnterSessionCommand
     | SwitchSessionCommand
+    | MoveCommand
     | ListSessionsCommand
     | ListWindowsCommand
     | EditCommand

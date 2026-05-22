@@ -279,10 +279,11 @@ def test_daemon_runs_regen_against_real_tmp_scripts_dir(
     exit_code = daemon.main([])
 
     assert exit_code == 1
-    # The intermediate state — what regen wrote — is just `hop-create`
-    # (no focused session, no sessions). After the subscription ends,
-    # daemon-down rewrite replaces it.
-    assert captured == [{"hop-create"}]
+    # The intermediate state — what regen wrote — is `hop-create` and
+    # `hop-move`, the always-emitted dmenu entries (no focused session,
+    # no sessions). After the subscription ends, daemon-down rewrite
+    # replaces them.
+    assert captured == [{"hop-create", "hop-move"}]
     assert {p.name for p in scripts_dir.iterdir()} == {"hop-_daemon-down"}
 
 

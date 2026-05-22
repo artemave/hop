@@ -16,6 +16,7 @@ from hop.commands import (
     KillCommand,
     ListSessionsCommand,
     ListWindowsCommand,
+    MoveCommand,
     RunCommand,
     SwitchSessionCommand,
     TailCommand,
@@ -43,6 +44,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     switch_parser = subparsers.add_parser("switch")
     switch_parser.add_argument("session_name")
+
+    move_parser = subparsers.add_parser("move")
+    move_parser.add_argument("session_name")
 
     list_parser = subparsers.add_parser("list")
     list_parser.add_argument("--json", action="store_true", dest="as_json")
@@ -96,6 +100,8 @@ def parse_command(argv: Sequence[str] | None = None) -> Command:
             return EnterSessionCommand(backend=backend)
         case "switch":
             return SwitchSessionCommand(session_name=namespace.session_name)
+        case "move":
+            return MoveCommand(session_name=namespace.session_name)
         case "list":
             return ListSessionsCommand(as_json=bool(namespace.as_json))
         case "windows":

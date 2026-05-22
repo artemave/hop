@@ -18,6 +18,7 @@ from hop.commands import (
     EnterSessionCommand,
     KillCommand,
     ListSessionsCommand,
+    MoveCommand,
     RunCommand,
     SwitchSessionCommand,
     TailCommand,
@@ -60,6 +61,7 @@ class StubSwayAdapter:
         self.focused_window_ids: list[int] = []
         self.closed_windows: list[int] = []
         self.removed_workspaces: list[str] = []
+        self.moved_windows: list[tuple[int, str]] = []
 
     def switch_to_workspace(self, workspace_name: str) -> None:
         self.switched_workspaces.append(workspace_name)
@@ -86,6 +88,9 @@ class StubSwayAdapter:
     def close_window(self, window_id: int) -> None:
         self.closed_windows.append(window_id)
         self.windows = tuple(window for window in self.windows if window.id != window_id)
+
+    def move_window_to_workspace(self, window_id: int, workspace_name: str) -> None:
+        self.moved_windows.append((window_id, workspace_name))
 
     def remove_workspace(self, workspace_name: str) -> None:
         self.removed_workspaces.append(workspace_name)
@@ -526,6 +531,37 @@ def test_execute_command_switches_to_named_session() -> None:
     )
     assert result == 0
     assert services.sway.switched_workspaces == ["p:demo"]
+
+
+def test_execute_command_moves_focused_window_to_named_session() -> None:
+    focused_window = SwayWindow(
+        id=42,
+        workspace_name="2",
+        app_id="bitwarden",
+        window_class=None,
+        focused=True,
+    )
+    services = build_services(workspaces=("p:demo",), sway_windows=(focused_window,))
+
+    result = execute_command(MoveCommand(session_name="demo"), cwd=Path("/tmp"), services=services.as_services())
+
+    assert result == 0
+    assert services.sway.moved_windows == [(42, "p:demo")]
+
+
+def test_execute_command_move_raises_for_unknown_session() -> None:
+    focused_window = SwayWindow(
+        id=42,
+        workspace_name="2",
+        app_id="bitwarden",
+        window_class=None,
+        focused=True,
+    )
+    services = build_services(workspaces=("p:demo",), sway_windows=(focused_window,))
+
+    with pytest.raises(HopError, match="no session named 'ghost'"):
+        execute_command(MoveCommand(session_name="ghost"), cwd=Path("/tmp"), services=services.as_services())
+    assert services.sway.moved_windows == []
 
 
 def test_execute_command_lists_sorted_session_names() -> None:
