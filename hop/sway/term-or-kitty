@@ -4,11 +4,11 @@
 #
 # Bind in sway, e.g.:
 #
-#     bindsym $mod+Return exec /path/to/hop/sway/hop-term-or-kitty
+#     bindsym $mod+Return exec "$(hop path sway/term-or-kitty)"
 #
 # The fallback can be overridden by passing it as the first argument:
 #
-#     bindsym $mod+Return exec /path/to/hop/sway/hop-term-or-kitty alacritty
+#     bindsym $mod+Return exec "$(hop path sway/term-or-kitty)" alacritty
 
 set -e
 

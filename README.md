@@ -16,36 +16,32 @@ hop is built on top of [Sway](https://swaywm.org/) window manager, [Kitty](https
 
 - **Terminals start in the project directory** - spawn a shell anywhere in a session and it's already `cd`-ed into the project root.
 - **Open from terminal output** - bundled Kitty kitten picks file paths and URLs from visible output and dispatches them to the session's editor or browser.
-- **Pluggable backends** - shells and editor can run on the host, inside a devcontainer, over ssh, or anywhere describable as a chain of commands - without changing how you drive the session.
+- **Pluggable backends** - shells and editor can run on the host, inside a docker container, over ssh, or anywhere describable as a chain of commands - without changing how you drive the session.
 - **Vicinae-driven workflow** - sessions, windows, and switches surface as direct entries in the launcher's main search; a single `exec hopd` line in the Sway config wires it up.
 - **Scriptable** - everything Vicinae dispatches to is also a `hop` CLI subcommand.
 
 ## Requirements
 
 - Linux
-- Python 3.12+
+- Python
 - [Sway](https://swaywm.org/)
-- [Kitty](https://sw.kovidgoyal.net/kitty/) ≥ 0.34 (uses `kitten panel --edge=center --layer=overlay` for headless progress popups) with remote control enabled (`allow_remote_control yes` in `kitty.conf`)
+- [Kitty](https://sw.kovidgoyal.net/kitty/)
 - [Neovim](https://neovim.io/)
 
 Optionally:
 
 - [Vicinae](https://www.vicinae.com/) launcher
 
-When you launch `hop` or `hop kill` headlessly (via vicinae, a sway keybinding, or any other detached caller), a centered `kitten panel` overlay streams the backend's `prepare` / `teardown` output and surfaces any unhandled error so the user can read it before dismissing. From a terminal, output streams to that terminal as today.
-
 ## Installation
 
 ```bash
-git clone https://github.com/artemave/hop
-cd hop
-uv tool install .
+uv tool install git+https://github.com/artemave/hop
 ```
 
-Or, as an editable pip package:
+Or with pip:
 
 ```bash
-python3 -m pip install -e .
+python3 -m pip install git+https://github.com/artemave/hop
 ```
 
 ### Upgrading
@@ -60,13 +56,15 @@ If you forget, the `hop` CLI prints a note on its next invocation telling you th
 
 ## Usage
 
-Day-to-day, [Vicinae](https://www.vicinae.com/) is the primary surface. Turn on seamless Vicinae integration with this line to your Sway config:
+Add this to your Sway config:
 
 ```conf
 exec hopd
 ```
 
-`hopd` dymanically updates hop related Vicinae search results. What you see when you type `hop` in Vicinae's main search depends on where you are:
+> `hopd` is the long-lived daemon hop needs to run. It reconciles editor/browser Sway marks across manual window moves, serves the bridge socket that in-backend editor plugins (vigun in a devcontainer, etc.) call back to, and — when Vicinae is installed — keeps the hop entries in Vicinae's main search up to date.
+
+Day-to-day, [Vicinae](https://www.vicinae.com/) is the primary surface. What you see when you type `hop` in Vicinae's main search depends on where you are:
 
 - **On a hop session's workspace** (`p:<session>`): one entry per declared window — `Hop editor`, `Hop browser`, `Hop shell`, etc. Plus `Hop kill` for the focused session and `Hop switch to <other-session>` for every other live session.
 - **Off any hop workspace**: only `Hop switch to <session>` per live session — no `Hop kill`, no per-window entries to clutter unrelated workspaces.
@@ -81,18 +79,20 @@ Everything Vicinae's entries dispatch to is also reachable directly via the `hop
 
 ## Sway shortcuts
 
-Bind this helper script in your Sway config to spawn a new shell in the focused hop session (or a plain kitty when not on a hop workspace):
+Bind this helper script in your Sway config to spawn a new shell in the focused hop session (or a plain kitty when not on a hop workspace). Run `hop path sway/term-or-kitty` once and paste its output — using `$(...)` here would re-run hop on every keypress:
 
 ```conf
-bindsym $mod+Return exec /path/to/hop/sway/hop-term-or-kitty
+bindsym $mod+Return exec /printed/by/hop/path
 ```
 
 ## Open visible-output targets from Kitty
 
 Add a Kitty mapping that runs the `hints` kitten with hop's custom processor:
 
+Kitty's config doesn't run a shell, so the path has to be substituted by hand. Run `hop path kitten/hints` and paste its output:
+
 ```conf
-map ctrl+shift+o kitten hints --customize-processing /path/to/hop/kittens/open_selection/main.py
+map ctrl+shift+o kitten hints --customize-processing /printed/by/hop/path
 ```
 
 The picker scans visible terminal output and dispatches supported selections to the session editor or browser:
@@ -158,7 +158,7 @@ Backend fields:
 - `activate` (optional) - auto-detect probe. Backends without `activate` can only be picked by name.
 - `prepare` (optional, string or list) - command(s) run once at session creation, before launching kitty. Should be idempotent. List form runs steps sequentially and aborts on the first failure.
 - `teardown` (optional, string or list) - command(s) run at `hop kill` after closing windows.
-- `port_translate` (optional, string or list) - command(s) run lazily by the open_selection kitten when it dispatches a `localhost` / `127.0.0.1` / `0.0.0.0` URL. The last step's stdout is the host-reachable port that should replace the URL's port. `{port}` is substituted with the URL's original port.
+- `port_translate` (optional, string or list) - command(s) run lazily by the `kitten/hints` kitten when it dispatches a `localhost` / `127.0.0.1` / `0.0.0.0` URL. The last step's stdout is the host-reachable port that should replace the URL's port. `{port}` is substituted with the URL's original port.
 - `host_translate` (optional, string or list) - command(s) run lazily for the same set of localhost URLs. The last step's stdout is the hostname that should replace `localhost` / `127.0.0.1` / `0.0.0.0` in the URL.
 - `interactive_prefix` (required) - shell snippet prepended to every window command launched in this backend's environment. Empty for the implicit host backend.
 - `noninteractive_prefix` (required) - prefix hop uses for non-interactive backend operations like file-existence checks. Backends that allocate a TTY by default (podman-compose exec) must set the no-TTY variant (e.g. `... exec -T devcontainer`); backends that don't (ssh) pass the same string as `interactive_prefix`. The implicit `host` backend ships with both prefixes set to `""` (empty).

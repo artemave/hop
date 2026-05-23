@@ -25,6 +25,9 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
+[tool.coverage.run]
+omit = ["hop/kitten/*"]
+
 [tool.pyright]
 typeCheckingMode = "strict"
 pythonVersion = "3.12"
@@ -41,7 +44,7 @@ src = []
 select = ["E", "F", "I"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["hop", "kittens"]
+known-first-party = ["hop"]
 
 [tool.uv]
 default-groups = ["dev"]

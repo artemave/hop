@@ -19,6 +19,7 @@ from hop.commands import (
     KillCommand,
     ListSessionsCommand,
     MoveCommand,
+    PathCommand,
     RunCommand,
     SwitchSessionCommand,
     TailCommand,
@@ -1666,3 +1667,42 @@ def test_execute_bridge_shim_bakes_socket_flag_into_default(tmp_path: Path, caps
     assert custom_socket in captured.out
     assert "/run/hop.sock" not in captured.out
     assert captured.err == ""
+
+
+def test_execute_path_prints_kitten_main_py(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    services = build_services().as_services()
+
+    rc = execute_command(PathCommand(name="kitten/hints"), cwd=tmp_path, services=services)
+
+    assert rc == 0
+    captured = capsys.readouterr()
+    printed = Path(captured.out.strip())
+    assert printed.is_file()
+    assert printed.name == "main.py"
+    assert printed.parent.name == "hints"
+
+
+def test_execute_path_prints_sway_script(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    services = build_services().as_services()
+
+    rc = execute_command(PathCommand(name="sway/term-or-kitty"), cwd=tmp_path, services=services)
+
+    assert rc == 0
+    captured = capsys.readouterr()
+    printed = Path(captured.out.strip())
+    assert printed.is_file()
+    assert printed.name == "term-or-kitty"
+
+
+def test_execute_path_rejects_unknown_name(tmp_path: Path) -> None:
+    services = build_services().as_services()
+
+    with pytest.raises(ValueError, match="unknown hop path"):
+        execute_command(PathCommand(name="nope/missing"), cwd=tmp_path, services=services)
+
+
+def test_execute_path_rejects_traversal(tmp_path: Path) -> None:
+    services = build_services().as_services()
+
+    with pytest.raises(ValueError, match="invalid hop path"):
+        execute_command(PathCommand(name="../etc/passwd"), cwd=tmp_path, services=services)

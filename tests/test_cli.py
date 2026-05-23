@@ -10,6 +10,7 @@ from hop.commands import (
     ListSessionsCommand,
     ListWindowsCommand,
     MoveCommand,
+    PathCommand,
     RunCommand,
     SwitchSessionCommand,
     TailCommand,
@@ -53,6 +54,8 @@ from hop.commands import (
             ["bridge", "shim", "--socket", "/run/user/1000/hop/api.sock"],
             BridgeShimCommand(socket="/run/user/1000/hop/api.sock"),
         ),
+        (["path", "kitten/hints"], PathCommand(name="kitten/hints")),
+        (["path", "sway/term-or-kitty"], PathCommand(name="sway/term-or-kitty")),
     ],
 )
 def test_parse_command_maps_argv_to_typed_commands(argv: list[str], expected: object) -> None:

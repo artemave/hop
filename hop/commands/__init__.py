@@ -67,6 +67,11 @@ class BridgeShimCommand:
     socket: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class PathCommand:
+    name: str
+
+
 Command = (
     EnterSessionCommand
     | SwitchSessionCommand
@@ -80,4 +85,5 @@ Command = (
     | BrowserCommand
     | KillCommand
     | BridgeShimCommand
+    | PathCommand
 )

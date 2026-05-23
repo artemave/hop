@@ -17,6 +17,7 @@ from hop.commands import (
     ListSessionsCommand,
     ListWindowsCommand,
     MoveCommand,
+    PathCommand,
     RunCommand,
     SwitchSessionCommand,
     TailCommand,
@@ -71,6 +72,12 @@ def build_parser() -> argparse.ArgumentParser:
     browser_parser.add_argument("url", nargs="?")
 
     subparsers.add_parser("kill")
+
+    path_parser = subparsers.add_parser(
+        "path",
+        help="Print the absolute path to a bundled hop asset (e.g. kitten/hints, sway/term-or-kitty).",
+    )
+    path_parser.add_argument("name")
 
     bridge_parser = subparsers.add_parser("bridge")
     bridge_subparsers = bridge_parser.add_subparsers(dest="bridge_command", required=True)
@@ -130,6 +137,8 @@ def parse_command(argv: Sequence[str] | None = None) -> Command:
             # argparse enforces ``bridge_command == "shim"`` via the
             # ``required=True`` subparser + the single ``shim`` choice.
             return BridgeShimCommand(socket=namespace.socket)
+        case "path":
+            return PathCommand(name=namespace.name)
         case command_name:
             msg = f"Unsupported command {command_name!r}"
             raise ValueError(msg)

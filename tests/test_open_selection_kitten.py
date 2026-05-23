@@ -3,7 +3,7 @@ from typing import Iterable
 
 import pytest
 
-from kittens.open_selection import main
+from hop.kitten.hints import main
 
 
 @pytest.fixture(autouse=True)

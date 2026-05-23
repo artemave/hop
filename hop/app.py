@@ -26,6 +26,7 @@ from hop.commands import (
     ListSessionsCommand,
     ListWindowsCommand,
     MoveCommand,
+    PathCommand,
     RunCommand,
     SwitchSessionCommand,
     TailCommand,
@@ -35,6 +36,7 @@ from hop.commands.browser import focus_browser
 from hop.commands.edit import edit_in_session
 from hop.commands.kill import kill_session
 from hop.commands.move import move_focused_window
+from hop.commands.path import resolve_asset_path
 from hop.commands.run import run_command
 from hop.commands.session import (
     enter_project_session,
@@ -457,6 +459,8 @@ def execute_command(
             )
         case BridgeShimCommand(socket=socket):
             sys.stdout.write(render_bridge_shim(socket_default=socket or BRIDGE_SHIM_DEFAULT_SOCKET))
+        case PathCommand(name=name):
+            print(resolve_asset_path(name))
         case _:
             msg = f"Unsupported command {command!r}"
             raise ValueError(msg)
