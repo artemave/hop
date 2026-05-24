@@ -174,7 +174,7 @@ def _window_script(
     # recreate, image pull) leaves the user with "nothing happens" because
     # hop dies before kitty launches.
     if role == EDITOR_ROLE:
-        body = "exec setsid -f hop edit\n"
+        body = "exec setsid -f hop open\n"
     elif role == BROWSER_ROLE:
         body = "exec setsid -f hop browser\n"
     else:

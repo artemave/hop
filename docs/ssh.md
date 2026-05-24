@@ -66,14 +66,14 @@ hop
 You should see:
 
 - A kitty window opens whose prompt is on the remote (e.g. `user@myhost`).
-- `hop edit ~/projects/foo/some/file.rb` (remote path!) opens that file in an nvim running on the remote.
+- `hop open ~/projects/foo/some/file.rb` (remote path!) opens that file in an nvim running on the remote.
 - Hint-pick (the open-selection kitten) on output that prints a remote path (e.g. `lib/foo.rb`) highlights the path; clicking it dispatches to the remote nvim.
 
 `cat $XDG_RUNTIME_DIR/hop/sessions/foo-remote.json` shows the persisted record. `backend.interactive_prefix` is the ssh-with-ControlPath line; that's what hop replays for every later command against the session.
 
 ## Optional: enable the bridge for editor plugins
 
-The remote-side nvim can't call `hop run`/`hop edit` directly — `hop` isn't installed on the remote, and host kitty/Sway state isn't reachable. Hop's bridge solves this: a POSIX-sh client on the remote forwards CLI invocations to a unix socket inside `hopd` on the host.
+The remote-side nvim can't call `hop run`/`hop open` directly — `hop` isn't installed on the remote, and host kitty/Sway state isn't reachable. Hop's bridge solves this: a POSIX-sh client on the remote forwards CLI invocations to a unix socket inside `hopd` on the host.
 
 Both ends are wired up through the existing ssh `ControlMaster`, so there's no second connection or new tunnel:
 
@@ -108,7 +108,7 @@ Verify:
 
 ```bash
 # From inside the remote shell (a session terminal):
-hop edit
+hop open
 ```
 
 Errors from the acceptor — `no focused Sway window`, `session 'X' from focused window is not in hop state`, etc. — go to the shim's stderr. The bridge requires you to be focused on the session's **editor** window when the call is made; calls from role terminals (test/server) are rejected pending a future enhancement.

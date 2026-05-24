@@ -158,8 +158,8 @@ def spawn_session_terminal(
     # `hop` from inside a session always spawns a shell — the canonical
     # `shell` role when the session's kitty has died and we're bootstrapping
     # a fresh one, otherwise the next free `shell-<N>`. Re-creating a
-    # closed editor is the user's explicit choice via `hop edit` (or the
-    # vicinae `Hop editor` entry, which calls `hop edit`).
+    # closed editor is the user's explicit choice via `hop open` (or the
+    # vicinae `Hop editor` entry, which calls `hop open`).
     if not terminals.is_alive(session):
         # The session's kitty has died but the workspace is still alive
         # (e.g. only a browser window remains). Bootstrap a fresh kitty +

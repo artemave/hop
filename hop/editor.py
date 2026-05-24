@@ -188,11 +188,11 @@ class BossKittyEditorIO:
         # awkward — kitty's launch helpers want to dispatch into the event
         # loop. In practice the kitten only dispatches when an editor is
         # already running (the user has been editing for a while); if it
-        # isn't, surface a clear error and let the user run `hop edit` from
+        # isn't, surface a clear error and let the user run `hop open` from
         # a shell to bring it up.
         msg = (
             "No editor is running for this session. The kitten cannot launch "
-            "one without blocking kitty; run `hop edit` from a shell first."
+            "one without blocking kitty; run `hop open` from a shell first."
         )
         raise NeovimCommandError(msg)
 
@@ -201,7 +201,7 @@ class BossKittyEditorIO:
         if window is None:
             msg = (
                 f"No editor window for session {session.session_name!r} in this kitty boss. "
-                "Run `hop edit` from a shell first."
+                "Run `hop open` from a shell first."
             )
             raise NeovimCommandError(msg)
         window.write_to_child(text.encode("utf-8"))
@@ -299,7 +299,7 @@ class SharedNeovimEditorAdapter:
             return existing, False
         # Snapshot pre-launch Sway windows so we can pick out the freshly
         # created one by id, regardless of which workspace it lands on.
-        # `hop edit` from a host shell triggers this path: kitty creates the
+        # `hop open` from a host shell triggers this path: kitty creates the
         # editor on whatever workspace was focused at launch time, and we
         # have to relocate it to the session workspace ourselves (Sway has
         # no per-app_id placement rule from hop's side).
@@ -354,7 +354,7 @@ class SharedNeovimEditorAdapter:
         # window_class — workspace-agnostic, since the new window may have
         # landed on the caller's workspace rather than the session's. Once
         # found: relocate to the session workspace if it drifted, then mark
-        # so subsequent lookups (kitten dispatch, repeat hop edit) find it
+        # so subsequent lookups (kitten dispatch, repeat hop open) find it
         # instantly via the mark across workspaces.
         deadline = time.monotonic() + self._ready_timeout_seconds
         while time.monotonic() < deadline:

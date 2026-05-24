@@ -14,11 +14,11 @@ from hop.bridge import BRIDGE_SHIM, render_bridge_shim
 from hop.commands import (
     BridgeShimCommand,
     BrowserCommand,
-    EditCommand,
     EnterSessionCommand,
     KillCommand,
     ListSessionsCommand,
     MoveCommand,
+    OpenCommand,
     PathCommand,
     RunCommand,
     SwitchSessionCommand,
@@ -362,7 +362,7 @@ def test_execute_command_spawns_extra_shell_when_focused_on_session_workspace(tm
     # Sway reports we're already focused on this session's workspace, so bare
     # `hop` should spawn another shell rather than re-enter. The editor is
     # *not* implicitly resurrected — a closed editor stays closed until the
-    # user explicitly runs `hop edit` (or picks the vicinae `Hop editor`
+    # user explicitly runs `hop open` (or picks the vicinae `Hop editor`
     # entry). Kitty is alive — the dead-kitty branch in spawn_session_terminal
     # does not fire and no extra `shell` ensure is added before `shell-2`.
     services = build_services(focused_workspace="p:demo", alive_session_names=("demo",))
@@ -772,12 +772,12 @@ def test_execute_command_focuses_shared_editor_in_current_session(tmp_path: Path
 
     services = build_services()
 
-    assert execute_command(EditCommand(), cwd=nested_directory, services=services.as_services()) == 0
+    assert execute_command(OpenCommand(), cwd=nested_directory, services=services.as_services()) == 0
     assert services.sway.switched_workspaces == []
     assert services.neovim.focused_sessions == [("src", nested_directory.resolve())]
 
 
-def test_execute_command_routes_edit_targets_to_shared_editor(tmp_path: Path) -> None:
+def test_execute_command_routes_file_open_targets_to_shared_editor(tmp_path: Path) -> None:
     project_root = tmp_path / "demo"
     nested_directory = project_root / "src"
     nested_directory.mkdir(parents=True)
@@ -786,14 +786,34 @@ def test_execute_command_routes_edit_targets_to_shared_editor(tmp_path: Path) ->
 
     assert (
         execute_command(
-            EditCommand(target="app/models/user.rb:42"),
+            OpenCommand(target="app/models/user.rb:42"),
             cwd=nested_directory,
             services=services.as_services(),
         )
         == 0
     )
     assert services.sway.switched_workspaces == []
-    assert services.neovim.opened_targets == [("src", "app/models/user.rb:42", nested_directory.resolve())]
+    expected_target = f"{(nested_directory / 'app/models/user.rb').resolve()}:42"
+    assert services.neovim.opened_targets == [("src", expected_target, nested_directory.resolve())]
+
+
+def test_execute_command_routes_url_open_targets_to_session_browser(tmp_path: Path) -> None:
+    project_root = tmp_path / "demo"
+    nested_directory = project_root / "src"
+    nested_directory.mkdir(parents=True)
+
+    services = build_services()
+
+    assert (
+        execute_command(
+            OpenCommand(target="https://example.com/path"),
+            cwd=nested_directory,
+            services=services.as_services(),
+        )
+        == 0
+    )
+    assert services.browser.calls == [("src", nested_directory.resolve(), "https://example.com/path")]
+    assert services.neovim.opened_targets == []
 
 
 def test_execute_command_uses_invocation_directory_for_browser_sessions(tmp_path: Path) -> None:

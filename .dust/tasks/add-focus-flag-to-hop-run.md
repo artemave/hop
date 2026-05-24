@@ -10,7 +10,7 @@ A natural counterpart use case is the operator typing `hop run --role server "bi
 
 The kitty adapter already has the seam for the kitty-side of focus: `KittyRemoteControlAdapter._launch_window(..., keep_focus: bool)` is plumbed through, and `ensure_terminal` (the path `hop term` uses) demonstrates the focus-existing-window pattern via `kitty @ focus-window`. The Sway-side seam already exists too: `SwayAdapter.switch_to_workspace(workspace_name)` is what `SwitchSessionCommand` uses today. This task wires both seams into the run path.
 
-`--focus` deliberately departs from the existing default "`hop run` does not switch Sway workspaces" rule (`hop_spec.md`, the note shared with `hop term` / `hop edit` / `hop browser`). The default keep-focus behavior — the contract `vigun` and other automated callers depend on — stays unchanged. `--focus` is the explicit opt-in that says "take me to the role terminal," which only makes sense if it works from a different Sway workspace; otherwise it's a no-op for the most common interactive use case.
+`--focus` deliberately departs from the existing default "`hop run` does not switch Sway workspaces" rule (`hop_spec.md`, the note shared with `hop term` / `hop open` / `hop browser`). The default keep-focus behavior — the contract `vigun` and other automated callers depend on — stays unchanged. `--focus` is the explicit opt-in that says "take me to the role terminal," which only makes sense if it works from a different Sway workspace; otherwise it's a no-op for the most common interactive use case.
 
 ## Design
 
@@ -101,7 +101,7 @@ Real behavior, no mocks (per project convention).
 
 ## Out of scope
 
-- Adding `--focus` to `hop tail`, `hop browser`, or `hop edit`. Each has its own focus contract today (`hop browser` and `hop edit` already focus by design; `hop tail` is a passive reader). This task is scoped to `hop run`.
+- Adding `--focus` to `hop tail`, `hop browser`, or `hop open`. Each has its own focus contract today (`hop browser` and `hop open` already focus by design; `hop tail` is a passive reader). This task is scoped to `hop run`.
 - Changing `hop term`'s default contract. `hop term` already focuses-but-doesn't-switch-workspaces today; aligning it with the new `hop run --focus` semantics (workspace switch on focus) is a separate decision worth its own task.
 - Changing `vigun`'s integration. `vigun` calls `hop run` without `--focus`, which is the keep-focus / no-workspace-switch default — no caller-side change needed.
 - Resolving a session by name (`hop run --focus --session <name>`). `hop run` always uses the cwd-derived session; if a workflow needs cross-session dispatch, that's a separate session-targeting feature, not part of this task.

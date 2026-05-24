@@ -4,7 +4,7 @@ Promote the editor adapter's hardcoded open-file keystroke sequence to a config 
 
 ## Background
 
-Today `hop edit <file>[:<line>]` and the `kitten/hints` dispatch path drive the session's editor via `KittyEditorIO.send_text_to_editor`, which writes raw bytes to the editor's kitty window. The byte sequence is built by `_build_open_keystrokes(path, line_number)` in `hop/editor.py:398-412`, which is hardcoded to vim/nvim syntax:
+Today `hop open <file>[:<line>]` and the `kitten/hints` dispatch path drive the session's editor via `KittyEditorIO.send_text_to_editor`, which writes raw bytes to the editor's kitty window. The byte sequence is built by `_build_open_keystrokes(path, line_number)` in `hop/editor.py:398-412`, which is hardcoded to vim/nvim syntax:
 
 ```python
 quoted = path.replace("'", "''")
@@ -101,7 +101,7 @@ implement
 - Config parsing rejects `open_keys` / `open_keys_with_line` on roles other than `editor` with a clear error message.
 - `_build_open_keystrokes` reads the templates from the resolved editor `WindowSpec`, falling back to module-level defaults that reproduce today's nvim sequence byte-for-byte.
 - A new test in the editor test suite exercises a custom template (e.g. a helix-shaped `"\x1b:open {path}\r{line}gg\r"`) end-to-end through `SharedNeovimEditorAdapter.open_target`, asserting the bytes sent to `KittyEditorIO.send_text_to_editor`.
-- An existing-behavior regression test covers the default templates: `hop edit foo.rb` and `hop edit foo.rb:42` produce the same bytes they do on `main` today.
+- An existing-behavior regression test covers the default templates: `hop open foo.rb` and `hop open foo.rb:42` produce the same bytes they do on `main` today.
 - README **Requirements** no longer lists Neovim; the editor section documents the two template fields with a worked nvim default and one non-nvim example, and calls out the `:drop`-style "reuse buffer" semantic as editor-specific.
 - `hop_spec.md` describes the templated keystroke step instead of asserting nvim.
 - `make` is green.

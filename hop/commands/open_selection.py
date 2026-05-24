@@ -2,25 +2,18 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Callable, Protocol
+from typing import Callable
 
 from hop.backends import CommandBackend, SessionBackend
+from hop.commands.open import OpenBrowserAdapter, OpenTargetNeovimAdapter, dispatch_resolved_target
 from hop.kitty import session_name_from_listen_on
 from hop.session import ProjectSession, resolve_project_session
 from hop.state import SessionState, load_sessions
-from hop.targets import ResolvedUrlTarget, resolve_visible_output_target
+from hop.targets import ResolvedFileTarget, ResolvedUrlTarget, resolve_visible_output_target
 
 logger = logging.getLogger("hop.open_selection")
 
 _BUILTIN_HOST_BACKEND = CommandBackend(name="host", interactive_prefix="", noninteractive_prefix="")
-
-
-class OpenSelectionNeovimAdapter(Protocol):
-    def open_target(self, session: ProjectSession, *, target: str) -> None: ...
-
-
-class OpenSelectionBrowserAdapter(Protocol):
-    def ensure_browser(self, session: ProjectSession, *, url: str | None) -> None: ...
 
 
 def open_selection_in_window(
@@ -28,8 +21,8 @@ def open_selection_in_window(
     *,
     source_cwd: Path | str | None,
     listen_on: str | None,
-    neovim: OpenSelectionNeovimAdapter,
-    browser: OpenSelectionBrowserAdapter,
+    neovim: OpenTargetNeovimAdapter,
+    browser: OpenBrowserAdapter,
     sessions_loader: Callable[[], dict[str, SessionState]] = load_sessions,
     session_backend_for: Callable[[ProjectSession], SessionBackend] = lambda _session: _BUILTIN_HOST_BACKEND,
 ) -> ProjectSession | None:
@@ -71,23 +64,26 @@ def open_selection_in_window(
         )
         return None
 
-    if isinstance(resolved_target, ResolvedUrlTarget):
-        translated_url = backend.translate_localhost_url(session, resolved_target.url)
-        logger.info("dispatching url %r to session %r", translated_url, session_name)
-        browser.ensure_browser(session, url=translated_url)
-        return session
-
-    if not backend.paths_exist(session, (resolved_target.path,)):
+    # Existence check lives in the kitten only — see hop/commands/open.py.
+    # Highlighting a stale path-shaped token from terminal output would be
+    # actively misleading; dispatching one from the CLI is the user's call.
+    if isinstance(resolved_target, ResolvedFileTarget) and not backend.paths_exist(session, (resolved_target.path,)):
         logger.info(
             "candidate %r does not exist in backend for session %r",
             str(resolved_target.path),
             session_name,
         )
         return None
-    logger.info(
-        "dispatching file %r to session %r",
-        resolved_target.editor_target,
-        session_name,
+
+    dispatched = dispatch_resolved_target(
+        resolved_target,
+        session=session,
+        backend=backend,
+        neovim=neovim,
+        browser=browser,
     )
-    neovim.open_target(session, target=resolved_target.editor_target)
+    if isinstance(dispatched, ResolvedUrlTarget):
+        logger.info("dispatching url %r to session %r", dispatched.url, session_name)
+    else:
+        logger.info("dispatching file %r to session %r", dispatched.editor_target, session_name)
     return session

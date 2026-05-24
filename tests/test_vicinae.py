@@ -83,7 +83,7 @@ def test_dispatched_command_per_role() -> None:
     by_filename = {script.filename: script.content for script in scripts}
     # `setsid -f` detaches hop from vicinae's SIGTERM-on-UI-close, so a
     # slow first-time prepare can't be killed mid-bootstrap.
-    assert "exec setsid -f hop edit\n" in by_filename["hop-window-editor"]
+    assert "exec setsid -f hop open\n" in by_filename["hop-window-editor"]
     assert "exec setsid -f hop browser\n" in by_filename["hop-window-browser"]
     assert "exec setsid -f hop term --role console\n" in by_filename["hop-window-console"]
 

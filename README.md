@@ -75,7 +75,7 @@ Two complementary surfaces are described in their own sections below:
 - [Sway shortcuts](#sway-shortcuts) - a key for "new shell in this session", faster than going through Vicinae for the most common action.
 - [Open visible-output targets from Kitty](#open-visible-output-targets-from-kitty) - a Kitty kitten that picks file paths and URLs from terminal output and routes them to the session's editor or browser.
 
-Everything Vicinae's entries dispatch to is also reachable directly via the `hop` CLI (`hop`, `hop switch <name>`, `hop move <name>`, `hop edit`, `hop browser`, `hop term --role <name>`, `hop kill`) — useful for scripting and automation.
+Everything Vicinae's entries dispatch to is also reachable directly via the `hop` CLI (`hop`, `hop switch <name>`, `hop move <name>`, `hop open`, `hop browser`, `hop term --role <name>`, `hop kill`) — useful for scripting and automation.
 
 ## Sway shortcuts
 
@@ -257,7 +257,7 @@ Prompt detection uses Kitty's shell integration (OSC 133), which is on by defaul
 - `hop list` - print active Sway workspaces whose names start with `p:`.
 - `hop switch <name>` - focus the Sway workspace `p:<name>`.
 - `hop move <name>` - move the currently focused Sway window onto `p:<name>` and switch to that workspace.
-- `hop edit [<file>[:<line>]]` - focus the session's Neovim and optionally open a file or `path:line` target.
+- `hop open [<target>]` - focus the session's Neovim with no target; with one, route the target to the right place: a URL goes to the session browser (with the backend's localhost translation applied), a Rails `Controller#action` ref or `path[:line]` goes to the shared Neovim. The kitten under [Open visible-output targets from Kitty](#open-visible-output-targets-from-kitty) uses the same parser.
 - `hop term --role <name>` - focus or create a Kitty window for the given role.
 - `hop browser [<url>]` - reuse or create a session-owned browser window. If the window was moved to another workspace, it's moved back before being focused.
 - `hop kill` - close every Sway/Kitty window owned by the session, remove its workspace, and run the backend's `teardown`. Run from the project root.

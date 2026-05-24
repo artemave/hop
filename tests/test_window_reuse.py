@@ -10,7 +10,7 @@ These tests use stateful stub adapters to assert that:
 from pathlib import Path
 
 from hop.commands.browser import focus_browser
-from hop.commands.edit import edit_in_session
+from hop.commands.open import open_target_in_session
 from hop.commands.run import run_command
 from hop.commands.term import focus_terminal
 from hop.session import ProjectSession
@@ -220,50 +220,59 @@ def test_hop_run_reuses_existing_role_window(tmp_path: Path) -> None:
     ]
 
 
-# ─── Editor reuse and recreation: hop edit ────────────────────────────────────
+# ─── Editor reuse and recreation: hop open ────────────────────────────────────
 
 
-def test_repeated_hop_edit_reuses_existing_editor(tmp_path: Path) -> None:
-    """Calling hop edit twice focuses the existing Neovim instance without launching a second."""
+def test_repeated_hop_open_reuses_existing_editor(tmp_path: Path) -> None:
+    """Calling hop open twice focuses the existing Neovim instance without launching a second."""
     session_root = tmp_path / "myproject"
     session_root.mkdir()
 
     neovim = IdempotentNeovimAdapter()
+    browser = IdempotentBrowserAdapter()
 
-    edit_in_session(session_root, neovim=neovim)
-    edit_in_session(session_root, neovim=neovim)
+    open_target_in_session(session_root, target=None, neovim=neovim, browser=browser)
+    open_target_in_session(session_root, target=None, neovim=neovim, browser=browser)
 
     assert neovim.launched == ["myproject"]
     assert neovim.focused == ["myproject"]
 
 
-def test_hop_edit_recreates_editor_after_quit(tmp_path: Path) -> None:
-    """After :qa, the next hop edit launches a fresh editor instead of accumulating windows."""
+def test_hop_open_recreates_editor_after_quit(tmp_path: Path) -> None:
+    """After :qa, the next hop open launches a fresh editor instead of accumulating windows."""
     session_root = tmp_path / "myproject"
     session_root.mkdir()
 
     neovim = IdempotentNeovimAdapter()
+    browser = IdempotentBrowserAdapter()
 
-    edit_in_session(session_root, neovim=neovim)
+    open_target_in_session(session_root, target=None, neovim=neovim, browser=browser)
     neovim.quit_editor("myproject")
-    edit_in_session(session_root, neovim=neovim)
+    open_target_in_session(session_root, target=None, neovim=neovim, browser=browser)
 
     assert neovim.launched == ["myproject", "myproject"]
     assert neovim.focused == []
 
 
-def test_hop_edit_routes_target_to_existing_editor_without_relaunch(tmp_path: Path) -> None:
+def test_hop_open_routes_target_to_existing_editor_without_relaunch(tmp_path: Path) -> None:
     """Opening a file target into a live editor does not relaunch the editor."""
     session_root = tmp_path / "myproject"
     session_root.mkdir()
 
     neovim = IdempotentNeovimAdapter()
+    browser = IdempotentBrowserAdapter()
 
-    edit_in_session(session_root, neovim=neovim)
-    edit_in_session(session_root, neovim=neovim, target="app/models/user.rb:42")
+    open_target_in_session(session_root, target=None, neovim=neovim, browser=browser)
+    open_target_in_session(
+        session_root,
+        target="app/models/user.rb:42",
+        neovim=neovim,
+        browser=browser,
+    )
 
     assert neovim.launched == ["myproject"]
-    assert neovim.opened_targets == [("myproject", "app/models/user.rb:42")]
+    expected_target = f"{(session_root / 'app/models/user.rb').resolve()}:42"
+    assert neovim.opened_targets == [("myproject", expected_target)]
 
 
 # ─── Browser session scope: hop browser ───────────────────────────────────────
@@ -361,10 +370,11 @@ def test_session_switch_does_not_mix_editor_instances(tmp_path: Path) -> None:
     session_b_root.mkdir()
 
     neovim = IdempotentNeovimAdapter()
+    browser = IdempotentBrowserAdapter()
 
-    edit_in_session(session_a_root, neovim=neovim)
-    edit_in_session(session_b_root, neovim=neovim)
-    edit_in_session(session_a_root, neovim=neovim)
+    open_target_in_session(session_a_root, target=None, neovim=neovim, browser=browser)
+    open_target_in_session(session_b_root, target=None, neovim=neovim, browser=browser)
+    open_target_in_session(session_a_root, target=None, neovim=neovim, browser=browser)
 
     assert neovim.launched == ["project-a", "project-b"]
     assert neovim.focused == ["project-a"]

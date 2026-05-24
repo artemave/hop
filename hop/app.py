@@ -20,12 +20,12 @@ from hop.commands import (
     BridgeShimCommand,
     BrowserCommand,
     Command,
-    EditCommand,
     EnterSessionCommand,
     KillCommand,
     ListSessionsCommand,
     ListWindowsCommand,
     MoveCommand,
+    OpenCommand,
     PathCommand,
     RunCommand,
     SwitchSessionCommand,
@@ -33,9 +33,9 @@ from hop.commands import (
     TermCommand,
 )
 from hop.commands.browser import focus_browser
-from hop.commands.edit import edit_in_session
 from hop.commands.kill import kill_session
 from hop.commands.move import move_focused_window
+from hop.commands.open import open_target_in_session
 from hop.commands.path import resolve_asset_path
 from hop.commands.run import run_command
 from hop.commands.session import (
@@ -327,7 +327,7 @@ def execute_command(
                 # Spawning an additional terminal in an already-live session:
                 # the backend is fixed at session creation; --backend is ignored.
                 # A closed editor stays closed — recover it explicitly via
-                # `hop edit` (or the vicinae `Hop editor` entry).
+                # `hop open` (or the vicinae `Hop editor` entry).
                 spawn_session_terminal(
                     current_directory,
                     terminals=services.kitty,
@@ -408,11 +408,13 @@ def execute_command(
             session = resolve_project_session(current_directory)
             for window in services.session_backends.resolve_windows_for_entry(session):
                 print(window.role)
-        case EditCommand(target=target):
-            edit_in_session(
+        case OpenCommand(target=target):
+            open_target_in_session(
                 current_directory,
-                neovim=services.neovim,
                 target=target,
+                neovim=services.neovim,
+                browser=services.browser,
+                session_backend_for=services.session_backends.for_session,
             )
         case TermCommand(role=role):
             focus_terminal(

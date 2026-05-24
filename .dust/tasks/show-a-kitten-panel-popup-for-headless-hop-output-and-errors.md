@@ -259,7 +259,7 @@ Real behavior, no mocks (per project convention).
 ## Out of scope
 
 - Deduping the second silent `backend.prepare` call inside `_bootstrap_session_kitty`. Idempotent by spec; the popup's job is the cold-prepare UI, not eliminating the bootstrap-time re-execution.
-- Surfacing lifecycle output for `hop term --role <role>`, `hop edit`, `hop browser`, `hop run` invocations originating headlessly. Those target already-live sessions; if a headless window-script fires against a session whose kitty has died, the cold-bootstrap inside `_bootstrap_session_kitty` still runs silent prepare — a separate task can extend popup coverage to that edge case.
+- Surfacing lifecycle output for `hop term --role <role>`, `hop open`, `hop browser`, `hop run` invocations originating headlessly. Those target already-live sessions; if a headless window-script fires against a session whose kitty has died, the cold-bootstrap inside `_bootstrap_session_kitty` still runs silent prepare — a separate task can extend popup coverage to that edge case.
 
 ## Task Type
 

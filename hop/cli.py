@@ -11,12 +11,12 @@ from hop.commands import (
     BridgeShimCommand,
     BrowserCommand,
     Command,
-    EditCommand,
     EnterSessionCommand,
     KillCommand,
     ListSessionsCommand,
     ListWindowsCommand,
     MoveCommand,
+    OpenCommand,
     PathCommand,
     RunCommand,
     SwitchSessionCommand,
@@ -54,8 +54,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("windows")
 
-    edit_parser = subparsers.add_parser("edit")
-    edit_parser.add_argument("target", nargs="?")
+    open_parser = subparsers.add_parser("open")
+    open_parser.add_argument("target", nargs="?")
 
     term_parser = subparsers.add_parser("term")
     term_parser.add_argument("--role", default=None)
@@ -113,8 +113,8 @@ def parse_command(argv: Sequence[str] | None = None) -> Command:
             return ListSessionsCommand(as_json=bool(namespace.as_json))
         case "windows":
             return ListWindowsCommand()
-        case "edit":
-            return EditCommand(target=namespace.target)
+        case "open":
+            return OpenCommand(target=namespace.target)
         case "term":
             if namespace.role is None:
                 return EnterSessionCommand(backend=backend)

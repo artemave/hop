@@ -31,7 +31,7 @@ class ListWindowsCommand:
 
 
 @dataclass(frozen=True, slots=True)
-class EditCommand:
+class OpenCommand:
     target: str | None = None
 
 
@@ -78,7 +78,7 @@ Command = (
     | MoveCommand
     | ListSessionsCommand
     | ListWindowsCommand
-    | EditCommand
+    | OpenCommand
     | TermCommand
     | RunCommand
     | TailCommand

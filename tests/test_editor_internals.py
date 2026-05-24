@@ -357,7 +357,7 @@ def test_boss_send_text_raises_when_no_editor_window_in_boss() -> None:
     boss = _boss(windows=[_boss_window(1, user_vars={"hop_role": "shell"})])
     io = BossKittyEditorIO(boss=boss)
 
-    with pytest.raises(NeovimCommandError, match="Run `hop edit`"):
+    with pytest.raises(NeovimCommandError, match="Run `hop open`"):
         io.send_text_to_editor(build_session(), "irrelevant")
 
 
@@ -404,7 +404,7 @@ def test_boss_send_text_skips_windows_without_os_window_id() -> None:
     boss = _boss(windows=[weird], os_window_map={10: SimpleNamespace(wm_class="hop:editor")})
     io = BossKittyEditorIO(boss=boss)
 
-    with pytest.raises(NeovimCommandError, match="Run `hop edit`"):
+    with pytest.raises(NeovimCommandError, match="Run `hop open`"):
         io.send_text_to_editor(build_session(), "hi")
 
 
@@ -412,7 +412,7 @@ def test_boss_launch_editor_raises_explaining_the_constraint() -> None:
     boss = _boss(windows=[])
     io = BossKittyEditorIO(boss=boss)
 
-    with pytest.raises(NeovimCommandError, match="run `hop edit` from a shell"):
+    with pytest.raises(NeovimCommandError, match="run `hop open` from a shell"):
         io.launch_editor(
             build_session(),
             args=("nvim",),

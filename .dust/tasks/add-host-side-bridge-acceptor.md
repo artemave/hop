@@ -47,7 +47,7 @@ For each call the acceptor:
 2. Spawns `subprocess.run([sys.executable, "-m", "hop", *argv[1:]], cwd=session.project_root, input=b"", capture_output=True)`. Using `sys.executable -m hop` rather than the `hop` script in PATH avoids surprises when the daemon's PATH differs from the operator's.
 3. Builds the response: status `200`, body is `result.stdout`, `X-Hop-Exit: result.returncode`, `X-Hop-Stderr: base64(result.stderr)`.
 
-The acceptor buffers full stdout/stderr — no streaming. Acceptable for the targeted commands (`hop run` returns ~32 bytes; `hop edit` returns nothing; `hop tail`'s payload is the wrapped command's recent output, which is small).
+The acceptor buffers full stdout/stderr — no streaming. Acceptable for the targeted commands (`hop run` returns ~32 bytes; `hop open` returns nothing; `hop tail`'s payload is the wrapped command's recent output, which is small).
 
 ### Files changed
 
