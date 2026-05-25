@@ -793,8 +793,9 @@ def test_execute_command_routes_file_open_targets_to_shared_editor(tmp_path: Pat
         == 0
     )
     assert services.sway.switched_workspaces == []
-    expected_target = f"{(nested_directory / 'app/models/user.rb').resolve()}:42"
-    assert services.neovim.opened_targets == [("src", expected_target, nested_directory.resolve())]
+    # CLI dispatch passes the target through as typed so the editor resolves
+    # it against its own cwd (in the session's backend), not the host CLI cwd.
+    assert services.neovim.opened_targets == [("src", "app/models/user.rb:42", nested_directory.resolve())]
 
 
 def test_execute_command_routes_url_open_targets_to_session_browser(tmp_path: Path) -> None:

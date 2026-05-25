@@ -105,6 +105,22 @@ def test_resolve_visible_output_target_parses_python_traceback_line_form(tmp_pat
     assert resolved == ResolvedFileTarget(path=(terminal_cwd / "foo.py").resolve(), line_number=42)
 
 
+def test_resolve_visible_output_target_with_terminal_cwd_none_keeps_relative_text() -> None:
+    """``terminal_cwd=None`` means the caller doesn't share a filesystem
+    namespace with the editor (the host CLI, where nvim runs in a backend).
+    The path is preserved as typed so the editor resolves it against its
+    own cwd — no host-side ``~`` expansion, no cwd join."""
+    resolved = resolve_visible_output_target("app/models/user.rb:42", terminal_cwd=None)
+
+    assert resolved == ResolvedFileTarget(path=Path("app/models/user.rb"), line_number=42)
+
+
+def test_resolve_visible_output_target_with_terminal_cwd_none_expands_rails_ref_to_relative() -> None:
+    resolved = resolve_visible_output_target("UsersController#index", terminal_cwd=None)
+
+    assert resolved == ResolvedFileTarget(path=Path("app/controllers/users_controller.rb"))
+
+
 def test_resolve_visible_output_target_falls_through_when_url_has_no_netloc(tmp_path: Path) -> None:
     """``https://`` parses as a URL with an empty netloc — not a real URL —
     so the function falls through to file resolution."""

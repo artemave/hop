@@ -70,7 +70,9 @@ def test_file_target_dispatches_to_shared_editor(tmp_path: Path) -> None:
         browser=StubBrowserAdapter(),
     )
 
-    assert neovim.opened_targets == [("demo", str((project_root / "app/models/user.rb").resolve()))]
+    # CLI passes the path through as typed; nvim resolves it against its own
+    # cwd in the session's backend (which the host can't address).
+    assert neovim.opened_targets == [("demo", "app/models/user.rb")]
     assert neovim.focused_sessions == []
 
 
@@ -87,7 +89,7 @@ def test_file_with_line_target_keeps_line_suffix(tmp_path: Path) -> None:
         browser=StubBrowserAdapter(),
     )
 
-    assert neovim.opened_targets == [("demo", f"{(project_root / 'app/models/user.rb').resolve()}:42")]
+    assert neovim.opened_targets == [("demo", "app/models/user.rb:42")]
 
 
 def test_rails_controller_action_target_translates_to_path(tmp_path: Path) -> None:
@@ -106,8 +108,7 @@ def test_rails_controller_action_target_translates_to_path(tmp_path: Path) -> No
         browser=StubBrowserAdapter(),
     )
 
-    expected_path = str((project_root / "app/controllers/users_controller.rb").resolve())
-    assert neovim.opened_targets == [("demo", expected_path)]
+    assert neovim.opened_targets == [("demo", "app/controllers/users_controller.rb")]
 
 
 def test_url_target_dispatches_to_session_browser(tmp_path: Path) -> None:

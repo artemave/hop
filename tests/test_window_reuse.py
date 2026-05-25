@@ -271,8 +271,7 @@ def test_hop_open_routes_target_to_existing_editor_without_relaunch(tmp_path: Pa
     )
 
     assert neovim.launched == ["myproject"]
-    expected_target = f"{(session_root / 'app/models/user.rb').resolve()}:42"
-    assert neovim.opened_targets == [("myproject", expected_target)]
+    assert neovim.opened_targets == [("myproject", "app/models/user.rb:42")]
 
 
 # ─── Browser session scope: hop browser ───────────────────────────────────────

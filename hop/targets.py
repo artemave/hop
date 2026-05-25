@@ -59,9 +59,17 @@ ResolvedTarget = ResolvedUrlTarget | ResolvedFileTarget
 def resolve_visible_output_target(
     selection: str,
     *,
-    terminal_cwd: Path | str,
+    terminal_cwd: Path | str | None,
 ) -> ResolvedTarget | None:
     """Parse a selection from terminal output into a structured target.
+
+    ``terminal_cwd`` is the namespace against which a relative file path
+    absolutizes. Pass the in-shell cwd (e.g. kitty's ``cwd_of_child``)
+    when the caller knows the editor's filesystem namespace; pass ``None``
+    to preserve the raw text and let the editor resolve relatives against
+    its own cwd. The CLI uses ``None`` because hop runs on the host while
+    nvim runs in the backend — absolutizing against host paths would hand
+    nvim a path it can't open.
 
     Returns ``None`` only for empty or unparseable input. Existence of the
     resolved file path is **not** checked here — that filtering happens
@@ -77,7 +85,7 @@ def resolve_visible_output_target(
     if url is not None:
         return ResolvedUrlTarget(url=url)
 
-    terminal_directory = Path(terminal_cwd).expanduser().resolve(strict=False)
+    terminal_directory = Path(terminal_cwd).expanduser().resolve(strict=False) if terminal_cwd is not None else None
 
     rails_target = _rails_reference_target(cleaned_selection)
     if rails_target is not None:
@@ -133,15 +141,23 @@ def _split_file_target(selection: str) -> tuple[str, int | None]:
 def _resolve_file_candidate(
     candidate: str,
     *,
-    terminal_cwd: Path,
+    terminal_cwd: Path | None,
 ) -> Path:
-    """Return the absolute path the candidate string would resolve to.
+    """Return the path the candidate string represents.
+
+    With ``terminal_cwd`` set, relatives absolutize against that cwd — the
+    result is a host- or backend-namespace absolute path, depending on what
+    the caller supplied. With ``terminal_cwd=None`` the candidate is kept
+    in its normalized-but-not-expanded form (no ``~`` expansion, no cwd
+    join) so the editor resolves it against its own cwd.
 
     Existence is intentionally not checked here — the caller asks the active
     backend (via ``hop.focused.paths_exist``) which of its candidates exist.
     """
 
     normalized_candidate = _normalize_file_candidate(candidate)
+    if terminal_cwd is None:
+        return Path(normalized_candidate)
     expanded_candidate = Path(os.path.expanduser(normalized_candidate))
     if expanded_candidate.is_absolute():
         return expanded_candidate.resolve(strict=False)

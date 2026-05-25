@@ -79,7 +79,11 @@ def open_target_in_session(
         neovim.focus(session)
         return session
 
-    resolved = resolve_visible_output_target(target, terminal_cwd=session.project_root)
+    # terminal_cwd=None preserves the path as typed; the editor (nvim in
+    # the session's backend) resolves it against its own cwd. Absolutizing
+    # against the host's project_root would hand the editor a host path it
+    # can't see when the backend is a devcontainer / ssh host.
+    resolved = resolve_visible_output_target(target, terminal_cwd=None)
     if resolved is None:
         msg = f"could not parse target {target!r}"
         raise HopError(msg)
