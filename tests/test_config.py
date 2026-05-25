@@ -284,6 +284,62 @@ command = "bin/jobs"
     )
 
 
+def test_load_global_config_parses_editor_open_keys(tmp_path: Path) -> None:
+    config_file = write(
+        tmp_path / "config.toml",
+        r"""
+[windows.editor]
+command             = "helix"
+open_keys           = "\u001b:open {path}\r"
+open_keys_with_line = "\u001b:open {path}:{line}\r"
+""",
+    )
+
+    config = load_global_config(config_file)
+
+    assert config.windows == (
+        WindowConfig(
+            role="editor",
+            command="helix",
+            open_keys="\x1b:open {path}\r",
+            open_keys_with_line="\x1b:open {path}:{line}\r",
+        ),
+    )
+
+
+def test_load_global_config_rejects_open_keys_on_non_editor_role(tmp_path: Path) -> None:
+    config_file = write(
+        tmp_path / "config.toml",
+        r"""
+[windows.shell]
+command   = "/usr/bin/zsh"
+open_keys = "\u001b:e {path}\r"
+""",
+    )
+
+    with pytest.raises(HopConfigError, match="field 'open_keys' is only valid on the 'editor' role"):
+        load_global_config(config_file)
+
+
+def test_load_global_config_rejects_open_keys_on_non_editor_layout_window(tmp_path: Path) -> None:
+    config_file = write(
+        tmp_path / "config.toml",
+        r"""
+[layouts.rails]
+activate = "true"
+
+[layouts.rails.windows.server]
+command             = "bin/dev"
+open_keys_with_line = "\u001b:open {path}:{line}\r"
+""",
+    )
+
+    with pytest.raises(
+        HopConfigError, match="window 'server' field 'open_keys_with_line' is only valid on the 'editor' role"
+    ):
+        load_global_config(config_file)
+
+
 def test_load_global_config_accepts_arbitrary_activate_probe_on_top_level_window(tmp_path: Path) -> None:
     config_file = write(
         tmp_path / "config.toml",

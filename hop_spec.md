@@ -589,13 +589,15 @@ Changing vigun is outside of the scope of hop, but we need to have a contract do
 
 ---
 
-## Neovim lifecycle
+## Editor lifecycle
 
-- Neovim is started when needed (e.g. via `hop open`)
-- the shared editor is driven by writing keystrokes into kitty's pty via `kitty @ send-text`, matched by the `hop_role=editor` user var on the kitty window — no nvim remote-control socket is involved, so backends with a private filesystem (devcontainer, ssh) work without any cross-namespace socket coordination
+The editor is whatever command the user configures on the `editor` role; nvim is the default. The open-file dispatch is editor-agnostic by construction: hop substitutes `{path}` and `{line}` into the `open_keys` / `open_keys_with_line` templates declared on `[windows.editor]` (default templates emit vim's `:drop fnameescape(...)` sequence), then writes the rendered bytes into the editor's kitty pty.
+
+- the editor is started when needed (e.g. via `hop open`)
+- the shared editor is driven by writing keystrokes into kitty's pty via `kitty @ send-text`, matched by the `hop_role=editor` user var on the kitty window — no editor-side remote-control socket is involved, so backends with a private filesystem (devcontainer, ssh) work without any cross-namespace socket coordination
 - the editor window is rediscovered through its `_hop_editor:<session>` Sway mark, which `hop open` sets at launch time
 - raw Sway moves of the editor off `p:<session>` clear that mark — `hopd` reconciles marks against current placement on every Sway `window` event. The window stops being the session's editor, and the next `hop open` launches a fresh one
-- if Neovim is closed (`:qa`), it can be recreated by:
+- if the editor is closed (`:qa` in nvim, equivalent in other TUI editors), it can be recreated by:
 
 ```bash
 hop open

@@ -10,7 +10,7 @@ hop is conceptually similar to tmux sessions, except session/window management i
 - **GUI apps are part of the session** - browser, etc., not just terminals.
 - **No multiplexer in the way** - native terminal features (true color, kitty graphics, ligatures, mouse, OSC 52/8/133) work without lossy passthrough; system clipboard and scrollback are the real ones, not a copy-mode buffer.
 
-hop is built on top of [Sway](https://swaywm.org/) window manager, [Kitty](https://sw.kovidgoyal.net/kitty/) terminal emulator and [Neovim](https://neovim.io/) as an editor. Optional [Vicinae](https://www.vicinae.com/) launcher integration turns hop into a true "zero new key bindings" solution.
+hop is built on top of [Sway](https://swaywm.org/) window manager and [Kitty](https://sw.kovidgoyal.net/kitty/) terminal emulator. Any TUI editor works as the session editor — [Neovim](https://neovim.io/) is the default, vim / helix / kakoune / emacs `-nw` swap in via [config](#editor-keystroke-templates). Optional [Vicinae](https://www.vicinae.com/) launcher integration turns hop into a true "zero new key bindings" solution.
 
 ## Features
 
@@ -26,7 +26,7 @@ hop is built on top of [Sway](https://swaywm.org/) window manager, [Kitty](https
 - Python
 - [Sway](https://swaywm.org/)
 - [Kitty](https://sw.kovidgoyal.net/kitty/)
-- [Neovim](https://neovim.io/)
+- A TUI editor - ([Neovim](https://neovim.io/) by default)
 
 Optionally:
 
@@ -215,6 +215,37 @@ command = ""  # inherits the shell role's kitten wrap
 ```
 
 Multiple matching layouts compose: a Rails project that also has `vite.config.ts` activates both layouts and gets their windows.
+
+### Editor keystroke templates
+
+`hop open <file>[:<line>]` and the `kitten/hints` dispatch path drive the editor by writing raw bytes into its kitty window. Two `[windows.editor]` fields let you swap the byte sequence for any TUI editor:
+
+- `open_keys` — template used when the target has no line number.
+- `open_keys_with_line` — template used when the target has a line number.
+
+Both are Python `str.format` templates. `{path}` substitutes the target path (with any literal `'` doubled, see below); `{line}` substitutes the decimal line number.
+
+Defaults reproduce vim/nvim's `:drop fnameescape(...)` exactly:
+
+```python
+DEFAULT_OPEN_KEYS = "\x1b:exec 'drop '.fnameescape('{path}')\r"
+DEFAULT_OPEN_KEYS_WITH_LINE = DEFAULT_OPEN_KEYS + ":{line}\r"
+```
+
+Pointing hop at helix:
+
+```toml
+[windows.editor]
+command             = "helix"
+open_keys           = "\u001b:open {path}\r"
+open_keys_with_line = "\u001b:open {path}:{line}\r"
+```
+
+TOML basic strings disallow literal control bytes, so Escape has to be written as `\u001b` — TOML only defines `\b \t \n \f \r \" \\ \uXXXX \UXXXXXXXX`. Reading the helix template: `\u001b` drops the editor out of insert mode in case the kitten dispatched while the user was mid-edit, `:` enters command mode, `open {path}` is the open-file command, `\r` submits.
+
+The substitution layer doubles literal single quotes in `{path}` before formatting so the nvim default (which embeds `{path}` inside a single-quoted vim string) handles paths containing `'`. Templates that don't wrap `{path}` in `'...'` aren't affected — the doubling is a no-op for paths without `'`, which is the overwhelmingly common case.
+
+One semantic caveat: vim's `:drop` reuses an existing buffer when the file is already open; not every editor has that equivalent. Templates targeting editors without a "reuse" command may open a new buffer per call.
 
 ### Per-invocation override
 

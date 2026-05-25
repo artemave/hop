@@ -109,6 +109,54 @@ def test_top_level_windows_add_custom_role_with_active(tmp_path: Path) -> None:
     assert worker.active is True
 
 
+def test_top_level_editor_window_propagates_open_keys_templates(tmp_path: Path) -> None:
+    """``[windows.editor]`` overrides land on the built-in editor spec and
+    propagate ``open_keys`` / ``open_keys_with_line`` to the resolved WindowSpec."""
+    config = HopConfig(
+        windows=(
+            WindowConfig(
+                role="editor",
+                open_keys="\x1b:open {path}\r",
+                open_keys_with_line="\x1b:open {path}:{line}\r",
+            ),
+        )
+    )
+
+    windows = resolve_windows(config, build_session(tmp_path), runner=RecordingRunner())
+
+    editor = find_window(windows, "editor")
+    assert editor is not None
+    assert editor.open_keys == "\x1b:open {path}\r"
+    assert editor.open_keys_with_line == "\x1b:open {path}:{line}\r"
+
+
+def test_layout_editor_window_propagates_open_keys_templates(tmp_path: Path) -> None:
+    """The same propagation works when the editor override comes from a
+    matching layout, exercising the layout merge branch."""
+    config = HopConfig(
+        layouts=(
+            LayoutConfig(
+                name="rails",
+                activate="true",
+                windows=(
+                    WindowConfig(
+                        role="editor",
+                        open_keys="\x1b:open {path}\r",
+                        open_keys_with_line="\x1b:open {path}:{line}\r",
+                    ),
+                ),
+            ),
+        )
+    )
+
+    windows = resolve_windows(config, build_session(tmp_path), runner=RecordingRunner())
+
+    editor = find_window(windows, "editor")
+    assert editor is not None
+    assert editor.open_keys == "\x1b:open {path}\r"
+    assert editor.open_keys_with_line == "\x1b:open {path}:{line}\r"
+
+
 def test_top_level_window_with_activate_false_is_declared_but_inactive(tmp_path: Path) -> None:
     config = HopConfig(windows=(WindowConfig(role="console", command="bin/rails console", activate="false"),))
 

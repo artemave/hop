@@ -45,11 +45,18 @@ class WindowSpec:
     been evaluated, top-level always-on rules applied, per-window opt-outs
     honored. Bootstrap iterates the resolved tuple and launches windows
     whose flag is true (with shell launching unconditionally regardless).
+
+    ``open_keys`` and ``open_keys_with_line`` carry the editor role's
+    keystroke templates verbatim from config. ``None`` means "use the
+    editor adapter's built-in nvim default"; the parser already rejects
+    these fields on non-editor roles.
     """
 
     role: str
     command: str
     active: bool
+    open_keys: str | None = None
+    open_keys_with_line: str | None = None
 
 
 def resolve_windows(
@@ -108,7 +115,15 @@ def resolve_windows(
             # something undefined. An explicit `command = ""` reaches
             # here as "" (not None) and is preserved as a shell-like spec.
             continue
-        result.append(WindowSpec(role=spec.role, command=spec.command or "", active=spec.active))
+        result.append(
+            WindowSpec(
+                role=spec.role,
+                command=spec.command or "",
+                active=spec.active,
+                open_keys=spec.open_keys,
+                open_keys_with_line=spec.open_keys_with_line,
+            )
+        )
     return tuple(result)
 
 
@@ -117,6 +132,8 @@ class _MutableSpec:
     role: str
     command: str | None
     active: bool
+    open_keys: str | None = None
+    open_keys_with_line: str | None = None
 
 
 def _layout_matches(
@@ -154,11 +171,17 @@ def _apply_layout_window(
             role=window.role,
             command=window.command,
             active=active,
+            open_keys=window.open_keys,
+            open_keys_with_line=window.open_keys_with_line,
         )
         return
     if window.command is not None:
         existing.command = window.command
     existing.active = active
+    if window.open_keys is not None:
+        existing.open_keys = window.open_keys
+    if window.open_keys_with_line is not None:
+        existing.open_keys_with_line = window.open_keys_with_line
 
 
 def _apply_top_level_window(
@@ -178,6 +201,8 @@ def _apply_top_level_window(
             role=window.role,
             command=window.command,
             active=active,
+            open_keys=window.open_keys,
+            open_keys_with_line=window.open_keys_with_line,
         )
         return
     if window.command is not None:
@@ -186,6 +211,10 @@ def _apply_top_level_window(
         existing.active = _resolve_window_activate(
             window.activate, default=existing.active, session=session, runner=runner
         )
+    if window.open_keys is not None:
+        existing.open_keys = window.open_keys
+    if window.open_keys_with_line is not None:
+        existing.open_keys_with_line = window.open_keys_with_line
 
 
 def _resolve_window_activate(

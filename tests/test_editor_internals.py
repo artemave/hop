@@ -16,6 +16,7 @@ from hop.editor import (
     _split_target,
 )
 from hop.kitty import session_socket_address
+from hop.layouts import WindowSpec
 from hop.session import ProjectSession
 from hop.sway import SwayWindow
 
@@ -215,6 +216,50 @@ def test_build_open_keystrokes_doubles_single_quote() -> None:
     the only escape needed inside the literal — backslashes and the rest pass
     through to ``fnameescape`` for vim to handle."""
     assert _build_open_keystrokes("a'b/c.rb", None) == (f"{NORMAL_MODE}:exec 'drop '.fnameescape('a''b/c.rb'){CR}")
+
+
+def test_build_open_keystrokes_uses_custom_helix_template() -> None:
+    """A helix-shaped template renders with `{path}` and `{line}` substituted
+    in place; the path's single-quote doubling still runs but is invisible
+    because the helix command doesn't wrap the path in single quotes."""
+    helix_open = f"{NORMAL_MODE}:open {{path}}{CR}"
+    helix_open_with_line = f"{NORMAL_MODE}:open {{path}}:{{line}}{CR}"
+    assert (
+        _build_open_keystrokes("src/main.rs", None, open_keys=helix_open, open_keys_with_line=helix_open_with_line)
+        == f"{NORMAL_MODE}:open src/main.rs{CR}"
+    )
+    assert (
+        _build_open_keystrokes("src/main.rs", 42, open_keys=helix_open, open_keys_with_line=helix_open_with_line)
+        == f"{NORMAL_MODE}:open src/main.rs:42{CR}"
+    )
+
+
+def test_open_target_uses_custom_editor_keystroke_template() -> None:
+    """A session whose editor WindowSpec carries non-default templates emits
+    those bytes through send-text, not the nvim default."""
+    sway = StubSwayAdapter([_marked_editor(31)])
+    ls_response = [{"wm_class": "hop:editor", "tabs": [{"windows": [{"id": 99}]}]}]
+    transport = _RecordingTransport(ls_response)
+    adapter = SharedNeovimEditorAdapter(
+        sway=sway,
+        kitty_io=IpcKittyEditorIO(transport_factory=lambda _addr: transport),
+        session_windows_for=lambda _session: (
+            WindowSpec(
+                role="editor",
+                command="helix",
+                active=True,
+                open_keys=f"{NORMAL_MODE}:open {{path}}{CR}",
+                open_keys_with_line=f"{NORMAL_MODE}:open {{path}}:{{line}}{CR}",
+            ),
+        ),
+    )
+
+    adapter.open_target(build_session(), target="src/main.rs:42")
+
+    assert transport.commands[-1] == (
+        "send-text",
+        {"match": "id:99", "data": f"text:{NORMAL_MODE}:open src/main.rs:42{CR}"},
+    )
 
 
 # --- target splitting -----------------------------------------------------

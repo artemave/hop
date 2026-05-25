@@ -43,11 +43,19 @@ class WindowConfig:
     ``command`` and ``activate`` are both optional at the config layer so
     project entries can override only the field they care about. Defaults
     are filled in by the resolver.
+
+    ``open_keys`` and ``open_keys_with_line`` are templates for the byte
+    sequence the editor adapter writes to the editor's kitty window when
+    dispatching a file. Only meaningful on the ``editor`` role; the parser
+    rejects them elsewhere. Both default to nvim-shaped sequences when
+    omitted (see ``hop/editor.py``).
     """
 
     role: str
     command: str | None = None
     activate: str | None = None
+    open_keys: str | None = None
+    open_keys_with_line: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -323,6 +331,10 @@ def _merge_window_pair(project: WindowConfig, global_: WindowConfig) -> WindowCo
         role=project.role,
         command=project.command if project.command is not None else global_.command,
         activate=project.activate if project.activate is not None else global_.activate,
+        open_keys=project.open_keys if project.open_keys is not None else global_.open_keys,
+        open_keys_with_line=(
+            project.open_keys_with_line if project.open_keys_with_line is not None else global_.open_keys_with_line
+        ),
     )
 
 
@@ -336,7 +348,8 @@ _BACKEND_FIELDS = (
     "noninteractive_prefix",
 )
 _LAYOUT_FIELDS = ("activate", "windows")
-_WINDOW_FIELDS = ("command", "activate")
+_WINDOW_FIELDS = ("command", "activate", "open_keys", "open_keys_with_line")
+_EDITOR_ONLY_WINDOW_FIELDS = ("open_keys", "open_keys_with_line")
 _LEGACY_FLAT_BACKEND_FIELDS = ("shell", "editor")
 _LEGACY_BACKEND_WINDOWS_FIELD = "windows"
 _LEGACY_WORKSPACE_FIELD = "workspace"
@@ -543,9 +556,22 @@ def _parse_window(role: str, table: dict[str, Any], *, context: str, source: Pat
     if unknown:
         msg = f"{source}: {context} has unknown field {unknown[0]!r}"
         raise HopConfigError(msg)
+    if role != EDITOR_ROLE:
+        misplaced = sorted(set(table) & set(_EDITOR_ONLY_WINDOW_FIELDS))
+        if misplaced:
+            msg = f"{source}: {context} field {misplaced[0]!r} is only valid on the {EDITOR_ROLE!r} role"
+            raise HopConfigError(msg)
     command = _parse_command(table, key="command", context=context, source=source, allow_empty=True)
     activate_raw = _parse_command(table, key="activate", context=context, source=source)
-    return WindowConfig(role=role, command=command, activate=activate_raw)
+    open_keys = _parse_command(table, key="open_keys", context=context, source=source)
+    open_keys_with_line = _parse_command(table, key="open_keys_with_line", context=context, source=source)
+    return WindowConfig(
+        role=role,
+        command=command,
+        activate=activate_raw,
+        open_keys=open_keys,
+        open_keys_with_line=open_keys_with_line,
+    )
 
 
 def _parse_command(

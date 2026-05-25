@@ -18,7 +18,7 @@ EDITOR_MARK_PREFIX = "_hop_editor:"
 EDITOR_READY_TIMEOUT_SECONDS = 5.0
 EDITOR_READY_POLL_INTERVAL_SECONDS = 0.05
 
-# Keystroke building blocks used to drive the in-pty nvim.
+# Keystroke building blocks used to drive the in-pty editor.
 # `<Esc>` (0x1b) is the prefix we send before `:drop`. Tempting to use
 # `<C-\><C-n>` (the "force normal mode" idiom that bypasses user mappings)
 # but its leading byte 0x1c is the tty's default `quit` control character.
@@ -26,9 +26,17 @@ EDITOR_READY_POLL_INTERVAL_SECONDS = 0.05
 # startup like `podman-compose exec devcontainer nvim` — the kernel
 # intercepts 0x1c and sends SIGQUIT to the foreground process group,
 # killing the launching process before nvim ever runs. `<Esc>` has no such
-# tty significance and reliably puts a running nvim into normal mode.
+# tty significance and reliably puts a running editor into normal mode.
 _NORMAL_MODE = "\x1b"
 _CR = "\r"
+
+# Default open-file keystroke templates — vim/nvim shaped. Users on other
+# TUI editors override these via ``[windows.editor]`` ``open_keys`` and
+# ``open_keys_with_line``. ``{path}`` substitutes the target path with
+# any literal single quotes doubled (vim's single-quoted string escape);
+# ``{line}`` substitutes the decimal line number.
+DEFAULT_OPEN_KEYS = f"{_NORMAL_MODE}:exec 'drop '.fnameescape('{{path}}'){_CR}"
+DEFAULT_OPEN_KEYS_WITH_LINE = f"{DEFAULT_OPEN_KEYS}:{{line}}{_CR}"
 
 SessionBackendFactory = Callable[[ProjectSession], SessionBackend]
 SessionWindowsFactory = Callable[[ProjectSession], Sequence[WindowSpec]]
@@ -291,7 +299,20 @@ class SharedNeovimEditorAdapter:
         window, _ = self._ensure_editor(session, keep_focus=True)
         self._sway.focus_window(window.id)
         path_text, line_number = _split_target(target)
-        self._kitty_io.send_text_to_editor(session, _build_open_keystrokes(path_text, line_number))
+        editor_spec = find_window(self._session_windows_for(session), EDITOR_ROLE)
+        open_keys = (editor_spec.open_keys if editor_spec is not None else None) or DEFAULT_OPEN_KEYS
+        open_keys_with_line = (
+            editor_spec.open_keys_with_line if editor_spec is not None else None
+        ) or DEFAULT_OPEN_KEYS_WITH_LINE
+        self._kitty_io.send_text_to_editor(
+            session,
+            _build_open_keystrokes(
+                path_text,
+                line_number,
+                open_keys=open_keys,
+                open_keys_with_line=open_keys_with_line,
+            ),
+        )
 
     def _ensure_editor(self, session: ProjectSession, *, keep_focus: bool) -> tuple[SwayWindow, bool]:
         existing = self._find_editor_window(session)
@@ -395,21 +416,28 @@ def _coerce_ls_payload(response: object) -> Sequence[object]:
     return ()
 
 
-def _build_open_keystrokes(path: str, line_number: int | None) -> str:
-    """Build the keystroke sequence that opens ``path`` in nvim.
+def _build_open_keystrokes(
+    path: str,
+    line_number: int | None,
+    *,
+    open_keys: str = DEFAULT_OPEN_KEYS,
+    open_keys_with_line: str = DEFAULT_OPEN_KEYS_WITH_LINE,
+) -> str:
+    """Substitute ``path`` (and optionally ``line_number``) into the editor
+    template.
 
-    Wrapping the path in ``fnameescape`` lets vim handle every metacharacter
-    its command line cares about (spaces, ``%``, ``#``, ``\\`` , ``[``, etc.)
-    without us reimplementing those rules in Python. The path itself is
-    embedded as a vim single-quoted string, where the only escape needed is
-    doubling internal single quotes.
+    The path's literal single quotes are doubled before substitution so the
+    default vim template (which embeds ``{path}`` inside a single-quoted vim
+    string) handles paths containing ``'`` without breaking out of the
+    string. The doubling is a no-op for paths without ``'``, which is the
+    overwhelmingly common case; non-vim templates that don't wrap ``{path}``
+    in ``'...'`` are unaffected.
     """
 
     quoted = path.replace("'", "''")
-    sequence = f"{_NORMAL_MODE}:exec 'drop '.fnameescape('{quoted}'){_CR}"
-    if line_number is not None:
-        sequence += f":{line_number}{_CR}"
-    return sequence
+    if line_number is None:
+        return open_keys.format(path=quoted)
+    return open_keys_with_line.format(path=quoted, line=line_number)
 
 
 def _split_target(target: str) -> tuple[str, int | None]:
