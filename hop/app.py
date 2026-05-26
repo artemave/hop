@@ -329,7 +329,7 @@ def execute_command(
                 # Spawning an additional terminal in an already-live session:
                 # the backend is fixed at session creation; --backend is ignored.
                 # A closed editor stays closed — recover it explicitly via
-                # `hop open` (or the vicinae `Hop editor` entry).
+                # `hop term --role editor` (or the vicinae `Hop editor` entry).
                 spawn_session_terminal(
                     current_directory,
                     terminals=services.kitty,
@@ -426,6 +426,7 @@ def execute_command(
                 current_directory,
                 terminals=services.kitty,
                 sway=services.sway,
+                neovim=services.neovim,
                 role=role,
             )
         case RunCommand(role=role, command_text=command_text, focus=focus):

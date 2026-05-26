@@ -26,6 +26,14 @@ class StubSwayAdapter:
         self.focused_window_ids.append(window_id)
 
 
+class StubNeovimAdapter:
+    def __init__(self) -> None:
+        self.focused: list[str] = []
+
+    def focus(self, session: ProjectSession) -> None:
+        self.focused.append(session.session_name)
+
+
 def test_focus_terminal_routes_by_role(tmp_path: Path) -> None:
     project_root = tmp_path / "demo"
     nested_directory = project_root / "src"
@@ -38,6 +46,7 @@ def test_focus_terminal_routes_by_role(tmp_path: Path) -> None:
         nested_directory,
         terminals=kitty,
         sway=sway,
+        neovim=StubNeovimAdapter(),
         role="test",
     )
 
@@ -73,6 +82,7 @@ def test_focus_terminal_escalates_via_sway_ipc_when_role_window_exists(tmp_path:
         project_root,
         terminals=kitty,
         sway=sway,
+        neovim=StubNeovimAdapter(),
         role="console",
     )
 
@@ -97,6 +107,7 @@ def test_focus_terminal_matches_role_via_x11_window_class_fallback(tmp_path: Pat
         project_root,
         terminals=StubKittyAdapter(),
         sway=sway,
+        neovim=StubNeovimAdapter(),
         role="console",
     )
 
@@ -119,6 +130,7 @@ def test_focus_terminal_skips_sway_focus_when_no_role_window_visible_yet(tmp_pat
         project_root,
         terminals=kitty,
         sway=sway,
+        neovim=StubNeovimAdapter(),
         role="console",
     )
 
@@ -145,7 +157,34 @@ def test_focus_terminal_ignores_role_windows_on_other_workspaces(tmp_path: Path)
         project_root,
         terminals=StubKittyAdapter(),
         sway=sway,
+        neovim=StubNeovimAdapter(),
         role="console",
     )
 
+    assert sway.focused_window_ids == []
+
+
+def test_focus_terminal_editor_role_routes_through_neovim_adapter(tmp_path: Path) -> None:
+    """The editor isn't a plain kitty role terminal. `focus_terminal` with
+    `role="editor"` delegates to the neovim adapter's `focus`, which owns
+    the shared-nvim lifecycle (launch socket, sway mark, recreate after :qa).
+    The kitty adapter's role-terminal launch path is skipped entirely."""
+
+    project_root = tmp_path / "rails"
+    project_root.mkdir(parents=True)
+
+    kitty = StubKittyAdapter()
+    sway = StubSwayAdapter()
+    neovim = StubNeovimAdapter()
+
+    focus_terminal(
+        project_root,
+        terminals=kitty,
+        sway=sway,
+        neovim=neovim,
+        role="editor",
+    )
+
+    assert neovim.focused == ["rails"]
+    assert kitty.ensured == []
     assert sway.focused_window_ids == []

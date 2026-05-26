@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Callable, Iterable, Protocol, Sequence
 
 from hop.commands.session import SESSION_WORKSPACE_PREFIX, SessionListing
-from hop.config import BROWSER_ROLE, EDITOR_ROLE
+from hop.config import BROWSER_ROLE
 from hop.layouts import WindowSpec
 from hop.session import ProjectSession
 
@@ -173,9 +173,7 @@ def _window_script(
     # mid-bootstrap. Without it, a slow first-time `prepare` (compose
     # recreate, image pull) leaves the user with "nothing happens" because
     # hop dies before kitty launches.
-    if role == EDITOR_ROLE:
-        body = "exec setsid -f hop open\n"
-    elif role == BROWSER_ROLE:
+    if role == BROWSER_ROLE:
         body = "exec setsid -f hop browser\n"
     else:
         body = f"exec setsid -f hop term --role {shlex.quote(role)}\n"

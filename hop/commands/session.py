@@ -158,7 +158,8 @@ def spawn_session_terminal(
     # `EnterSessionCommand` routes that through the full first-entry
     # bootstrap instead, so prepare runs and every configured window comes
     # up. Re-creating a closed editor is the user's explicit choice via
-    # `hop open` (or the vicinae `Hop editor` entry, which calls `hop open`).
+    # `hop term --role editor` (or the vicinae `Hop editor` entry, which
+    # calls the same command).
     existing_roles = {window.role for window in terminals.list_session_windows(session) if window.role}
     role = _next_adhoc_shell_role(existing_roles)
     terminals.ensure_terminal(session, role=role)

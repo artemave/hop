@@ -32,7 +32,7 @@ class ListWindowsCommand:
 
 @dataclass(frozen=True, slots=True)
 class OpenCommand:
-    target: str | None = None
+    target: str
 
 
 @dataclass(frozen=True, slots=True)

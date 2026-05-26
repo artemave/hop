@@ -10,11 +10,7 @@ from hop.session import ProjectSession
 
 class StubNeovimAdapter:
     def __init__(self) -> None:
-        self.focused_sessions: list[str] = []
         self.opened_targets: list[tuple[str, str]] = []
-
-    def focus(self, session: ProjectSession) -> None:
-        self.focused_sessions.append(session.session_name)
 
     def open_target(self, session: ProjectSession, *, target: str) -> None:
         self.opened_targets.append((session.session_name, target))
@@ -42,28 +38,13 @@ class StubBackend:
         return set()
 
 
-def test_no_target_focuses_session_editor(tmp_path: Path) -> None:
-    project_root = tmp_path / "demo"
-    project_root.mkdir()
-
-    neovim = StubNeovimAdapter()
-    browser = StubBrowserAdapter()
-
-    session = open_target_in_session(project_root, target=None, neovim=neovim, browser=browser)
-
-    assert session.session_name == "demo"
-    assert neovim.focused_sessions == ["demo"]
-    assert neovim.opened_targets == []
-    assert browser.calls == []
-
-
 def test_file_target_dispatches_to_shared_editor(tmp_path: Path) -> None:
     project_root = tmp_path / "demo"
     project_root.mkdir()
 
     neovim = StubNeovimAdapter()
 
-    open_target_in_session(
+    session = open_target_in_session(
         project_root,
         target="app/models/user.rb",
         neovim=neovim,
@@ -72,8 +53,8 @@ def test_file_target_dispatches_to_shared_editor(tmp_path: Path) -> None:
 
     # CLI passes the path through as typed; nvim resolves it against its own
     # cwd in the session's backend (which the host can't address).
+    assert session.session_name == "demo"
     assert neovim.opened_targets == [("demo", "app/models/user.rb")]
-    assert neovim.focused_sessions == []
 
 
 def test_file_with_line_target_keeps_line_suffix(tmp_path: Path) -> None:
@@ -208,7 +189,7 @@ def test_nested_directories_are_distinct_sessions(tmp_path: Path) -> None:
 
     neovim = StubNeovimAdapter()
 
-    open_target_in_session(project_root, target=None, neovim=neovim, browser=StubBrowserAdapter())
-    open_target_in_session(nested_directory, target=None, neovim=neovim, browser=StubBrowserAdapter())
+    open_target_in_session(project_root, target="lib/a.rb", neovim=neovim, browser=StubBrowserAdapter())
+    open_target_in_session(nested_directory, target="lib/b.rb", neovim=neovim, browser=StubBrowserAdapter())
 
-    assert neovim.focused_sessions == ["demo", "src"]
+    assert neovim.opened_targets == [("demo", "lib/a.rb"), ("src", "lib/b.rb")]

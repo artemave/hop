@@ -362,8 +362,9 @@ def test_execute_command_spawns_extra_shell_when_focused_on_session_workspace(tm
     # Sway reports we're already focused on this session's workspace, so bare
     # `hop` should spawn another shell rather than re-enter. The editor is
     # *not* implicitly resurrected — a closed editor stays closed until the
-    # user explicitly runs `hop open` (or picks the vicinae `Hop editor`
-    # entry). Kitty is alive, which gates the spawn-extra-shell branch.
+    # user explicitly runs `hop term --role editor` (or picks the vicinae
+    # `Hop editor` entry). Kitty is alive, which gates the spawn-extra-shell
+    # branch.
     services = build_services(focused_workspace="p:demo", alive_session_names=("demo",))
 
     assert (
@@ -793,16 +794,32 @@ def test_execute_command_tails_run_output_to_stdout(tmp_path: Path, monkeypatch:
     assert stdout.getvalue() == "hello\n"
 
 
-def test_execute_command_focuses_shared_editor_in_current_session(tmp_path: Path) -> None:
+def test_execute_command_focuses_shared_editor_via_term_role_editor(tmp_path: Path) -> None:
+    """`hop term --role editor` routes through the shared neovim adapter
+    rather than the kitty role launch path. The editor adapter's `focus`
+    handles launch-if-missing / focus-if-present / recreate-if-quit."""
     project_root = tmp_path / "demo"
     nested_directory = project_root / "src"
     nested_directory.mkdir(parents=True)
 
     services = build_services()
 
-    assert execute_command(OpenCommand(), cwd=nested_directory, services=services.as_services()) == 0
+    assert (
+        execute_command(
+            TermCommand(role="editor"),
+            cwd=nested_directory,
+            services=services.as_services(),
+        )
+        == 0
+    )
     assert services.sway.switched_workspaces == []
     assert services.neovim.focused_sessions == [("src", nested_directory.resolve())]
+    # The editor doesn't go through `ensure_terminal` — its launch path is
+    # editor-specific (composed `<editor>; <shell>`, deterministic listen
+    # socket, sway mark). Asserting nothing flowed through kitty here is
+    # what guards against the regression where a future refactor sends the
+    # editor through the regular role-terminal launch path.
+    assert services.kitty.ensured_roles == []
 
 
 def test_execute_command_routes_file_open_targets_to_shared_editor(tmp_path: Path) -> None:

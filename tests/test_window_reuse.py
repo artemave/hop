@@ -139,8 +139,12 @@ def test_repeated_hop_term_reuses_existing_window(tmp_path: Path) -> None:
 
     kitty = IdempotentKittyAdapter()
 
-    focus_terminal(session_root, terminals=kitty, sway=NoOpSwayAdapter(), role="shell")
-    focus_terminal(session_root, terminals=kitty, sway=NoOpSwayAdapter(), role="shell")
+    focus_terminal(
+        session_root, terminals=kitty, sway=NoOpSwayAdapter(), neovim=IdempotentNeovimAdapter(), role="shell"
+    )
+    focus_terminal(
+        session_root, terminals=kitty, sway=NoOpSwayAdapter(), neovim=IdempotentNeovimAdapter(), role="shell"
+    )
 
     assert kitty.created_windows == [("myproject", "shell")]
     assert kitty.focused_windows == [("myproject", "shell")]
@@ -153,9 +157,13 @@ def test_hop_term_different_roles_create_distinct_windows(tmp_path: Path) -> Non
 
     kitty = IdempotentKittyAdapter()
 
-    focus_terminal(session_root, terminals=kitty, sway=NoOpSwayAdapter(), role="shell")
-    focus_terminal(session_root, terminals=kitty, sway=NoOpSwayAdapter(), role="test")
-    focus_terminal(session_root, terminals=kitty, sway=NoOpSwayAdapter(), role="server")
+    focus_terminal(
+        session_root, terminals=kitty, sway=NoOpSwayAdapter(), neovim=IdempotentNeovimAdapter(), role="shell"
+    )
+    focus_terminal(session_root, terminals=kitty, sway=NoOpSwayAdapter(), neovim=IdempotentNeovimAdapter(), role="test")
+    focus_terminal(
+        session_root, terminals=kitty, sway=NoOpSwayAdapter(), neovim=IdempotentNeovimAdapter(), role="server"
+    )
 
     assert set(kitty.created_windows) == {
         ("myproject", "shell"),
@@ -172,9 +180,9 @@ def test_hop_term_recreates_window_after_manual_close(tmp_path: Path) -> None:
 
     kitty = IdempotentKittyAdapter()
 
-    focus_terminal(session_root, terminals=kitty, sway=NoOpSwayAdapter(), role="test")
+    focus_terminal(session_root, terminals=kitty, sway=NoOpSwayAdapter(), neovim=IdempotentNeovimAdapter(), role="test")
     kitty.close_window("myproject", "test")
-    focus_terminal(session_root, terminals=kitty, sway=NoOpSwayAdapter(), role="test")
+    focus_terminal(session_root, terminals=kitty, sway=NoOpSwayAdapter(), neovim=IdempotentNeovimAdapter(), role="test")
 
     assert kitty.created_windows == [("myproject", "test"), ("myproject", "test")]
     assert kitty.focused_windows == []
@@ -220,35 +228,40 @@ def test_hop_run_reuses_existing_role_window(tmp_path: Path) -> None:
     ]
 
 
-# ─── Editor reuse and recreation: hop open ────────────────────────────────────
+# ─── Editor reuse and recreation: hop term --role editor ──────────────────────
 
 
-def test_repeated_hop_open_reuses_existing_editor(tmp_path: Path) -> None:
-    """Calling hop open twice focuses the existing Neovim instance without launching a second."""
+def test_repeated_term_editor_reuses_existing_editor(tmp_path: Path) -> None:
+    """Calling `hop term --role editor` twice focuses the existing Neovim
+    instance without launching a second."""
     session_root = tmp_path / "myproject"
     session_root.mkdir()
 
     neovim = IdempotentNeovimAdapter()
-    browser = IdempotentBrowserAdapter()
+    kitty = IdempotentKittyAdapter()
 
-    open_target_in_session(session_root, target=None, neovim=neovim, browser=browser)
-    open_target_in_session(session_root, target=None, neovim=neovim, browser=browser)
+    focus_terminal(session_root, terminals=kitty, sway=NoOpSwayAdapter(), neovim=neovim, role="editor")
+    focus_terminal(session_root, terminals=kitty, sway=NoOpSwayAdapter(), neovim=neovim, role="editor")
 
     assert neovim.launched == ["myproject"]
     assert neovim.focused == ["myproject"]
+    # The editor bypasses the kitty role-launch path — its adapter handles its
+    # own lifecycle.
+    assert kitty.created_windows == []
 
 
-def test_hop_open_recreates_editor_after_quit(tmp_path: Path) -> None:
-    """After :qa, the next hop open launches a fresh editor instead of accumulating windows."""
+def test_term_editor_recreates_editor_after_quit(tmp_path: Path) -> None:
+    """After :qa, the next `hop term --role editor` launches a fresh editor
+    instead of accumulating windows."""
     session_root = tmp_path / "myproject"
     session_root.mkdir()
 
     neovim = IdempotentNeovimAdapter()
-    browser = IdempotentBrowserAdapter()
+    kitty = IdempotentKittyAdapter()
 
-    open_target_in_session(session_root, target=None, neovim=neovim, browser=browser)
+    focus_terminal(session_root, terminals=kitty, sway=NoOpSwayAdapter(), neovim=neovim, role="editor")
     neovim.quit_editor("myproject")
-    open_target_in_session(session_root, target=None, neovim=neovim, browser=browser)
+    focus_terminal(session_root, terminals=kitty, sway=NoOpSwayAdapter(), neovim=neovim, role="editor")
 
     assert neovim.launched == ["myproject", "myproject"]
     assert neovim.focused == []
@@ -261,8 +274,9 @@ def test_hop_open_routes_target_to_existing_editor_without_relaunch(tmp_path: Pa
 
     neovim = IdempotentNeovimAdapter()
     browser = IdempotentBrowserAdapter()
+    kitty = IdempotentKittyAdapter()
 
-    open_target_in_session(session_root, target=None, neovim=neovim, browser=browser)
+    focus_terminal(session_root, terminals=kitty, sway=NoOpSwayAdapter(), neovim=neovim, role="editor")
     open_target_in_session(
         session_root,
         target="app/models/user.rb:42",
@@ -334,8 +348,12 @@ def test_same_role_in_different_sessions_creates_separate_windows(tmp_path: Path
 
     kitty = IdempotentKittyAdapter()
 
-    focus_terminal(session_a_root, terminals=kitty, sway=NoOpSwayAdapter(), role="shell")
-    focus_terminal(session_b_root, terminals=kitty, sway=NoOpSwayAdapter(), role="shell")
+    focus_terminal(
+        session_a_root, terminals=kitty, sway=NoOpSwayAdapter(), neovim=IdempotentNeovimAdapter(), role="shell"
+    )
+    focus_terminal(
+        session_b_root, terminals=kitty, sway=NoOpSwayAdapter(), neovim=IdempotentNeovimAdapter(), role="shell"
+    )
 
     assert set(kitty.created_windows) == {("project-a", "shell"), ("project-b", "shell")}
     assert kitty.focused_windows == []
@@ -353,9 +371,15 @@ def test_switching_back_to_session_reuses_its_existing_windows(tmp_path: Path) -
 
     kitty = IdempotentKittyAdapter()
 
-    focus_terminal(session_a_root, terminals=kitty, sway=NoOpSwayAdapter(), role="shell")
-    focus_terminal(session_b_root, terminals=kitty, sway=NoOpSwayAdapter(), role="shell")
-    focus_terminal(session_a_root, terminals=kitty, sway=NoOpSwayAdapter(), role="shell")
+    focus_terminal(
+        session_a_root, terminals=kitty, sway=NoOpSwayAdapter(), neovim=IdempotentNeovimAdapter(), role="shell"
+    )
+    focus_terminal(
+        session_b_root, terminals=kitty, sway=NoOpSwayAdapter(), neovim=IdempotentNeovimAdapter(), role="shell"
+    )
+    focus_terminal(
+        session_a_root, terminals=kitty, sway=NoOpSwayAdapter(), neovim=IdempotentNeovimAdapter(), role="shell"
+    )
 
     assert kitty.created_windows == [("project-a", "shell"), ("project-b", "shell")]
     assert kitty.focused_windows == [("project-a", "shell")]
@@ -369,11 +393,12 @@ def test_session_switch_does_not_mix_editor_instances(tmp_path: Path) -> None:
     session_b_root.mkdir()
 
     neovim = IdempotentNeovimAdapter()
-    browser = IdempotentBrowserAdapter()
+    kitty = IdempotentKittyAdapter()
+    sway = NoOpSwayAdapter()
 
-    open_target_in_session(session_a_root, target=None, neovim=neovim, browser=browser)
-    open_target_in_session(session_b_root, target=None, neovim=neovim, browser=browser)
-    open_target_in_session(session_a_root, target=None, neovim=neovim, browser=browser)
+    focus_terminal(session_a_root, terminals=kitty, sway=sway, neovim=neovim, role="editor")
+    focus_terminal(session_b_root, terminals=kitty, sway=sway, neovim=neovim, role="editor")
+    focus_terminal(session_a_root, terminals=kitty, sway=sway, neovim=neovim, role="editor")
 
     assert neovim.launched == ["project-a", "project-b"]
     assert neovim.focused == ["project-a"]

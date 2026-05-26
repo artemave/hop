@@ -384,10 +384,10 @@ def test_launch_composes_editor_then_shell_through_backend_inline() -> None:
 
 
 def test_focus_relocates_freshly_launched_editor_to_session_workspace() -> None:
-    """When `hop open` is invoked from outside the session, kitty creates the
-    editor on whatever Sway workspace was focused at launch time. Hop must
-    move it onto the session's workspace before focusing — otherwise the
-    user lands in nvim on the wrong workspace and the kitten dispatch can't
+    """When `hop term --role editor` is invoked from outside the session, kitty
+    creates the editor on whatever Sway workspace was focused at launch time.
+    Hop must move it onto the session's workspace before focusing — otherwise
+    the user lands in nvim on the wrong workspace and the kitten dispatch can't
     find the editor by Sway mark."""
     sway = StubSwayAdapter()
 

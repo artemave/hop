@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Callable
 
 from hop.backends import CommandBackend, SessionBackend
-from hop.commands.open import OpenBrowserAdapter, OpenTargetNeovimAdapter, dispatch_resolved_target
+from hop.commands.open import OpenBrowserAdapter, OpenNeovimAdapter, dispatch_resolved_target
 from hop.kitty import session_name_from_listen_on
 from hop.session import ProjectSession, resolve_project_session
 from hop.state import SessionState, load_sessions
@@ -27,7 +27,7 @@ def open_selection_in_window(
     *,
     source_cwd: Path | str | None,
     listen_on: str | None,
-    neovim: OpenTargetNeovimAdapter,
+    neovim: OpenNeovimAdapter,
     browser: OpenBrowserAdapter,
     sessions_loader: Callable[[], dict[str, SessionState]] = load_sessions,
     session_backend_for: Callable[[ProjectSession], SessionBackend] = lambda _session: _BUILTIN_HOST_BACKEND,

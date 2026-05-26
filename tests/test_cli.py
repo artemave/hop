@@ -27,7 +27,6 @@ from hop.commands import (
         (["list"], ListSessionsCommand()),
         (["list", "--json"], ListSessionsCommand(as_json=True)),
         (["windows"], ListWindowsCommand()),
-        (["open"], OpenCommand()),
         (["open", "app/models/user.rb:42"], OpenCommand(target="app/models/user.rb:42")),
         (["open", "UsersController#index"], OpenCommand(target="UsersController#index")),
         (["open", "https://example.com"], OpenCommand(target="https://example.com")),
@@ -70,6 +69,14 @@ def test_run_defaults_to_shell_role() -> None:
     assert command == RunCommand(command_text="pytest -q", role="shell")
 
 
+def test_hop_open_requires_target() -> None:
+    # No-arg `hop open` is gone — focusing the editor lives on
+    # `hop term --role editor`. argparse emits its standard "the following
+    # arguments are required" message and exits non-zero.
+    with pytest.raises(SystemExit):
+        parse_command(["open"])
+
+
 def test_backend_flag_on_bare_hop() -> None:
     assert parse_command(["--backend", "devcontainer"]) == EnterSessionCommand(backend="devcontainer")
 
@@ -93,7 +100,7 @@ def test_backend_flag_rejected_on_term_with_role() -> None:
         ["--backend", "host", "switch", "demo"],
         ["--backend", "host", "move", "demo"],
         ["--backend", "host", "list"],
-        ["--backend", "host", "open"],
+        ["--backend", "host", "open", "foo.rb"],
         ["--backend", "host", "run", "ls"],
         ["--backend", "host", "tail", "abc"],
         ["--backend", "host", "browser"],

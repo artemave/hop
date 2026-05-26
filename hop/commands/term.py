@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol, Sequence
 
+from hop.config import EDITOR_ROLE
 from hop.session import ProjectSession, resolve_project_session
 from hop.sway import SwayWindow
 
@@ -17,14 +18,29 @@ class TermSwayAdapter(Protocol):
     def focus_window(self, window_id: int) -> None: ...
 
 
+class TermNeovimAdapter(Protocol):
+    def focus(self, session: ProjectSession) -> None: ...
+
+
 def focus_terminal(
     cwd: Path | str,
     *,
     terminals: TermKittyAdapter,
     sway: TermSwayAdapter,
+    neovim: TermNeovimAdapter,
     role: str,
 ) -> ProjectSession:
     session = resolve_project_session(cwd)
+    if role == EDITOR_ROLE:
+        # The editor isn't a plain kitty role terminal — it has its own
+        # launch path (composed `<editor>; <shell>`, deterministic listen
+        # socket, `_hop_editor:<session>` sway mark). Delegating to the
+        # neovim adapter's `focus` reuses the existing launch-if-missing /
+        # focus-if-present / recreate-if-quit lifecycle, and skips this
+        # function's trailing sway focus escalation because the editor
+        # adapter does its own through `_sway.focus_window`.
+        neovim.focus(session)
+        return session
     terminals.ensure_terminal(session, role=role)
     # Kitty's `focus-window` IPC asks Sway for focus via the
     # `xdg-activation` protocol, which Sway can refuse when the

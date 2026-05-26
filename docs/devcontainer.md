@@ -12,7 +12,7 @@ For a session whose backend is `devcontainer`, hop will:
 |---|---|
 | First entry into the session (`hop`) | the backend's `prepare` command, then bootstraps kitty |
 | Each role terminal | the backend's `shell` command (one per terminal — same container) |
-| `hop open` | the backend's `editor` command (hop drives nvim by writing keystrokes to kitty's pty — no socket setup) |
+| `hop term --role editor` | the backend's `editor` command (hop drives nvim by writing keystrokes to kitty's pty — no socket setup) |
 | `hop kill` | closes kitty windows, then runs the backend's `teardown` command |
 
 All command lists live in `~/.config/hop/config.toml` under `[backends.<name>]`.
@@ -140,7 +140,7 @@ You should see:
 
 - `podman ps` (or `docker ps`) shows a new container for the service.
 - A kitty window opens whose prompt is inside `/workspace` (or whichever `working_dir` your compose service sets).
-- `hop open` opens an in-container nvim; `:lua print(vim.fn.getcwd())` shows the container path.
+- `hop term --role editor` opens an in-container nvim; `:lua print(vim.fn.getcwd())` shows the container path.
 
 You can verify the persisted state:
 
@@ -211,7 +211,7 @@ prepare = """
 After `hop` brings the session up, open the editor window and from a shell inside the container run:
 
 ```bash
-hop open
+hop term --role editor
 ```
 
 It should focus your host editor window (a no-op if you're already on it, otherwise switching to the session's Sway workspace). Errors from the acceptor — `no focused Sway window`, `session 'X' from focused window is not in hop state`, etc. — go to the shim's stderr.
@@ -374,7 +374,7 @@ debug_log = true
 
 That appends every backend lifecycle command (cmd, exit, stdout, stderr) and the kitty bootstrap launcher's argv + stdio to `$XDG_RUNTIME_DIR/hop/debug.log` (or set `debug_log = "/some/path"` for a custom path). Re-run the failing `hop` invocation, then `tail -n 200 $XDG_RUNTIME_DIR/hop/debug.log`.
 
-### `hop open` opens nvim but file-open calls do nothing
+### `hop term --role editor` opens nvim but file-open calls do nothing
 
 Hop drives the in-container nvim by writing keystrokes (`<C-\><C-n>:exec 'drop '.fnameescape(...)<CR>`) into the kitty window's pty. If the dispatch doesn't open the file, the most common causes are:
 

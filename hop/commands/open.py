@@ -16,18 +16,8 @@ from hop.targets import (
 _BUILTIN_HOST_BACKEND = CommandBackend(name="host", interactive_prefix="", noninteractive_prefix="")
 
 
-class OpenTargetNeovimAdapter(Protocol):
+class OpenNeovimAdapter(Protocol):
     def open_target(self, session: ProjectSession, *, target: str) -> None: ...
-
-
-class OpenNeovimAdapter(OpenTargetNeovimAdapter, Protocol):
-    """Wider protocol for the CLI: no-arg ``hop open`` focuses the editor.
-
-    The kitten never calls ``focus`` (it always has a parsed target), so it
-    binds against the narrower :class:`OpenTargetNeovimAdapter`.
-    """
-
-    def focus(self, session: ProjectSession) -> None: ...
 
 
 class OpenBrowserAdapter(Protocol):
@@ -39,7 +29,7 @@ def dispatch_resolved_target(
     *,
     session: ProjectSession,
     backend: SessionBackend,
-    neovim: OpenTargetNeovimAdapter,
+    neovim: OpenNeovimAdapter,
     browser: OpenBrowserAdapter,
 ) -> ResolvedTarget:
     """Hand a parsed target to the right adapter.
@@ -59,29 +49,25 @@ def dispatch_resolved_target(
 def open_target_in_session(
     cwd: Path | str,
     *,
-    target: str | None,
+    target: str,
     neovim: OpenNeovimAdapter,
     browser: OpenBrowserAdapter,
     session_backend_for: Callable[[ProjectSession], SessionBackend] = lambda _session: _BUILTIN_HOST_BACKEND,
 ) -> ProjectSession:
     """Resolve and dispatch a single target for the cwd-derived session.
 
-    No-arg form focuses the session editor. Otherwise the parser splits
-    URL vs Rails-ref vs file:line (``parse_visible_output_target``), the
-    backend turns it into a concrete dispatchable target (``resolve_target``
-    — Rails refs read the controller file to find the ``def <action>``
-    line; plain file paths are passed through as typed so the editor in
-    the backend resolves them against its own cwd), then it's handed to
-    the right adapter. Plain file paths skip any existence check so opening
-    a not-yet-created file lands in ``:enew``; Rails refs DO get verified
-    because the line number lookup needs the action to exist anyway.
+    The parser splits URL vs Rails-ref vs file:line
+    (``parse_visible_output_target``), the backend turns it into a concrete
+    dispatchable target (``resolve_target`` — Rails refs read the controller
+    file to find the ``def <action>`` line; plain file paths are passed
+    through as typed so the editor in the backend resolves them against its
+    own cwd), then it's handed to the right adapter. Plain file paths skip
+    any existence check so opening a not-yet-created file lands in ``:enew``;
+    Rails refs DO get verified because the line number lookup needs the
+    action to exist anyway.
     """
 
     session = resolve_project_session(cwd)
-
-    if target is None:
-        neovim.focus(session)
-        return session
 
     syntactic = parse_visible_output_target(target)
     if syntactic is None:

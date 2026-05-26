@@ -270,20 +270,7 @@ Behavior:
 - run the same window resolver that bootstrap uses (built-in defaults + active layouts + top-level windows), evaluating layout `activate` probes against the project root
 - print each resolved role on its own line, in resolution order (built-ins, then active-layout windows, then top-level windows)
 
-Intended for launchers (rofi, fuzzel) to enumerate the focusable / launchable windows for the focused session workspace and dispatch to `hop open` (editor), `hop browser` (browser), or `hop term --role <name>` (any other role). The vicinae integration consumes the same resolver via the `hopd` daemon (see "Vicinae integration daemon" below) — it does not invoke `hop windows` directly because it has the resolver in-process.
-
----
-
-### Open editor
-
-```bash
-hop open
-```
-
-- ensure session Neovim is running
-- focus it
-- recreate it cleanly if the previous editor was closed with `:qa`
-- reuse the existing session editor instead of creating duplicates
+Intended for launchers (rofi, fuzzel) to enumerate the focusable / launchable windows for the focused session workspace and dispatch to `hop browser` (browser) or `hop term --role <name>` (every role including `editor`). The vicinae integration consumes the same resolver via the `hopd` daemon (see "Vicinae integration daemon" below) — it does not invoke `hop windows` directly because it has the resolver in-process.
 
 ---
 
@@ -327,6 +314,7 @@ Behavior:
 - if a terminal with that role exists → focus it
 - otherwise → create it
 - terminal lookup is keyed by stable Kitty metadata for the session and role, not by ad hoc window IDs
+- `hop term --role editor` is the way to focus or launch the session's shared Neovim. The editor isn't a plain role terminal — it has its own launch path (composed `<editor>; <shell>` startup, a deterministic per-session listen socket, an `_hop_editor:<session>` Sway mark) — but the verb is unified with every other role so launchers (vicinae, rofi) dispatch all session windows through one command.
 - `hop term`, `hop open`, `hop run`, and `hop browser` do **not** switch Sway workspaces by default — they assume the caller is already on `p:<session>` (which is true when the command is invoked from any of that session's terminals). Use bare `hop` or `hop switch` to enter a session's workspace. `hop run --focus` is the one explicit opt-in that crosses workspaces, since asking to focus the role terminal is meaningless if the caller is somewhere else.
 
 `hop term` invoked without `--role` is an alias for bare `hop` — same env-driven branching: spawns a new `shell-<N>` terminal when run from inside a session, otherwise enters the session.
@@ -444,7 +432,7 @@ Behavior:
 
 Intended to be wired in sway config as `exec hopd` — *not* `exec_always`. The IPC subscription persists across sway config reloads, so a single instance covers the whole sway session; `exec_always` would spawn a duplicate on every reload. If hopd dies between sway sessions the user is responsible for relaunching it (`hopd &` from a terminal, or restart sway). No symlink-based install, no manual reload — vicinae's own `QFileSystemWatcher` picks up the changes within ~100 ms.
 
-Activated entries in vicinae dispatch via `hop open` (editor role), `hop browser` (browser role), `hop term --role <name>` (any other role), `hop switch <name>`, or `hop kill`. The activated `hop kill` script detaches via `setsid -f` so vicinae's UI-close SIGTERM does not interrupt teardown.
+Activated entries in vicinae dispatch via `hop browser` (browser role), `hop term --role <name>` (every other role including `editor`), `hop switch <name>`, or `hop kill`. The activated `hop kill` script detaches via `setsid -f` so vicinae's UI-close SIGTERM does not interrupt teardown.
 
 `hopd` also hosts the **bridge acceptor** (see next section) on a unix socket. The acceptor runs in a daemon thread alongside the Sway IPC subscription and shares `hopd`'s lifecycle — no extra `exec` line in sway config.
 
@@ -593,14 +581,14 @@ Changing vigun is outside of the scope of hop, but we need to have a contract do
 
 The editor is whatever command the user configures on the `editor` role; nvim is the default. The open-file dispatch is editor-agnostic by construction: hop substitutes `{path}` and `{line}` into the `open_keys` / `open_keys_with_line` templates declared on `[windows.editor]` (default templates emit vim's `:drop fnameescape(...)` sequence), then writes the rendered bytes into the editor's kitty pty.
 
-- the editor is started when needed (e.g. via `hop open`)
+- the editor is started when needed (e.g. via `hop term --role editor`, or when `hop open <target>` lands on a file/Rails ref)
 - the shared editor is driven by writing keystrokes into kitty's pty via `kitty @ send-text`, matched by the `hop_role=editor` user var on the kitty window — no editor-side remote-control socket is involved, so backends with a private filesystem (devcontainer, ssh) work without any cross-namespace socket coordination
-- the editor window is rediscovered through its `_hop_editor:<session>` Sway mark, which `hop open` sets at launch time
-- raw Sway moves of the editor off `p:<session>` clear that mark — `hopd` reconciles marks against current placement on every Sway `window` event. The window stops being the session's editor, and the next `hop open` launches a fresh one
+- the editor window is rediscovered through its `_hop_editor:<session>` Sway mark, which `hop term --role editor` sets at launch time
+- raw Sway moves of the editor off `p:<session>` clear that mark — `hopd` reconciles marks against current placement on every Sway `window` event. The window stops being the session's editor, and the next `hop term --role editor` launches a fresh one
 - if the editor is closed (`:qa` in nvim, equivalent in other TUI editors), it can be recreated by:
 
 ```bash
-hop open
+hop term --role editor
 ```
 
 ---

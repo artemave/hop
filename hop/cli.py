@@ -55,7 +55,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("windows")
 
     open_parser = subparsers.add_parser("open")
-    open_parser.add_argument("target", nargs="?")
+    open_parser.add_argument("target")
 
     term_parser = subparsers.add_parser("term")
     term_parser.add_argument("--role", default=None)

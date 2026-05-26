@@ -108,7 +108,7 @@ Verify:
 
 ```bash
 # From inside the remote shell (a session terminal):
-hop open
+hop term --role editor
 ```
 
 Errors from the acceptor — `no focused Sway window`, `session 'X' from focused window is not in hop state`, etc. — go to the shim's stderr. The bridge requires you to be focused on the session's **editor** window when the call is made; calls from role terminals (test/server) are rejected pending a future enhancement.
