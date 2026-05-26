@@ -26,7 +26,7 @@ hop is built on top of [Sway](https://swaywm.org/) window manager and [Kitty](ht
 - Python
 - [Sway](https://swaywm.org/) window manager
 - [Kitty](https://sw.kovidgoyal.net/kitty/) terminal emulator
-- A TUI editor - ([Neovim](https://neovim.io/) by default)
+- A TUI editor ([Neovim](https://neovim.io/) by default)
 
 Optionally:
 
