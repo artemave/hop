@@ -16,6 +16,7 @@ from hop.config import (
     merge_backends,
     merge_configs,
     merge_layouts,
+    merge_open_handlers,
     merge_windows,
 )
 
@@ -875,3 +876,76 @@ def test_default_global_config_path_falls_back_to_home_config(monkeypatch: pytes
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     monkeypatch.setenv("HOME", "/home/tester")
     assert default_global_config_path() == Path("/home/tester/.config/hop/config.toml")
+
+
+# --- open_handlers --------------------------------------------------------
+
+
+def test_load_global_config_parses_open_handlers(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    write(
+        config_path,
+        '[open_handlers]\n"*.pdf" = "zathura {path}"\n"*.png" = ""\n',
+    )
+
+    config = load_global_config(config_path)
+
+    assert config.open_handlers == (("*.pdf", "zathura {path}"), ("*.png", ""))
+
+
+def test_load_global_config_rejects_non_string_open_handler_template(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    write(config_path, '[open_handlers]\n"*.pdf" = 42\n')
+
+    with pytest.raises(HopConfigError, match="must be a string command template"):
+        load_global_config(config_path)
+
+
+def test_load_global_config_rejects_open_handlers_as_non_table(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.toml"
+    write(config_path, "open_handlers = 'not a table'\n")
+
+    with pytest.raises(HopConfigError, match="open_handlers' must be a table"):
+        load_global_config(config_path)
+
+
+def test_merge_open_handlers_project_wins_per_pattern() -> None:
+    project = HopConfig(open_handlers=(("*.pdf", "zathura {path}"),))
+    global_ = HopConfig(open_handlers=(("*.pdf", "xdg-open {path}"), ("*.png", "xdg-open {path}")))
+
+    merged = merge_open_handlers(project, global_)
+
+    assert merged == (
+        ("*.pdf", "zathura {path}"),  # project replaces global pdf entry, lands in project slot
+        ("*.png", "xdg-open {path}"),  # global-only, appended last
+    )
+
+
+def test_merge_configs_layers_builtin_open_handlers_under_user_config(tmp_path: Path) -> None:
+    """Hop ships a binary-only handler table. Users override per pattern in
+    their global / project config; the merged set retains user entries plus
+    every built-in default whose pattern the user didn't touch."""
+    config_path = tmp_path / "config.toml"
+    write(config_path, '[open_handlers]\n"*.pdf" = "zathura {path}"\n"*.png" = ""\n')
+
+    project = HopConfig()
+    global_ = load_global_config(config_path)
+
+    merged = merge_configs(project, global_)
+
+    by_pattern = dict(merged.open_handlers)
+    # User override wins
+    assert by_pattern["*.pdf"] == "zathura {path}"
+    # User opt-out persists (empty template surfaces; match_handler treats
+    # it as "no handler, fall through to nvim").
+    assert by_pattern["*.png"] == ""
+    # Built-in defaults that the user didn't touch are still present.
+    assert by_pattern["*.jpg"] == "xdg-open {path}"
+    assert by_pattern["*.mp4"] == "xdg-open {path}"
+    # Text-shaped extensions are explicitly NOT in the defaults.
+    assert "*.json" not in by_pattern
+    assert "*.yaml" not in by_pattern
+    assert "*.toml" not in by_pattern
+    assert "*.md" not in by_pattern
+    assert "*.svg" not in by_pattern
+    assert "*.rb" not in by_pattern

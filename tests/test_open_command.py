@@ -193,3 +193,197 @@ def test_nested_directories_are_distinct_sessions(tmp_path: Path) -> None:
     open_target_in_session(nested_directory, target="lib/b.rb", neovim=neovim, browser=StubBrowserAdapter())
 
     assert neovim.opened_targets == [("demo", "lib/a.rb"), ("src", "lib/b.rb")]
+
+
+# ─── open_handlers: binary files route through the system handler ─────────────
+
+
+class RecordingHandlerRunner:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    def run(self, session: ProjectSession, backend: object, *, command: str) -> None:
+        del backend
+        self.calls.append((session.session_name, command))
+
+
+_DEFAULT_HANDLERS: tuple[tuple[str, str], ...] = (
+    ("*.png", "xdg-open {path}"),
+    ("*.pdf", "xdg-open {path}"),
+    ("*.tar.gz", "xdg-open {path}"),
+)
+
+
+@pytest.mark.parametrize(
+    "filename",
+    [
+        "config.json",
+        "docker-compose.yaml",
+        "Cargo.toml",
+        "app/models/user.rb",
+        "Makefile",
+        "Dockerfile",
+        "notes.md",
+        "README",
+        "icon.svg",
+        "src/main.rs",
+        "weird.unknownextension",
+    ],
+)
+def test_text_and_source_files_dispatch_to_nvim(tmp_path: Path, filename: str) -> None:
+    """The classifier is an allowlist of known-binary extensions. JSON,
+    YAML, TOML, Markdown, SVG, source code, and files without an
+    extension all fall through to the editor — this is the guarantee
+    users rely on for normal editing flow."""
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+
+    neovim = StubNeovimAdapter()
+    runner = RecordingHandlerRunner()
+
+    open_target_in_session(
+        project_root,
+        target=filename,
+        neovim=neovim,
+        browser=StubBrowserAdapter(),
+        handlers_for_session=lambda _session: _DEFAULT_HANDLERS,
+        handler_runner=runner,
+    )
+
+    assert neovim.opened_targets == [("demo", filename)]
+    assert runner.calls == []
+
+
+def test_png_file_dispatches_to_open_handler(tmp_path: Path) -> None:
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+
+    neovim = StubNeovimAdapter()
+    runner = RecordingHandlerRunner()
+
+    open_target_in_session(
+        project_root,
+        target="public/email-logo.png",
+        neovim=neovim,
+        browser=StubBrowserAdapter(),
+        handlers_for_session=lambda _session: _DEFAULT_HANDLERS,
+        handler_runner=runner,
+    )
+
+    assert neovim.opened_targets == []
+    assert runner.calls == [("demo", "xdg-open public/email-logo.png")]
+
+
+def test_compound_extension_archive_matches(tmp_path: Path) -> None:
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+
+    runner = RecordingHandlerRunner()
+    open_target_in_session(
+        project_root,
+        target="dist/release.tar.gz",
+        neovim=StubNeovimAdapter(),
+        browser=StubBrowserAdapter(),
+        handlers_for_session=lambda _session: _DEFAULT_HANDLERS,
+        handler_runner=runner,
+    )
+
+    assert runner.calls == [("demo", "xdg-open dist/release.tar.gz")]
+
+
+def test_user_can_override_default_handler(tmp_path: Path) -> None:
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+
+    overridden = (("*.png", "feh {path}"),)
+    runner = RecordingHandlerRunner()
+
+    open_target_in_session(
+        project_root,
+        target="logo.png",
+        neovim=StubNeovimAdapter(),
+        browser=StubBrowserAdapter(),
+        handlers_for_session=lambda _session: overridden,
+        handler_runner=runner,
+    )
+
+    assert runner.calls == [("demo", "feh logo.png")]
+
+
+def test_empty_template_opts_a_default_back_to_nvim(tmp_path: Path) -> None:
+    """``*.png = ""`` removes png from the handler set. Useful when a user
+    actively wants to edit pixel data in nvim (rare) or to disable the
+    default for a project that ships a different viewer."""
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+
+    opt_out = (("*.png", ""),)
+    neovim = StubNeovimAdapter()
+    runner = RecordingHandlerRunner()
+
+    open_target_in_session(
+        project_root,
+        target="logo.png",
+        neovim=neovim,
+        browser=StubBrowserAdapter(),
+        handlers_for_session=lambda _session: opt_out,
+        handler_runner=runner,
+    )
+
+    assert neovim.opened_targets == [("demo", "logo.png")]
+    assert runner.calls == []
+
+
+def test_handler_command_shell_quotes_path(tmp_path: Path) -> None:
+    """Paths with spaces or shell metacharacters must be shell-quoted into
+    the template, otherwise the launched viewer sees garbage arguments."""
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+
+    runner = RecordingHandlerRunner()
+    open_target_in_session(
+        project_root,
+        target="assets/weird name.png",
+        neovim=StubNeovimAdapter(),
+        browser=StubBrowserAdapter(),
+        handlers_for_session=lambda _session: _DEFAULT_HANDLERS,
+        handler_runner=runner,
+    )
+
+    assert runner.calls == [("demo", "xdg-open 'assets/weird name.png'")]
+
+
+def test_subprocess_runner_wraps_command_through_backend_inline(tmp_path: Path) -> None:
+    """The default runner sends the handler through ``backend.inline``, so
+    a non-host backend (devcontainer / ssh) executes the viewer inside the
+    backend's exec context rather than on the host. Exercise the real
+    Popen path with a command whose side effect we can observe."""
+    import time
+
+    from hop.backends import CommandBackend
+    from hop.commands.open import SubprocessOpenHandlerRunner
+    from hop.session import resolve_project_session
+
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+    marker = tmp_path / "marker"
+    # interactive_prefix wraps each command — we want the inline-wrapped
+    # form to write a marker that includes the prefix's effect, proving the
+    # prefix actually ran. `env FOO=bar` prepended in front means the
+    # command that runs is `env FOO=bar sh -c '... write marker ...'`,
+    # and the marker captures `$FOO` so we know the prefix took effect.
+    backend = CommandBackend(
+        name="prefixed",
+        interactive_prefix="env HOP_OPEN_HANDLER_TEST=ran",
+        noninteractive_prefix="env HOP_OPEN_HANDLER_TEST=ran",
+    )
+    session = resolve_project_session(project_root)
+
+    runner = SubprocessOpenHandlerRunner()
+    runner.run(session, backend, command=f"sh -c 'printf %s \"$HOP_OPEN_HANDLER_TEST\" > {marker}'")
+
+    # Popen is fire-and-forget; give the child a moment to actually write.
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and not marker.exists():
+        time.sleep(0.02)
+    assert marker.read_text() == "ran"

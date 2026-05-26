@@ -255,6 +255,9 @@ class SessionBackendRegistry:
         project_config = load_project_config(session.project_root)
         return merge_configs(project_config, global_config)
 
+    def open_handlers_for_session(self, session: ProjectSession) -> tuple[tuple[str, str], ...]:
+        return self._merged_config(session).open_handlers
+
     def set_override(self, session_name: str, backend: SessionBackend) -> None:
         self._overrides[session_name] = backend
 
@@ -420,6 +423,7 @@ def execute_command(
                 neovim=services.neovim,
                 browser=services.browser,
                 session_backend_for=services.session_backends.for_session,
+                handlers_for_session=services.session_backends.open_handlers_for_session,
             )
         case TermCommand(role=role):
             focus_terminal(

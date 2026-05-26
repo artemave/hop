@@ -247,6 +247,24 @@ The substitution layer doubles literal single quotes in `{path}` before formatti
 
 One semantic caveat: vim's `:drop` reuses an existing buffer when the file is already open; not every editor has that equivalent. Templates targeting editors without a "reuse" command may open a new buffer per call.
 
+### Open handlers for binary files
+
+`hop open foo.png` (or clicking a `.png` in the open-selection kitten) routes through a configured per-extension handler instead of nvim — so PNGs land in your image viewer, PDFs in your reader, archives in your file manager, etc. The dispatch table lives in the top-level `[open_handlers]` config:
+
+```toml
+[open_handlers]
+"*.pdf" = "zathura {path}"
+"*.png" = "feh {path}"
+```
+
+`{path}` substitutes the resolved file path (shell-quoted). Hop ships built-in defaults for known-binary extensions only — images (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.bmp`, `.tiff`, `.ico`), audio (`.mp3`, `.wav`, `.ogg`, `.flac`, `.opus`, `.m4a`), video (`.mp4`, `.mov`, `.mkv`, `.webm`, `.avi`), documents (`.pdf`, `.docx`, `.xlsx`, `.pptx`, `.odt`, `.ods`, `.odp`), archives (`.zip`, `.tar`, `.tar.gz`, `.tgz`, `.tar.bz2`, `.7z`, `.rar`), and native binaries (`.exe`, `.dll`, `.so`, `.dylib`). Each defaults to `xdg-open {path}`.
+
+Anything **not** on the binary allowlist stays with the editor — JSON, YAML, TOML, Markdown, SVG, source code, files with no extension. That's the whole point of an allowlist: hop won't second-guess a file you can edit in nvim.
+
+Override per pattern in your global or project config. Set a template to `""` to disable a default and fall through to nvim — `"*.svg" = ""` doesn't actually do anything (svg already isn't a default), but `"*.png" = ""` would, if you want to edit pixel data in nvim for some reason.
+
+Handlers run through the active session backend's `interactive_prefix`, so a devcontainer session executes the viewer inside the container. Configure the template accordingly if you want the host to handle it instead.
+
 ### Per-invocation override
 
 ```bash
@@ -288,7 +306,7 @@ Prompt detection uses Kitty's shell integration (OSC 133), which is on by defaul
 - `hop list` - print active Sway workspaces whose names start with `p:`.
 - `hop switch <name>` - focus the Sway workspace `p:<name>`.
 - `hop move <name>` - move the currently focused Sway window onto `p:<name>` and switch to that workspace.
-- `hop open <target>` - route the target to the right place: a URL goes to the session browser (with the backend's localhost translation applied), a Rails `Controller#action` ref or `path[:line]` goes to the shared Neovim. The kitten under [Open visible-output targets from Kitty](#open-visible-output-targets-from-kitty) uses the same parser.
+- `hop open <target>` - route the target to the right place: a URL goes to the session browser (with the backend's localhost translation applied), a binary file (image, PDF, archive, ...) goes to the configured handler (defaults to `xdg-open`), a Rails `Controller#action` ref or `path[:line]` goes to the shared Neovim. See [Open handlers for binary files](#open-handlers-for-binary-files). The kitten under [Open visible-output targets from Kitty](#open-visible-output-targets-from-kitty) uses the same parser.
 - `hop term --role <name>` - focus or create the window for the given role. `hop term --role editor` focuses the session's shared Neovim — launching it on first use, focusing it when it's already running, recreating it after `:qa`.
 - `hop browser [<url>]` - reuse or create a session-owned browser window. If the window was moved to another workspace, it's moved back before being focused.
 - `hop kill` - close every Sway/Kitty window owned by the session, remove its workspace, and run the backend's `teardown`. Run from the project root.
