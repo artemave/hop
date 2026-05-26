@@ -363,8 +363,7 @@ def test_execute_command_spawns_extra_shell_when_focused_on_session_workspace(tm
     # `hop` should spawn another shell rather than re-enter. The editor is
     # *not* implicitly resurrected — a closed editor stays closed until the
     # user explicitly runs `hop open` (or picks the vicinae `Hop editor`
-    # entry). Kitty is alive — the dead-kitty branch in spawn_session_terminal
-    # does not fire and no extra `shell` ensure is added before `shell-2`.
+    # entry). Kitty is alive, which gates the spawn-extra-shell branch.
     services = build_services(focused_workspace="p:demo", alive_session_names=("demo",))
 
     assert (
@@ -378,6 +377,35 @@ def test_execute_command_spawns_extra_shell_when_focused_on_session_workspace(tm
     assert services.sway.switched_workspaces == []
     assert services.kitty.ensured_roles == [("demo", "shell-2", project_root.resolve())]
     assert services.neovim.ensured_sessions == []
+
+
+def test_execute_command_recreates_session_when_on_emptied_workspace(tmp_path: Path) -> None:
+    """After `hop kill`, sway leaves the user on the (now-empty) session
+    workspace — that's normal sway behavior. Bare `hop` from there should
+    run a full cold first entry: editor + shell both come up, not just a
+    lone host shell from the spawn-extra-shell branch."""
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+
+    # Focused on `p:demo` but kitty is dead (kill swept it). The spawn-
+    # extra-shell branch is gated on kitty being alive, so we fall through
+    # to the bootstrap branch and bring the full session up.
+    services = build_services(focused_workspace="p:demo", persisted_session_names=(), alive_session_names=())
+
+    assert (
+        execute_command(
+            EnterSessionCommand(),
+            cwd=project_root,
+            services=services.as_services(),
+        )
+        == 0
+    )
+    # Already on the session workspace, so `enter_project_session` skips the
+    # redundant switch — the user stays where they are while the windows
+    # come up around them.
+    assert services.sway.switched_workspaces == []
+    assert services.kitty.ensured_roles == [("demo", "shell", project_root.resolve())]
+    assert services.neovim.ensured_sessions == [("demo", project_root.resolve())]
 
 
 def test_execute_command_first_entry_brings_up_both_editor_and_shell(tmp_path: Path) -> None:

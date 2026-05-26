@@ -56,16 +56,10 @@ class StubTerminalAdapter:
         self,
         *,
         existing_windows: tuple[KittyWindow, ...] = (),
-        kitty_alive: bool = True,
     ) -> None:
         self.ensured_terminals: list[tuple[str, str, Path]] = []
         self.already_prepared_flags: list[bool] = []
         self._existing_windows = existing_windows
-        self._kitty_alive = kitty_alive
-
-    def is_alive(self, session: ProjectSession) -> bool:
-        del session
-        return self._kitty_alive
 
     def ensure_terminal(self, session: ProjectSession, *, role: str, already_prepared: bool = False) -> None:
         self.ensured_terminals.append((session.session_name, role, session.project_root))
@@ -577,24 +571,6 @@ def test_spawn_session_terminal_does_not_switch_workspace(tmp_path: Path) -> Non
     spawn_session_terminal(project_root, terminals=terminals)
 
     assert terminals.ensured_terminals == [("demo", "shell-2", project_root)]
-
-
-def test_spawn_session_terminal_bootstraps_canonical_shell_when_kitty_socket_is_dead(
-    tmp_path: Path,
-) -> None:
-    """The `p:<session>` workspace can outlive its kitty (e.g. only a
-    browser window remains). `spawn_session_terminal` revives the kitty
-    via the terminal adapter's bootstrap fallback (which catches
-    `KittyConnectionError` and spawns a fresh kitty listening on the
-    session socket) and stops there — no extra ad-hoc shell, and no
-    implicit editor resurrection."""
-    project_root = tmp_path / "demo"
-    project_root.mkdir()
-    terminals = StubTerminalAdapter(kitty_alive=False)
-
-    spawn_session_terminal(project_root, terminals=terminals)
-
-    assert terminals.ensured_terminals == [("demo", "shell", project_root)]
 
 
 def test_list_sessions_returns_sorted_listings_with_workspace_and_known_project_roots() -> None:

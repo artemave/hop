@@ -323,7 +323,9 @@ def execute_command(
     match command:
         case EnterSessionCommand(backend=backend_name):
             session = resolve_project_session(current_directory)
-            if services.sway.get_focused_workspace() == session.workspace_name:
+            kitty_alive = services.kitty.is_alive(session)
+            on_session_workspace = services.sway.get_focused_workspace() == session.workspace_name
+            if on_session_workspace and kitty_alive:
                 # Spawning an additional terminal in an already-live session:
                 # the backend is fixed at session creation; --backend is ignored.
                 # A closed editor stays closed — recover it explicitly via
@@ -342,8 +344,11 @@ def execute_command(
                 # the user closes windows manually, the wm crashes, or the
                 # machine reboots, and we want every cold bootstrap to run
                 # the full activation sweep regardless of whether the file
-                # is stale on disk.
-                kitty_alive = services.kitty.is_alive(session)
+                # is stale on disk. This branch also fires when we *are*
+                # focused on `p:<session>` but kitty is dead — typically
+                # after `hop kill` leaves us on the (now-empty) workspace
+                # — so recreating the session from there gets the same
+                # full bootstrap as recreating it from elsewhere.
                 is_first_entry = not kitty_alive
                 # Headless first-entry takes a different path: the popup
                 # runs prepare with a visible UI, but it can't do that

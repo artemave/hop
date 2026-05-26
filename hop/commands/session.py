@@ -45,8 +45,6 @@ class SessionTerminalAdapter(Protocol):
 class SpawnTerminalAdapter(SessionTerminalAdapter, Protocol):
     def list_session_windows(self, session: ProjectSession) -> Sequence[KittyWindow]: ...
 
-    def is_alive(self, session: ProjectSession) -> bool: ...
-
 
 class SessionEditorAdapter(Protocol):
     def ensure(self, session: ProjectSession, *, keep_focus: bool = True) -> None: ...
@@ -155,18 +153,12 @@ def spawn_session_terminal(
     terminals: SpawnTerminalAdapter,
 ) -> ProjectSession:
     session = resolve_project_session(cwd)
-    # `hop` from inside a session always spawns a shell — the canonical
-    # `shell` role when the session's kitty has died and we're bootstrapping
-    # a fresh one, otherwise the next free `shell-<N>`. Re-creating a
-    # closed editor is the user's explicit choice via `hop open` (or the
-    # vicinae `Hop editor` entry, which calls `hop open`).
-    if not terminals.is_alive(session):
-        # The session's kitty has died but the workspace is still alive
-        # (e.g. only a browser window remains). Bootstrap a fresh kitty +
-        # canonical shell via the terminal adapter (which has the
-        # KittyConnectionError fallback) and stop there.
-        terminals.ensure_terminal(session, role=SHELL_TERMINAL_ROLE)
-        return session
+    # `hop` from inside a session with a live kitty spawns the next free
+    # `shell-<N>`. The dead-kitty case never reaches here — bare `hop` in
+    # `EnterSessionCommand` routes that through the full first-entry
+    # bootstrap instead, so prepare runs and every configured window comes
+    # up. Re-creating a closed editor is the user's explicit choice via
+    # `hop open` (or the vicinae `Hop editor` entry, which calls `hop open`).
     existing_roles = {window.role for window in terminals.list_session_windows(session) if window.role}
     role = _next_adhoc_shell_role(existing_roles)
     terminals.ensure_terminal(session, role=role)
