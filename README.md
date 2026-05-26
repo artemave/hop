@@ -24,8 +24,8 @@ hop is built on top of [Sway](https://swaywm.org/) window manager and [Kitty](ht
 
 - Linux
 - Python
-- [Sway](https://swaywm.org/)
-- [Kitty](https://sw.kovidgoyal.net/kitty/)
+- [Sway](https://swaywm.org/) window manager
+- [Kitty](https://sw.kovidgoyal.net/kitty/) terminal emulator
 - A TUI editor - ([Neovim](https://neovim.io/) by default)
 
 Optionally:
@@ -52,17 +52,13 @@ After re-running `uv tool install --reinstall .` (or `pip install -U`), the runn
 hopd --restart
 ```
 
-If you forget, the `hop` CLI prints a note on its next invocation telling you the running daemon's version differs from the installed one. `hopd` enforces single-instance via an flock; a second startup without `--restart` will refuse to run and tell you the existing daemon's PID.
-
 ## Usage
 
-Add this to your Sway config:
+Some of the hop's features rely on a `hopd` daemon. Add this to your Sway config to ensure it's running:
 
 ```conf
 exec hopd
 ```
-
-> `hopd` is the long-lived daemon hop needs to run. It reconciles editor/browser Sway marks across manual window moves, serves the bridge socket that in-backend editor plugins (vigun in a devcontainer, etc.) call back to, and — when Vicinae is installed — keeps the hop entries in Vicinae's main search up to date.
 
 Day-to-day, [Vicinae](https://www.vicinae.com/) is the primary surface. What you see when you type `hop` in Vicinae's main search depends on where you are:
 
