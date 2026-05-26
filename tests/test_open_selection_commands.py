@@ -255,6 +255,33 @@ def test_open_selection_in_window_logs_when_file_does_not_exist_on_backend(
     assert any("does not exist in backend" in record.message for record in caplog.records)
 
 
+def test_open_selection_in_window_logs_when_rails_ref_does_not_resolve(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Rails ref whose controller file is missing → resolve_target returns
+    None → dispatch logs and bails. Distinct from the plain-file
+    paths_exist branch because the failure comes from inside the resolver
+    rather than the post-resolve existence check."""
+    project_root = tmp_path / "demo"
+    terminal_cwd = project_root / "src"
+    terminal_cwd.mkdir(parents=True)
+
+    with caplog.at_level(logging.INFO, logger="hop.open_selection"):
+        result = open_selection_in_window(
+            "MissingController#index",
+            source_cwd=terminal_cwd.resolve(),
+            listen_on=session_socket_address("demo"),
+            neovim=StubNeovimAdapter(),
+            browser=StubBrowserAdapter(),
+            sessions_loader=lambda: {
+                "demo": SessionState(name="demo", project_root=project_root.resolve()),
+            },
+        )
+
+    assert result is None
+    assert any("could not resolve" in record.message for record in caplog.records)
+
+
 def test_open_selection_in_window_dispatches_path_unchanged_to_nvim(tmp_path: Path) -> None:
     """The kitten resolves candidates against the source window's in-shell
     cwd before they get here; this command must hand the resolved path to

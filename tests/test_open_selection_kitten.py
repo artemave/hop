@@ -15,15 +15,45 @@ def _stub_focused_paths_exist(monkeypatch: pytest.MonkeyPatch) -> None:  # pyrig
     in, ignoring the test's tmp_path."""
 
     def fake_paths_exist(candidates: Iterable[str]) -> set[str]:
-        from hop.targets import ResolvedFileTarget, resolve_visible_output_target
+        # Replays the production flow against the local filesystem: plain
+        # files survive on Path.exists; Rails refs require the controller
+        # file to exist AND the action to be defined in it.
+        import re
+
+        from hop.targets import (
+            SyntacticFileTarget,
+            SyntacticRailsRefTarget,
+            parse_visible_output_target,
+            resolve_file_candidate,
+        )
 
         base = Path.cwd()
         result: set[str] = set()
         for candidate in candidates:
-            target = resolve_visible_output_target(candidate, terminal_cwd=base)
-            if isinstance(target, ResolvedFileTarget) and target.path.exists():
-                result.add(candidate)
+            syntactic = parse_visible_output_target(candidate)
+            if isinstance(syntactic, SyntacticFileTarget):
+                if resolve_file_candidate(syntactic.path_text, terminal_cwd=base).exists():
+                    result.add(candidate)
+            elif isinstance(syntactic, SyntacticRailsRefTarget):
+                controller_path_text = "app/controllers/" + _snake(syntactic.controller) + ".rb"
+                path = resolve_file_candidate(controller_path_text, terminal_cwd=base)
+                if not path.exists():
+                    continue
+                pattern = re.compile(rf"^\s*def\s+{syntactic.action}\b")
+                if any(pattern.match(line) for line in path.read_text().splitlines()):
+                    result.add(candidate)
         return result
+
+    def _snake(controller: str) -> str:
+        import re as _re
+
+        parts = controller.split("::")
+        snake_parts: list[str] = []
+        for part in parts:
+            part = _re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", part)
+            part = _re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", part)
+            snake_parts.append(part.lower())
+        return "/".join(snake_parts)
 
     monkeypatch.setattr(main, "focused_paths_exist", fake_paths_exist)
 
@@ -32,7 +62,9 @@ def test_mark_finds_supported_visible_output_targets(tmp_path: Path, monkeypatch
     (tmp_path / "app" / "models").mkdir(parents=True)
     (tmp_path / "app" / "models" / "user.rb").write_text("")
     (tmp_path / "app" / "controllers").mkdir(parents=True)
-    (tmp_path / "app" / "controllers" / "users_controller.rb").write_text("")
+    (tmp_path / "app" / "controllers" / "users_controller.rb").write_text(
+        "class UsersController < ApplicationController\n  def index\n  end\nend\n"
+    )
     monkeypatch.chdir(tmp_path)
 
     text = "See app/models/user.rb:12 and https://example.com and Processing UsersController#index"

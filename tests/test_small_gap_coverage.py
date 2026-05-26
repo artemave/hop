@@ -3,7 +3,12 @@ from pathlib import Path
 from hop.commands.open_selection import open_selection_in_window
 from hop.session import derive_session_name
 from hop.state import SessionState
-from hop.targets import ResolvedFileTarget, resolve_visible_output_target
+from hop.targets import (
+    ResolvedFileTarget,
+    SyntacticFileTarget,
+    SyntacticRailsRefTarget,
+    parse_visible_output_target,
+)
 
 
 class StubNeovimAdapter:
@@ -94,19 +99,19 @@ def test_derive_session_name_rejects_root_path() -> None:
         raise AssertionError("Expected root path to be rejected")
 
 
-def test_resolve_visible_output_target_handles_empty_invalid_url_and_absolute_paths(tmp_path: Path) -> None:
+def test_parse_visible_output_target_handles_empty_and_recognizes_target_shapes(tmp_path: Path) -> None:
     absolute_file = tmp_path / "README.md"
     absolute_file.write_text("ok\n")
 
-    # Empty/whitespace input returns None (nothing to resolve).
-    assert resolve_visible_output_target("   ", terminal_cwd=tmp_path) is None
-    # Rails refs that match the pattern return the controller path; existence
-    # filtering happens later (callers consult backend.paths_exist).
-    rails_target = resolve_visible_output_target("Processing MissingController#index", terminal_cwd=tmp_path)
-    assert rails_target == ResolvedFileTarget(path=(tmp_path / "app/controllers/missing_controller.rb").resolve())
-    assert resolve_visible_output_target(str(absolute_file), terminal_cwd=tmp_path) == ResolvedFileTarget(
-        path=absolute_file.resolve()
+    # Empty/whitespace input returns None (nothing to parse).
+    assert parse_visible_output_target("   ") is None
+    # Rails refs parse to a SyntacticRailsRefTarget; def-line resolution
+    # happens later in resolve_target via backend.read_file.
+    assert parse_visible_output_target("Processing MissingController#index") == SyntacticRailsRefTarget(
+        controller="MissingController", action="index"
     )
+    # Absolute paths parse to a SyntacticFileTarget with the path text.
+    assert parse_visible_output_target(str(absolute_file)) == SyntacticFileTarget(path_text=str(absolute_file))
 
 
 def test_resolved_file_target_editor_target_omits_line_number_when_absent() -> None:

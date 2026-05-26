@@ -9,7 +9,13 @@ from hop.commands.open import OpenBrowserAdapter, OpenTargetNeovimAdapter, dispa
 from hop.kitty import session_name_from_listen_on
 from hop.session import ProjectSession, resolve_project_session
 from hop.state import SessionState, load_sessions
-from hop.targets import ResolvedFileTarget, ResolvedUrlTarget, resolve_visible_output_target
+from hop.targets import (
+    ResolvedFileTarget,
+    ResolvedUrlTarget,
+    SyntacticRailsRefTarget,
+    parse_visible_output_target,
+    resolve_target,
+)
 
 logger = logging.getLogger("hop.open_selection")
 
@@ -55,19 +61,30 @@ def open_selection_in_window(
     else:
         base_cwd = state.project_root
 
-    resolved_target = resolve_visible_output_target(selection, terminal_cwd=base_cwd)
-    if resolved_target is None:
-        logger.info(
-            "could not parse %r against terminal_cwd=%s",
-            selection,
-            base_cwd,
-        )
+    syntactic = parse_visible_output_target(selection)
+    if syntactic is None:
+        logger.info("could not parse %r against terminal_cwd=%s", selection, base_cwd)
         return None
 
-    # Existence check lives in the kitten only — see hop/commands/open.py.
+    resolved_target = resolve_target(syntactic, session=session, backend=backend, terminal_cwd=base_cwd)
+    if resolved_target is None:
+        # Rails refs whose file is missing or whose action isn't defined
+        # filter to None inside resolve_target. The kitten's own highlight
+        # check already filtered most of these out; this is the dispatch-
+        # time double check (the editor's state may have changed since the
+        # hint was painted).
+        logger.info("could not resolve %r against terminal_cwd=%s", selection, base_cwd)
+        return None
+
+    # Existence check for plain file refs only — Rails refs were verified
+    # inside resolve_target (it had to read the file to find the def line).
     # Highlighting a stale path-shaped token from terminal output would be
     # actively misleading; dispatching one from the CLI is the user's call.
-    if isinstance(resolved_target, ResolvedFileTarget) and not backend.paths_exist(session, (resolved_target.path,)):
+    if (
+        isinstance(resolved_target, ResolvedFileTarget)
+        and not isinstance(syntactic, SyntacticRailsRefTarget)
+        and not backend.paths_exist(session, (resolved_target.path,))
+    ):
         logger.info(
             "candidate %r does not exist in backend for session %r",
             str(resolved_target.path),

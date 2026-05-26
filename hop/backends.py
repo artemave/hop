@@ -39,9 +39,23 @@ SHELL_FALLBACK = "${SHELL:-sh}"
 # iteration would otherwise leak through as the shell's overall exit.
 _PATH_EXISTS_LOOP = 'while IFS= read -r p; do test -e "$p" && printf "%s\\n" "$p"; :; done'
 
+# Sentinel exit code used by ``CommandBackend.read_file`` to signal
+# "path doesn't exist" from inside the shell script (so the caller can
+# distinguish missing-file from other cat failures by exit code alone).
+_READ_FILE_NOT_FOUND_EXIT = 42
+
 
 class SessionBackendError(HopError):
     """Raised when a session backend lifecycle action fails."""
+
+
+class BackendFileNotFoundError(SessionBackendError):
+    """Raised by ``backend.read_file`` when the path doesn't exist.
+
+    Distinct subclass so callers (e.g. the Rails-ref resolver in
+    ``hop/targets.py``) can treat "no such file" as a normal miss while
+    still propagating other backend failures (compose dead, ssh down).
+    """
 
 
 class SessionBackend(Protocol):
@@ -70,6 +84,8 @@ class SessionBackend(Protocol):
     def translate_localhost_url(self, session: ProjectSession, url: str) -> str: ...
 
     def paths_exist(self, session: ProjectSession, paths: Sequence[Path]) -> set[Path]: ...
+
+    def read_file(self, session: ProjectSession, path: Path) -> str: ...
 
     def teardown(self, session: ProjectSession) -> None: ...
 
@@ -345,6 +361,26 @@ class CommandBackend:
             raise SessionBackendError(msg)
         reported = {line for line in result.stdout.splitlines() if line}
         return {p for p in paths if str(p) in reported}
+
+    def read_file(self, session: ProjectSession, path: Path) -> str:
+        substituted_prefix = substitute(self.noninteractive_prefix, session=session)
+        quoted = shlex.quote(str(path))
+        # exit 42 distinguishes "file missing" from any other cat failure
+        # (permissions, dead backend) — the resolver treats missing as a
+        # normal miss but lets other failures propagate.
+        script = f"[ -f {quoted} ] || exit 42; cat {quoted}"
+        composed = f"{substituted_prefix} sh -c {shlex.quote(script)}".lstrip()
+        argv = _sh_c(composed)
+        result = self.runner(argv, session.project_root)
+        debug.log_command(argv, session.project_root, result)
+        if result.returncode == _READ_FILE_NOT_FOUND_EXIT:
+            msg = f"backend {self.name!r}: {path} not found"
+            raise BackendFileNotFoundError(msg)
+        if result.returncode != 0:
+            stderr = (result.stderr or result.stdout or "").strip()
+            msg = f"backend {self.name!r} read_file failed for {path}: {stderr}"
+            raise SessionBackendError(msg)
+        return result.stdout
 
 
 class UnknownBackendError(HopError):

@@ -4,7 +4,12 @@ import os.path
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse
+
+if TYPE_CHECKING:
+    from hop.backends import SessionBackend
+    from hop.session import ProjectSession
 
 # Permissive on purpose: any path-shaped token may match. Existence filtering
 # happens outside this module (via ``backend.paths_exist`` from the focused
@@ -56,25 +61,33 @@ class ResolvedFileTarget:
 ResolvedTarget = ResolvedUrlTarget | ResolvedFileTarget
 
 
-def resolve_visible_output_target(
-    selection: str,
-    *,
-    terminal_cwd: Path | str | None,
-) -> ResolvedTarget | None:
-    """Parse a selection from terminal output into a structured target.
+@dataclass(frozen=True, slots=True)
+class SyntacticUrlTarget:
+    url: str
 
-    ``terminal_cwd`` is the namespace against which a relative file path
-    absolutizes. Pass the in-shell cwd (e.g. kitty's ``cwd_of_child``)
-    when the caller knows the editor's filesystem namespace; pass ``None``
-    to preserve the raw text and let the editor resolve relatives against
-    its own cwd. The CLI uses ``None`` because hop runs on the host while
-    nvim runs in the backend — absolutizing against host paths would hand
-    nvim a path it can't open.
 
-    Returns ``None`` only for empty or unparseable input. Existence of the
-    resolved file path is **not** checked here — that filtering happens
-    upstream via ``hop.focused.paths_exist`` (which routes through the
-    focused session's backend). This module just shapes paths and URLs.
+@dataclass(frozen=True, slots=True)
+class SyntacticFileTarget:
+    path_text: str
+    line_number: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SyntacticRailsRefTarget:
+    controller: str
+    action: str
+
+
+SyntacticTarget = SyntacticUrlTarget | SyntacticFileTarget | SyntacticRailsRefTarget
+
+
+def parse_visible_output_target(selection: str) -> SyntacticTarget | None:
+    """Pure-string parse of a selection into a syntactic target.
+
+    Returns ``None`` for empty input. The output union tells the caller
+    what kind of target was recognized; turning it into a dispatchable
+    ``ResolvedTarget`` (which may require backend I/O, e.g. for Rails
+    refs) is the job of ``resolve_target``.
     """
 
     cleaned_selection = selection.strip()
@@ -83,20 +96,70 @@ def resolve_visible_output_target(
 
     url = _normalize_url(cleaned_selection)
     if url is not None:
-        return ResolvedUrlTarget(url=url)
+        return SyntacticUrlTarget(url=url)
 
-    terminal_directory = Path(terminal_cwd).expanduser().resolve(strict=False) if terminal_cwd is not None else None
-
-    rails_target = _rails_reference_target(cleaned_selection)
-    if rails_target is not None:
-        return ResolvedFileTarget(
-            path=_resolve_file_candidate(rails_target, terminal_cwd=terminal_directory),
+    rails_match = RAILS_REFERENCE_PATTERN.match(cleaned_selection)
+    if rails_match is not None:
+        return SyntacticRailsRefTarget(
+            controller=rails_match.group("controller"),
+            action=rails_match.group("action"),
         )
 
     path_text, line_number = _split_file_target(cleaned_selection)
+    return SyntacticFileTarget(path_text=path_text, line_number=line_number)
+
+
+def resolve_target(
+    syntactic: SyntacticTarget,
+    *,
+    session: ProjectSession,
+    backend: SessionBackend,
+    terminal_cwd: Path | str | None,
+) -> ResolvedTarget | None:
+    """Turn a syntactic target into a dispatchable ``ResolvedTarget``.
+
+    ``terminal_cwd`` is the namespace against which a relative file path
+    absolutizes. Pass the in-shell cwd (e.g. kitty's ``cwd_of_child``)
+    when the caller knows the editor's filesystem namespace; pass ``None``
+    to keep the path text untouched and let the editor resolve relatives
+    against its own cwd (the CLI's case — hop runs on the host but nvim
+    runs in the backend).
+
+    For Rails refs, this reads the controller file via ``backend.read_file``
+    and scans for ``def <action>`` in Python. Returns ``None`` if the file
+    is missing or the action isn't defined; the caller decides whether to
+    filter (kitten highlighting) or raise (CLI).
+    """
+
+    if isinstance(syntactic, SyntacticUrlTarget):
+        return ResolvedUrlTarget(url=syntactic.url)
+
+    terminal_directory = Path(terminal_cwd).expanduser().resolve(strict=False) if terminal_cwd is not None else None
+
+    if isinstance(syntactic, SyntacticRailsRefTarget):
+        path = resolve_file_candidate(
+            f"app/controllers/{_underscore_constant_path(syntactic.controller)}.rb",
+            terminal_cwd=terminal_directory,
+        )
+        # Local import to avoid a config → backends → targets cycle: this
+        # module is imported by backends-adjacent code at module load.
+        from hop.backends import BackendFileNotFoundError
+
+        try:
+            content = backend.read_file(session, path)
+        except BackendFileNotFoundError:
+            return None
+        # action is parser-constrained to [A-Za-z_][A-Za-z0-9_]*, so the
+        # word-boundary suffix \b plus a literal interpolation is safe.
+        pattern = re.compile(rf"^\s*def\s+{syntactic.action}\b")
+        for line_number, line_text in enumerate(content.splitlines(), start=1):
+            if pattern.match(line_text):
+                return ResolvedFileTarget(path=path, line_number=line_number)
+        return None
+
     return ResolvedFileTarget(
-        path=_resolve_file_candidate(path_text, terminal_cwd=terminal_directory),
-        line_number=line_number,
+        path=resolve_file_candidate(syntactic.path_text, terminal_cwd=terminal_directory),
+        line_number=syntactic.line_number,
     )
 
 
@@ -107,15 +170,6 @@ def _normalize_url(selection: str) -> str | None:
     if not parsed.netloc:
         return None
     return selection
-
-
-def _rails_reference_target(selection: str) -> str | None:
-    match = RAILS_REFERENCE_PATTERN.match(selection)
-    if match is None:
-        return None
-
-    controller = match.group("controller")
-    return f"app/controllers/{_underscore_constant_path(controller)}.rb"
 
 
 def _underscore_constant_path(value: str) -> str:
@@ -138,7 +192,7 @@ def _split_file_target(selection: str) -> tuple[str, int | None]:
     return selection, None
 
 
-def _resolve_file_candidate(
+def resolve_file_candidate(
     candidate: str,
     *,
     terminal_cwd: Path | None,

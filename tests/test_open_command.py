@@ -92,12 +92,15 @@ def test_file_with_line_target_keeps_line_suffix(tmp_path: Path) -> None:
     assert neovim.opened_targets == [("demo", "app/models/user.rb:42")]
 
 
-def test_rails_controller_action_target_translates_to_path(tmp_path: Path) -> None:
-    """The parser the kitten uses turns `Controller#action` into
-    `app/controllers/<snake>_controller.rb`. The CLI dispatches the same
-    translation so `hop open UsersController#index` opens that file."""
+def test_rails_controller_action_target_translates_to_path_with_def_line(tmp_path: Path) -> None:
+    """``hop open UsersController#index`` derives the controller path AND
+    looks up the line where ``def index`` is defined via the session
+    backend's ``read_file``, so the editor jumps straight to the action."""
     project_root = tmp_path / "demo"
-    project_root.mkdir()
+    (project_root / "app/controllers").mkdir(parents=True)
+    (project_root / "app/controllers/users_controller.rb").write_text(
+        "class UsersController < ApplicationController\n  def index\n  end\nend\n"
+    )
 
     neovim = StubNeovimAdapter()
 
@@ -108,7 +111,42 @@ def test_rails_controller_action_target_translates_to_path(tmp_path: Path) -> No
         browser=StubBrowserAdapter(),
     )
 
-    assert neovim.opened_targets == [("demo", "app/controllers/users_controller.rb")]
+    # def index is on line 2 of the controller file. The editor target stays
+    # relative so the editor (running in the session backend) resolves it
+    # against its own cwd, matching how plain file paths flow through.
+    assert neovim.opened_targets == [("demo", "app/controllers/users_controller.rb:2")]
+
+
+def test_rails_controller_action_target_raises_when_def_not_in_file(tmp_path: Path) -> None:
+    """If the action isn't defined in the controller, the CLI surfaces a
+    clear ``HopError`` rather than silently opening the file at line 1
+    (or some unrelated location)."""
+    project_root = tmp_path / "demo"
+    (project_root / "app/controllers").mkdir(parents=True)
+    (project_root / "app/controllers/users_controller.rb").write_text(
+        "class UsersController < ApplicationController\n  def show\n  end\nend\n"
+    )
+
+    with pytest.raises(HopError, match="could not resolve target"):
+        open_target_in_session(
+            project_root,
+            target="UsersController#index",
+            neovim=StubNeovimAdapter(),
+            browser=StubBrowserAdapter(),
+        )
+
+
+def test_rails_controller_action_target_raises_when_controller_file_missing(tmp_path: Path) -> None:
+    project_root = tmp_path / "demo"
+    project_root.mkdir()
+
+    with pytest.raises(HopError, match="could not resolve target"):
+        open_target_in_session(
+            project_root,
+            target="UsersController#index",
+            neovim=StubNeovimAdapter(),
+            browser=StubBrowserAdapter(),
+        )
 
 
 def test_url_target_dispatches_to_session_browser(tmp_path: Path) -> None:

@@ -112,6 +112,22 @@ def test_host_backend_paths_exist_empty_input_returns_empty(tmp_path: Path) -> N
     assert host_backend().paths_exist(build_session(tmp_path), ()) == set()
 
 
+def test_host_backend_read_file_returns_file_contents(tmp_path: Path) -> None:
+    target = tmp_path / "users_controller.rb"
+    target.write_text("class UsersController\n  def index\n  end\nend\n")
+
+    assert host_backend().read_file(build_session(tmp_path), target) == (
+        "class UsersController\n  def index\n  end\nend\n"
+    )
+
+
+def test_host_backend_read_file_raises_backend_file_not_found_for_missing_path(tmp_path: Path) -> None:
+    from hop.backends import BackendFileNotFoundError
+
+    with pytest.raises(BackendFileNotFoundError, match="not found"):
+        host_backend().read_file(build_session(tmp_path), tmp_path / "missing.rb")
+
+
 # --- CommandBackend wrap / inline ----------------------------------------
 
 
@@ -458,6 +474,50 @@ def test_command_backend_paths_exist_raises_on_failure(tmp_path: Path) -> None:
 
     with pytest.raises(SessionBackendError, match="paths_exist failed"):
         backend.paths_exist(build_session(tmp_path), (Path("/abs/foo"),))
+
+
+def test_command_backend_read_file_wraps_cat_with_noninteractive_prefix(tmp_path: Path) -> None:
+    runner = RecordingRunner(stdout="contents of the file\n")
+    backend = backend_from_config(
+        make_backend(noninteractive_prefix="compose exec -T devcontainer"),
+        runner=runner,
+    )
+
+    result = backend.read_file(build_session(tmp_path), Path("/app/users_controller.rb"))
+
+    assert result == "contents of the file\n"
+    # One subprocess call, wrapped through noninteractive_prefix + sh -c with
+    # the pre-check + cat script (exit 42 sentinel encoded in the script).
+    assert len(runner.calls) == 1
+    argv, _cwd, _stdin = runner.calls[0]
+    assert argv[:2] == ("sh", "-c")
+    assert "compose exec -T devcontainer" in argv[2]
+    assert "exit 42" in argv[2]
+    assert "/app/users_controller.rb" in argv[2]
+
+
+def test_command_backend_read_file_raises_backend_file_not_found_on_sentinel_exit(tmp_path: Path) -> None:
+    from hop.backends import BackendFileNotFoundError
+
+    runner = RecordingRunner(returncode=42)
+    backend = backend_from_config(
+        make_backend(noninteractive_prefix="compose exec -T devcontainer"),
+        runner=runner,
+    )
+
+    with pytest.raises(BackendFileNotFoundError, match="not found"):
+        backend.read_file(build_session(tmp_path), Path("/missing"))
+
+
+def test_command_backend_read_file_raises_session_backend_error_on_other_failures(tmp_path: Path) -> None:
+    runner = RecordingRunner(returncode=1, stderr="container is gone")
+    backend = backend_from_config(
+        make_backend(noninteractive_prefix="compose exec -T devcontainer"),
+        runner=runner,
+    )
+
+    with pytest.raises(SessionBackendError, match="read_file failed"):
+        backend.read_file(build_session(tmp_path), Path("/app/foo.rb"))
 
 
 # --- localhost URL translation -------------------------------------------

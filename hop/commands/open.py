@@ -9,7 +9,8 @@ from hop.session import ProjectSession, resolve_project_session
 from hop.targets import (
     ResolvedTarget,
     ResolvedUrlTarget,
-    resolve_visible_output_target,
+    parse_visible_output_target,
+    resolve_target,
 )
 
 _BUILTIN_HOST_BACKEND = CommandBackend(name="host", interactive_prefix="", noninteractive_prefix="")
@@ -65,12 +66,15 @@ def open_target_in_session(
 ) -> ProjectSession:
     """Resolve and dispatch a single target for the cwd-derived session.
 
-    No-arg form focuses the session editor. Otherwise the parser decides
-    URL vs Rails-ref vs file:line via ``resolve_visible_output_target``, and
-    dispatch flows through ``dispatch_resolved_target``. No existence check
-    — the kitten owns that filter because it needs it for highlighting; the
-    CLI hands the path straight to nvim so opening a not-yet-created file
-    works.
+    No-arg form focuses the session editor. Otherwise the parser splits
+    URL vs Rails-ref vs file:line (``parse_visible_output_target``), the
+    backend turns it into a concrete dispatchable target (``resolve_target``
+    — Rails refs read the controller file to find the ``def <action>``
+    line; plain file paths are passed through as typed so the editor in
+    the backend resolves them against its own cwd), then it's handed to
+    the right adapter. Plain file paths skip any existence check so opening
+    a not-yet-created file lands in ``:enew``; Rails refs DO get verified
+    because the line number lookup needs the action to exist anyway.
     """
 
     session = resolve_project_session(cwd)
@@ -79,16 +83,21 @@ def open_target_in_session(
         neovim.focus(session)
         return session
 
-    # terminal_cwd=None preserves the path as typed; the editor (nvim in
-    # the session's backend) resolves it against its own cwd. Absolutizing
-    # against the host's project_root would hand the editor a host path it
-    # can't see when the backend is a devcontainer / ssh host.
-    resolved = resolve_visible_output_target(target, terminal_cwd=None)
-    if resolved is None:
+    syntactic = parse_visible_output_target(target)
+    if syntactic is None:
         msg = f"could not parse target {target!r}"
         raise HopError(msg)
 
     backend = session_backend_for(session)
+    # terminal_cwd=None preserves plain-file paths as typed; the editor (nvim
+    # in the session's backend) resolves them against its own cwd. Absolutizing
+    # against the host's project_root would hand the editor a host path it
+    # can't see when the backend is a devcontainer / ssh host.
+    resolved = resolve_target(syntactic, session=session, backend=backend, terminal_cwd=None)
+    if resolved is None:
+        msg = f"could not resolve target {target!r}"
+        raise HopError(msg)
+
     dispatch_resolved_target(
         resolved,
         session=session,

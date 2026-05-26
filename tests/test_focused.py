@@ -17,12 +17,16 @@ _HOST_RECORD = CommandBackendRecord(name="host", interactive_prefix="", noninter
 
 
 class _FakeBackend:
-    """Minimal ``SessionBackend`` for tests — only ``paths_exist`` is meaningful;
-    the rest are stubs satisfying the Protocol so pyright is happy."""
+    """Minimal ``SessionBackend`` for tests — only ``paths_exist`` and
+    ``read_file`` are meaningful; the rest are stubs satisfying the Protocol
+    so pyright is happy. ``files`` maps a path to its content for
+    ``read_file``; paths in ``existing`` are reported by ``paths_exist``."""
 
-    def __init__(self, existing: set[Path]) -> None:
-        self.existing = existing
+    def __init__(self, existing: set[Path] | None = None, files: dict[Path, str] | None = None) -> None:
+        self.existing = existing or set()
+        self.files: dict[Path, str] = files or {}
         self.calls: list[Sequence[Path]] = []
+        self.read_calls: list[Path] = []
 
     @property
     def interactive_prefix(self) -> str:
@@ -55,6 +59,16 @@ class _FakeBackend:
         del session
         self.calls.append(tuple(paths))
         return {p for p in paths if p in self.existing}
+
+    def read_file(self, session: ProjectSession, path: Path) -> str:
+        del session
+        self.read_calls.append(path)
+        from hop.backends import BackendFileNotFoundError
+
+        content = self.files.get(path)
+        if content is None:
+            raise BackendFileNotFoundError(f"fake: {path} not found")
+        return content
 
     def teardown(self, session: ProjectSession) -> None:
         del session
@@ -111,8 +125,9 @@ def test_paths_exist_returns_input_strings_not_resolved_paths(tmp_path: Path) ->
 
 def test_paths_exist_falls_back_to_local_when_workspace_not_a_hop_session(tmp_path: Path) -> None:
     """When sway reports a workspace that isn't ``p:<name>``, the function
-    falls back to local ``Path.exists()`` against ``Path.cwd()``. The
-    backend loader is never invoked."""
+    falls back to local ``Path.exists()`` against ``Path.cwd()``. URLs and
+    Rails refs are dropped (no backend → no def-line lookup). The backend
+    loader is never invoked."""
     backend_loader_calls: list[SessionState] = []
 
     def record_backend_loader(state: SessionState) -> _FakeBackend:
@@ -127,7 +142,7 @@ def test_paths_exist_falls_back_to_local_when_workspace_not_a_hop_session(tmp_pa
     try:
         os.chdir(tmp_path)
         result = paths_exist(
-            ["exists.txt", "missing.txt"],
+            ["exists.txt", "missing.txt", "https://example.com", "UsersController#index"],
             focused_workspace=lambda: "some-other-workspace",
             sessions_loader=lambda: {},
             cwd_loader=lambda _name: None,
@@ -283,13 +298,17 @@ def test_paths_exist_uses_backend_workspace_path_when_kitty_cwd_unavailable(tmp_
 
 def test_paths_exist_translates_rails_references_via_target_resolver(tmp_path: Path) -> None:
     """``Processing UsersController#index`` resolves to a controller path
-    against the focused cwd, then gets existence-checked through the
-    backend."""
+    against the focused cwd; the backend's ``read_file`` then proves that
+    ``def index`` is defined in the file before the candidate is marked."""
     project_root = tmp_path / "demo"
     shell_cwd = project_root
     shell_cwd.mkdir(parents=True)
     expected_path = (shell_cwd / "app/controllers/users_controller.rb").resolve()
-    fake_backend = _FakeBackend(existing={expected_path})
+    fake_backend = _FakeBackend(
+        files={
+            expected_path: "class UsersController < ApplicationController\n  def index\n  end\nend\n",
+        }
+    )
 
     result = paths_exist(
         ["Processing UsersController#index"],
@@ -300,6 +319,32 @@ def test_paths_exist_translates_rails_references_via_target_resolver(tmp_path: P
     )
 
     assert result == {"Processing UsersController#index"}
+    assert fake_backend.read_calls == [expected_path]
+
+
+def test_paths_exist_drops_rails_reference_when_def_not_defined(tmp_path: Path) -> None:
+    """Controller file exists but the action isn't there — the candidate
+    no longer survives the existence check (fixes the old "any action on
+    an existing controller highlights" bug)."""
+    project_root = tmp_path / "demo"
+    shell_cwd = project_root
+    shell_cwd.mkdir(parents=True)
+    controller_path = (shell_cwd / "app/controllers/users_controller.rb").resolve()
+    fake_backend = _FakeBackend(
+        files={
+            controller_path: "class UsersController < ApplicationController\n  def show\n  end\nend\n",
+        }
+    )
+
+    result = paths_exist(
+        ["Processing UsersController#index"],
+        focused_workspace=lambda: "p:demo",
+        sessions_loader=lambda: {"demo": _state("demo", project_root.resolve())},
+        cwd_loader=lambda _name: shell_cwd.resolve(),
+        backend_loader=lambda _state: fake_backend,
+    )
+
+    assert result == set()
 
 
 def test_paths_exist_falls_back_when_backend_loader_returns_none(tmp_path: Path) -> None:

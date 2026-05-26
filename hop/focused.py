@@ -22,7 +22,14 @@ from hop.kitty import get_focused_window_cwd
 from hop.session import resolve_project_session
 from hop.state import SessionState, load_sessions
 from hop.sway import SwayIpcAdapter
-from hop.targets import ResolvedFileTarget, resolve_visible_output_target
+from hop.targets import (
+    ResolvedFileTarget,
+    SyntacticFileTarget,
+    SyntacticRailsRefTarget,
+    parse_visible_output_target,
+    resolve_file_candidate,
+    resolve_target,
+)
 
 WORKSPACE_PREFIX = "p:"
 
@@ -96,20 +103,31 @@ def paths_exist(
 
     session = resolve_project_session(state.project_root)
 
-    # Resolve each candidate string via the standard target parser so rails
-    # refs and file:line shapes turn into real paths. URL targets are not
-    # this function's concern — callers (the kitten) handle them separately.
-    resolved_by_candidate: dict[str, Path] = {}
+    # Two checks happen here. Plain file refs flow through ``backend.paths_exist``
+    # in one batched call. Rails refs run through ``resolve_target``, which
+    # reads the controller file via ``backend.read_file`` and scans for
+    # ``def <action>`` — so the highlight only fires when the action really
+    # exists, not just because the controller file does. Rails refs that
+    # survive that check are added to the result directly (the file read
+    # already proved existence).
+    plain_files_to_check: dict[str, Path] = {}
+    verified: set[str] = set()
     for candidate in candidate_list:
-        target = resolve_visible_output_target(candidate, terminal_cwd=base_cwd)
-        if isinstance(target, ResolvedFileTarget):
-            resolved_by_candidate.setdefault(candidate, target.path)
+        syntactic = parse_visible_output_target(candidate)
+        if isinstance(syntactic, SyntacticFileTarget):
+            path = resolve_file_candidate(syntactic.path_text, terminal_cwd=base_cwd)
+            plain_files_to_check.setdefault(candidate, path)
+        elif isinstance(syntactic, SyntacticRailsRefTarget):
+            resolved = resolve_target(syntactic, session=session, backend=backend, terminal_cwd=base_cwd)
+            if isinstance(resolved, ResolvedFileTarget):
+                verified.add(candidate)
 
-    if not resolved_by_candidate:
-        return set()
-
-    existing_paths = backend.paths_exist(session, tuple(set(resolved_by_candidate.values())))
-    return {candidate for candidate, path in resolved_by_candidate.items() if path in existing_paths}
+    if plain_files_to_check:
+        existing_paths = backend.paths_exist(session, tuple(set(plain_files_to_check.values())))
+        for candidate, path in plain_files_to_check.items():
+            if path in existing_paths:
+                verified.add(candidate)
+    return verified
 
 
 def _default_focused_workspace() -> str:
@@ -132,10 +150,17 @@ def _session_name_from_workspace(workspace_name: str) -> str | None:
 
 
 def _local_fallback(candidates: list[str], *, base_cwd: Path) -> set[str]:
+    # No session, no backend — Rails refs can't run their def-line lookup
+    # here. Only plain file shapes are checked; URLs and Rails refs are
+    # dropped. Rails-ref highlighting outside hop sessions is rare enough
+    # that the loss isn't worth a host-only def grep.
     surviving: set[str] = set()
     for candidate in candidates:
-        target = resolve_visible_output_target(candidate, terminal_cwd=base_cwd)
-        if isinstance(target, ResolvedFileTarget) and target.path.exists():
+        syntactic = parse_visible_output_target(candidate)
+        if not isinstance(syntactic, SyntacticFileTarget):
+            continue
+        path = resolve_file_candidate(syntactic.path_text, terminal_cwd=base_cwd)
+        if path.exists():
             surviving.add(candidate)
     return surviving
 
