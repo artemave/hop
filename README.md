@@ -8,13 +8,14 @@ hop is conceptually similar to tmux sessions, except session/window management i
 
 - **Single window manager** - sway's normal shortcuts apply directly, no second layered keymap, no prefix key.
 - **GUI apps are part of the session** - browser, etc., not just terminals.
-- **No multiplexer in the way** - native terminal features (true color, kitty graphics, ligatures, mouse, OSC 52/8/133) work without lossy passthrough; system clipboard and scrollback are the real ones, not a copy-mode buffer.
+- **No multiplexer in the way** - native terminal features work without lossy passthrough; system clipboard and scrollback are the real ones, not a copy-mode buffer.
 
-hop is built on top of [Sway](https://swaywm.org/) window manager and [Kitty](https://sw.kovidgoyal.net/kitty/) terminal emulator. Any TUI editor works as the session editor — [Neovim](https://neovim.io/) is the default, vim / helix / kakoune / emacs `-nw` swap in via [config](#editor-keystroke-templates). Optional [Vicinae](https://www.vicinae.com/) launcher integration turns hop into a true "zero new key bindings" solution.
+hop is built on top of [Sway](https://swaywm.org/) window manager and [Kitty](https://sw.kovidgoyal.net/kitty/) terminal emulator and a TUI editor ([Neovim](https://neovim.io/) by default). Optional [Vicinae](https://www.vicinae.com/) launcher integration turns hop into a true "zero new key bindings" solution.
 
 ## Features
 
-- **Terminals start in the project directory** - spawn a shell anywhere in a session and it's already `cd`-ed into the project root.
+- **Session terminals start in the project directory** - spawn a shell anywhere in a session and it's already `cd`-ed into the project root.
+- **Dedicated session browser** - to keep project specific pages close to home.
 - **Open from terminal output** - bundled Kitty kitten picks file paths and URLs from visible output and dispatches them to the session's editor or browser.
 - **Pluggable backends** - shells and editor can run on the host, inside a docker container, over ssh, or anywhere describable as a chain of commands - without changing how you drive the session.
 - **Vicinae-driven workflow** - sessions, windows, and switches surface as direct entries in the launcher's main search; a single `exec hopd` line in the Sway config wires it up.
