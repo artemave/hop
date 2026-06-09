@@ -521,8 +521,8 @@ def test_daemon_swallows_daemon_down_write_errors(
     def boom(**_kwargs: Any) -> None:
         raise RuntimeError("original failure")
 
-    def raise_on_write(scripts_dir: Path, *, error: BaseException) -> None:
-        del scripts_dir, error
+    def raise_on_write(scripts_dir: Path, *, error: BaseException, hopd_bin: str) -> None:
+        del scripts_dir, error, hopd_bin
         raise OSError("read-only filesystem")
 
     monkeypatch.setattr(daemon, "regenerate", boom)

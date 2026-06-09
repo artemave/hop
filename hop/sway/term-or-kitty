@@ -14,17 +14,26 @@ set -e
 
 fallback=${1:-kitty}
 
+# Run hop relative to this script rather than via PATH: Sway runs bindings
+# under a login PATH that need not contain hop's install dir. This file ships
+# inside the package at <root>/hop/sway/term-or-kitty, so the source two
+# levels up is importable — invoke it as a module with `python3 -m hop`,
+# pointing PYTHONPATH at that root. No reliance on a console-script entry
+# point being on PATH or on the dev venv existing.
+root=$(cd "$(dirname "$(readlink -f "$0")")/../.." && pwd)
+hop=(env "PYTHONPATH=$root" python3 -m hop)
+
 ws=$(swaymsg -t get_workspaces | jq -r '.[] | select(.focused).name')
 project_root=""
 
 if [[ $ws == p:* ]]; then
-    project_root=$(hop list --json 2>/dev/null | jq -r --arg s "${ws#p:}" '
+    project_root=$("${hop[@]}" list --json 2>/dev/null | jq -r --arg s "${ws#p:}" '
         .[] | select(.name == $s) | .project_root // empty
     ' || true)
 fi
 
 if [[ -d $project_root ]]; then
-    cd "$project_root" && exec hop term
+    cd "$project_root" && exec "${hop[@]}" term
 else
     exec "$fallback"
 fi

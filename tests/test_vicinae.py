@@ -1,4 +1,6 @@
 import os
+import shlex
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -8,11 +10,19 @@ from hop.layouts import WindowSpec
 from hop.vicinae import (
     SCRIPT_FILENAME_PREFIX,
     GeneratedScript,
+    WindowsResolver,
     compute_target_scripts,
     default_scripts_dir,
     reconcile,
     regenerate,
 )
+
+# Absolute paths the generated scripts must invoke instead of bare `hop` /
+# `hopd` — vicinae runs the scripts under Sway's inherited PATH, which need
+# not contain hop's install dir. Picked with no shell-special characters so
+# they render verbatim (no `shlex.quote` wrapping) in content assertions.
+HOP_BIN = "/opt/hop/bin/hop"
+HOPD_BIN = "/opt/hop/bin/hopd"
 
 
 class StubSway:
@@ -31,13 +41,28 @@ def _builtin_windows() -> tuple[WindowSpec, ...]:
     return _windows(("shell", ""), ("editor", "nvim"), ("browser", ""))
 
 
+def _targets(
+    focused_workspace: str,
+    sessions: Sequence[SessionListing],
+    *,
+    windows_for: WindowsResolver,
+) -> tuple[GeneratedScript, ...]:
+    """`compute_target_scripts` pinned to `HOP_BIN`.
+
+    Most tests don't care which hop binary the scripts call, only that the
+    set, filenames, and headers are right — so they go through here and let
+    the absolute-path behavior be asserted once, explicitly, below.
+    """
+    return compute_target_scripts(focused_workspace, sessions, windows_for=windows_for, hop_bin=HOP_BIN)
+
+
 def test_focused_session_emits_window_kill_and_other_session_switch_scripts() -> None:
     sessions = (
         SessionListing(name="rails", workspace="p:rails", project_root=Path("/projects/rails")),
         SessionListing(name="other", workspace="p:other", project_root=Path("/projects/other")),
     )
 
-    scripts = compute_target_scripts(
+    scripts = _targets(
         "p:rails",
         sessions,
         windows_for=lambda _: _builtin_windows(),
@@ -58,7 +83,7 @@ def test_focused_session_emits_window_kill_and_other_session_switch_scripts() ->
 def test_custom_layout_roles_get_their_own_window_scripts() -> None:
     sessions = (SessionListing(name="rails", workspace="p:rails", project_root=Path("/projects/rails")),)
 
-    scripts = compute_target_scripts(
+    scripts = _targets(
         "p:rails",
         sessions,
         windows_for=lambda _: _windows(
@@ -74,7 +99,7 @@ def test_custom_layout_roles_get_their_own_window_scripts() -> None:
 def test_dispatched_command_per_role() -> None:
     sessions = (SessionListing(name="rails", workspace="p:rails", project_root=Path("/projects/rails")),)
 
-    scripts = compute_target_scripts(
+    scripts = _targets(
         "p:rails",
         sessions,
         windows_for=lambda _: _windows(("editor", "nvim"), ("browser", ""), ("console", "bin/rails c")),
@@ -82,10 +107,12 @@ def test_dispatched_command_per_role() -> None:
 
     by_filename = {script.filename: script.content for script in scripts}
     # `setsid -f` detaches hop from vicinae's SIGTERM-on-UI-close, so a
-    # slow first-time prepare can't be killed mid-bootstrap.
-    assert "exec setsid -f hop term --role editor\n" in by_filename["hop-window-editor"]
-    assert "exec setsid -f hop browser\n" in by_filename["hop-window-browser"]
-    assert "exec setsid -f hop term --role console\n" in by_filename["hop-window-console"]
+    # slow first-time prepare can't be killed mid-bootstrap. The hop binary
+    # is the absolute `HOP_BIN`, never bare `hop` (vicinae's PATH need not
+    # contain hop's install dir).
+    assert f"exec setsid -f {HOP_BIN} term --role editor\n" in by_filename["hop-window-editor"]
+    assert f"exec setsid -f {HOP_BIN} browser\n" in by_filename["hop-window-browser"]
+    assert f"exec setsid -f {HOP_BIN} term --role console\n" in by_filename["hop-window-console"]
 
 
 def test_off_session_workspace_emits_only_session_switch_scripts() -> None:
@@ -95,7 +122,7 @@ def test_off_session_workspace_emits_only_session_switch_scripts() -> None:
         SessionListing(name="third", workspace="p:third", project_root=Path("/projects/third")),
     )
 
-    scripts = compute_target_scripts(
+    scripts = _targets(
         "scratch",
         sessions,
         windows_for=lambda _: _builtin_windows(),
@@ -106,27 +133,27 @@ def test_off_session_workspace_emits_only_session_switch_scripts() -> None:
 
 
 def test_no_sessions_and_no_session_focus_still_emits_create_and_move_scripts() -> None:
-    scripts = compute_target_scripts("scratch", (), windows_for=lambda _: _builtin_windows())
+    scripts = _targets("scratch", (), windows_for=lambda _: _builtin_windows())
     assert [s.filename for s in scripts] == ["hop-create", "hop-move"]
 
 
 def test_move_script_dispatches_to_vicinae_dmenu_over_hop_list() -> None:
-    scripts = compute_target_scripts("scratch", (), windows_for=lambda _: ())
+    scripts = _targets("scratch", (), windows_for=lambda _: ())
     move = next(s for s in scripts if s.filename == "hop-move")
 
     assert "# @vicinae.title Hop move window to session\n" in move.content
     assert "# @vicinae.mode silent\n" in move.content
     # Candidates come from `hop list` (one session name per line); the user
-    # picks the destination in a `vicinae dmenu`.
-    assert "candidates=$(hop list)\n" in move.content
+    # picks the destination in a `vicinae dmenu`. `hop` is the absolute path.
+    assert f"candidates=$({HOP_BIN} list)\n" in move.content
     assert 'vicinae dmenu --placeholder "Move window to session"' in move.content
     # `setsid -f` survives vicinae's SIGTERM-on-UI-close, matching the rest
     # of the hop-* script set.
-    assert 'exec setsid -f hop move "$chosen"\n' in move.content
+    assert f'exec setsid -f {HOP_BIN} move "$chosen"\n' in move.content
 
 
 def test_create_script_dispatches_to_vicinae_dmenu_over_home_directories() -> None:
-    scripts = compute_target_scripts("scratch", (), windows_for=lambda _: ())
+    scripts = _targets("scratch", (), windows_for=lambda _: ())
     create = next(s for s in scripts if s.filename == "hop-create")
 
     # Directive header — title fuzzy-matches "hop cr".
@@ -147,13 +174,13 @@ def test_create_script_dispatches_to_vicinae_dmenu_over_home_directories() -> No
     # attaches if it already exists — same dispatch hop's CLI uses.
     # `setsid -f` survives vicinae's SIGTERM-on-UI-close, so a slow
     # first-time prepare can't be killed mid-bootstrap.
-    assert 'cd "$HOME/$chosen"\nexec setsid -f hop\n' in create.content
+    assert f'cd "$HOME/$chosen"\nexec setsid -f {HOP_BIN}\n' in create.content
 
 
 def test_focused_workspace_with_unregistered_session_falls_back_to_off_session_set() -> None:
     sessions = (SessionListing(name="other", workspace="p:other", project_root=Path("/projects/other")),)
 
-    scripts = compute_target_scripts(
+    scripts = _targets(
         "p:not-a-real-session",
         sessions,
         windows_for=lambda _: _builtin_windows(),
@@ -168,7 +195,7 @@ def test_session_without_project_root_does_not_emit_window_scripts() -> None:
         SessionListing(name="other", workspace="p:other", project_root=Path("/projects/other")),
     )
 
-    scripts = compute_target_scripts(
+    scripts = _targets(
         "p:lost",
         sessions,
         windows_for=lambda _: _builtin_windows(),
@@ -180,7 +207,7 @@ def test_session_without_project_root_does_not_emit_window_scripts() -> None:
 def test_role_filename_sanitization_replaces_disallowed_characters() -> None:
     sessions = (SessionListing(name="rails", workspace="p:rails", project_root=Path("/projects/rails")),)
 
-    scripts = compute_target_scripts(
+    scripts = _targets(
         "p:rails",
         sessions,
         windows_for=lambda _: _windows(("test:integration", "bin/test")),
@@ -194,7 +221,7 @@ def test_role_filename_sanitization_replaces_disallowed_characters() -> None:
 def test_filename_collisions_are_resolved_with_numeric_suffixes() -> None:
     sessions = (SessionListing(name="rails", workspace="p:rails", project_root=Path("/projects/rails")),)
 
-    scripts = compute_target_scripts(
+    scripts = _targets(
         "p:rails",
         sessions,
         windows_for=lambda _: _windows(
@@ -217,7 +244,7 @@ def test_filename_collisions_skip_taken_suffixes() -> None:
 
     # Three colliding sanitized roles force the dedupe loop to increment past
     # `-2` to find an available suffix.
-    scripts = compute_target_scripts(
+    scripts = _targets(
         "p:rails",
         sessions,
         windows_for=lambda _: _windows(("test:int", ""), ("test/int", ""), ("test\\int", "")),
@@ -233,7 +260,7 @@ def test_every_generated_script_advertises_the_hop_icon_with_a_resolvable_path()
         SessionListing(name="other", workspace="p:other", project_root=Path("/tmp/other")),
     )
 
-    scripts = compute_target_scripts(
+    scripts = _targets(
         "p:rails",
         sessions,
         windows_for=lambda _: _builtin_windows(),
@@ -251,7 +278,7 @@ def test_every_generated_script_advertises_the_hop_icon_with_a_resolvable_path()
 def test_generated_script_has_directive_header_and_atomic_chmod_markers() -> None:
     sessions = (SessionListing(name="rails", workspace="p:rails", project_root=Path("/tmp/rails")),)
 
-    scripts = compute_target_scripts(
+    scripts = _targets(
         "p:rails",
         sessions,
         windows_for=lambda _: _windows(("editor", "nvim")),
@@ -269,7 +296,7 @@ def test_generated_script_has_directive_header_and_atomic_chmod_markers() -> Non
 def test_window_script_packagename_is_session_name_for_subtitle_context() -> None:
     sessions = (SessionListing(name="rails-app", workspace="p:rails-app", project_root=Path("/tmp/rails")),)
 
-    scripts = compute_target_scripts(
+    scripts = _targets(
         "p:rails-app",
         sessions,
         windows_for=lambda _: _windows(("editor", "nvim"), ("console", "bin/rails c")),
@@ -289,7 +316,7 @@ def test_switch_script_has_empty_packagename_to_suppress_default_subtitle() -> N
         SessionListing(name="other", workspace="p:other", project_root=Path("/tmp/other")),
     )
 
-    scripts = compute_target_scripts("p:rails", sessions, windows_for=lambda _: ())
+    scripts = _targets("p:rails", sessions, windows_for=lambda _: ())
     switch = next(s for s in scripts if s.filename == "hop-switch-other")
 
     # The session name is already in the title ("Hop switch to other"), so
@@ -301,7 +328,7 @@ def test_switch_script_has_empty_packagename_to_suppress_default_subtitle() -> N
 def test_kill_script_uses_setsid_detach_and_vicinae_close_guard() -> None:
     sessions = (SessionListing(name="rails", workspace="p:rails", project_root=Path("/tmp/rails")),)
 
-    scripts = compute_target_scripts(
+    scripts = _targets(
         "p:rails",
         sessions,
         windows_for=lambda _: (),
@@ -310,7 +337,7 @@ def test_kill_script_uses_setsid_detach_and_vicinae_close_guard() -> None:
 
     assert "setsid -f bash -c" in kill.content
     assert "vicinae close || true" in kill.content
-    assert "exec hop kill" in kill.content
+    assert f"exec {HOP_BIN} kill" in kill.content
 
 
 def test_switch_script_dispatches_hop_switch_with_quoted_session_name() -> None:
@@ -319,14 +346,14 @@ def test_switch_script_dispatches_hop_switch_with_quoted_session_name() -> None:
         SessionListing(name="weird name", workspace="p:weird name", project_root=Path("/tmp/weird")),
     )
 
-    scripts = compute_target_scripts(
+    scripts = _targets(
         "p:rails",
         sessions,
         windows_for=lambda _: (),
     )
     weird = next(s for s in scripts if "weird" in s.filename)
 
-    assert "exec setsid -f hop switch 'weird name'\n" in weird.content
+    assert f"exec setsid -f {HOP_BIN} switch 'weird name'\n" in weird.content
 
 
 def test_reconcile_writes_target_files_with_executable_bit(tmp_path: Path) -> None:
@@ -398,6 +425,7 @@ def test_regenerate_wires_focused_workspace_sessions_and_windows_resolver(tmp_pa
         sessions_loader=lambda: sessions,
         scripts_dir=tmp_path,
         windows_for=lambda _: windows,
+        hop_bin=HOP_BIN,
     )
 
     assert (tmp_path / "hop-window-shell").exists()
@@ -421,7 +449,7 @@ def test_script_filename_prefix_is_reserved_namespace() -> None:
     # prefix every generated filename starts with.
     sessions = (SessionListing(name="rails", workspace="p:rails", project_root=Path("/tmp/rails")),)
 
-    scripts = compute_target_scripts(
+    scripts = _targets(
         "p:rails",
         sessions,
         windows_for=lambda _: _builtin_windows(),
@@ -431,13 +459,49 @@ def test_script_filename_prefix_is_reserved_namespace() -> None:
         assert script.filename.startswith(SCRIPT_FILENAME_PREFIX)
 
 
+def test_every_script_invokes_hop_by_absolute_shell_quoted_path() -> None:
+    """Vicinae runs these scripts under whatever PATH it inherited from Sway,
+    which need not contain hop's install dir. So every dispatch must name the
+    hop binary by absolute path — and a path with shell-special characters
+    (here, a space) must be quoted, never left to word-split."""
+    sessions = (
+        SessionListing(name="rails", workspace="p:rails", project_root=Path("/tmp/rails")),
+        SessionListing(name="other", workspace="p:other", project_root=Path("/tmp/other")),
+    )
+    hop_bin = "/opt/my hop/bin/hop"
+    quoted = shlex.quote(hop_bin)
+
+    scripts = compute_target_scripts(
+        "p:rails",
+        sessions,
+        windows_for=lambda _: _windows(("editor", "nvim"), ("browser", "")),
+        hop_bin=hop_bin,
+    )
+    by_filename = {s.filename: s.content for s in scripts}
+
+    assert f"exec setsid -f {quoted} term --role editor\n" in by_filename["hop-window-editor"]
+    assert f"exec setsid -f {quoted} browser\n" in by_filename["hop-window-browser"]
+    assert f"exec {quoted} kill" in by_filename["hop-kill"]
+    assert f"exec setsid -f {quoted} switch other\n" in by_filename["hop-switch-other"]
+    assert f"exec setsid -f {quoted}\n" in by_filename["hop-create"]
+    assert f"candidates=$({quoted} list)\n" in by_filename["hop-move"]
+    assert f'exec setsid -f {quoted} move "$chosen"\n' in by_filename["hop-move"]
+
+    # Nothing falls back to a bare `hop` command that the inherited PATH
+    # would fail to resolve.
+    for content in by_filename.values():
+        assert "setsid -f hop " not in content
+        assert "exec hop " not in content
+        assert "$(hop " not in content
+
+
 # --- write_daemon_down_script ---------------------------------------------
 
 
 def test_write_daemon_down_script_writes_single_restart_entry(tmp_path: Path) -> None:
     from hop.vicinae import DAEMON_DOWN_FILENAME, write_daemon_down_script
 
-    write_daemon_down_script(tmp_path, error=RuntimeError("the daemon died"))
+    write_daemon_down_script(tmp_path, hopd_bin=HOPD_BIN, error=RuntimeError("the daemon died"))
 
     entries = [p.name for p in tmp_path.iterdir()]
     assert entries == [DAEMON_DOWN_FILENAME]
@@ -446,8 +510,22 @@ def test_write_daemon_down_script_writes_single_restart_entry(tmp_path: Path) ->
     assert "# @vicinae.title Hop daemon stopped — restart" in content
     assert "RuntimeError: the daemon died" in content
     # The action detaches a fresh hopd so vicinae closing its UI doesn't
-    # take the new daemon down with it.
-    assert "setsid -f hopd" in content
+    # take the new daemon down with it — by absolute path, since vicinae's
+    # PATH need not contain hop's install dir.
+    assert f"setsid -f {HOPD_BIN}" in content
+
+
+def test_write_daemon_down_script_shell_quotes_the_hopd_path(tmp_path: Path) -> None:
+    """A hopd install path with shell-special characters (here, a space)
+    must be quoted in the restart line, not left to word-split."""
+    from hop.vicinae import DAEMON_DOWN_FILENAME, write_daemon_down_script
+
+    hopd_bin = "/opt/my hop/bin/hopd"
+    write_daemon_down_script(tmp_path, hopd_bin=hopd_bin, error=RuntimeError("x"))
+
+    content = (tmp_path / DAEMON_DOWN_FILENAME).read_text()
+    assert f"exec setsid -f {shlex.quote(hopd_bin)} </dev/null" in content
+    assert "setsid -f hopd " not in content
 
 
 def test_write_daemon_down_script_advertises_the_hop_icon(tmp_path: Path) -> None:
@@ -456,7 +534,7 @@ def test_write_daemon_down_script_advertises_the_hop_icon(tmp_path: Path) -> Non
     the vicinae result list rather than reading as some unrelated tool."""
     from hop.vicinae import DAEMON_DOWN_FILENAME, write_daemon_down_script
 
-    write_daemon_down_script(tmp_path, error=RuntimeError("x"))
+    write_daemon_down_script(tmp_path, hopd_bin=HOPD_BIN, error=RuntimeError("x"))
 
     content = (tmp_path / DAEMON_DOWN_FILENAME).read_text()
     icon_line = next(line for line in content.splitlines() if line.startswith("# @vicinae.icon "))
@@ -474,7 +552,7 @@ def test_write_daemon_down_script_clears_existing_hop_scripts(tmp_path: Path) ->
     (tmp_path / "hop-switch-rails").write_text("stale")
     (tmp_path / "hop-window-shell").write_text("stale")
 
-    write_daemon_down_script(tmp_path, error=RuntimeError("boom"))
+    write_daemon_down_script(tmp_path, hopd_bin=HOPD_BIN, error=RuntimeError("boom"))
 
     remaining = sorted(p.name for p in tmp_path.iterdir())
     assert remaining == ["hop-_daemon-down"]
@@ -488,7 +566,7 @@ def test_write_daemon_down_script_preserves_non_hop_files(tmp_path: Path) -> Non
     (tmp_path / "unrelated-script").write_text("not hop")
     (tmp_path / "hop-switch-foo").write_text("hop")
 
-    write_daemon_down_script(tmp_path, error=RuntimeError("boom"))
+    write_daemon_down_script(tmp_path, hopd_bin=HOPD_BIN, error=RuntimeError("boom"))
 
     remaining = sorted(p.name for p in tmp_path.iterdir())
     assert remaining == ["hop-_daemon-down", "unrelated-script"]
@@ -503,7 +581,7 @@ def test_write_daemon_down_script_creates_scripts_dir(tmp_path: Path) -> None:
     target = tmp_path / "vicinae" / "scripts"
     assert not target.exists()
 
-    write_daemon_down_script(target, error=RuntimeError("boom"))
+    write_daemon_down_script(target, hopd_bin=HOPD_BIN, error=RuntimeError("boom"))
 
     assert target.is_dir()
     assert (target / "hop-_daemon-down").exists()
@@ -515,7 +593,7 @@ def test_write_daemon_down_script_collapses_multiline_errors(tmp_path: Path) -> 
     single line."""
     from hop.vicinae import write_daemon_down_script
 
-    write_daemon_down_script(tmp_path, error=RuntimeError("first line\nsecond line\nthird"))
+    write_daemon_down_script(tmp_path, hopd_bin=HOPD_BIN, error=RuntimeError("first line\nsecond line\nthird"))
 
     content = (tmp_path / "hop-_daemon-down").read_text()
     # Every @vicinae.* header sits on its own line; description must not
@@ -530,7 +608,7 @@ def test_write_daemon_down_script_truncates_long_descriptions(tmp_path: Path) ->
     from hop.vicinae import write_daemon_down_script
 
     long_message = "x" * 5000
-    write_daemon_down_script(tmp_path, error=RuntimeError(long_message))
+    write_daemon_down_script(tmp_path, hopd_bin=HOPD_BIN, error=RuntimeError(long_message))
 
     description_line = next(
         line

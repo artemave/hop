@@ -64,6 +64,7 @@ def compute_target_scripts(
     sessions: Sequence[SessionListing],
     *,
     windows_for: WindowsResolver,
+    hop_bin: str,
 ) -> tuple[GeneratedScript, ...]:
     """Compute the desired vicinae script set for the current state.
 
@@ -73,6 +74,10 @@ def compute_target_scripts(
     for every live session. `hop-create` and `hop-move` are always
     emitted — both fall through to a `vicinae dmenu` pick over their
     own candidate list.
+
+    Every script invokes the `hop` CLI through ``hop_bin`` (an absolute
+    path), never by bare name: vicinae runs these scripts under whatever
+    PATH it inherited from Sway, which need not contain hop's install dir.
     """
 
     scripts: list[GeneratedScript] = []
@@ -88,8 +93,8 @@ def compute_target_scripts(
         )
         windows = windows_for(project_session)
         for window in windows:
-            scripts.append(_window_script(window, project_session, used=used_filenames))
-        scripts.append(_kill_script(project_session, used=used_filenames))
+            scripts.append(_window_script(window, project_session, hop_bin=hop_bin, used=used_filenames))
+        scripts.append(_kill_script(project_session, hop_bin=hop_bin, used=used_filenames))
 
     other_sessions: Iterable[SessionListing]
     if focused_session is not None:
@@ -97,10 +102,10 @@ def compute_target_scripts(
     else:
         other_sessions = sessions
     for session in other_sessions:
-        scripts.append(_switch_script(session, used=used_filenames))
+        scripts.append(_switch_script(session, hop_bin=hop_bin, used=used_filenames))
 
-    scripts.append(_create_script())
-    scripts.append(_move_script())
+    scripts.append(_create_script(hop_bin=hop_bin))
+    scripts.append(_move_script(hop_bin=hop_bin))
 
     return tuple(scripts)
 
@@ -140,11 +145,13 @@ def regenerate(
     sessions_loader: SessionsLoader,
     scripts_dir: Path,
     windows_for: WindowsResolver,
+    hop_bin: str,
 ) -> None:
     target = compute_target_scripts(
         sway.get_focused_workspace(),
         sessions_loader(),
         windows_for=windows_for,
+        hop_bin=hop_bin,
     )
     reconcile(target, scripts_dir=scripts_dir)
 
@@ -162,21 +169,23 @@ def _window_script(
     window: WindowSpec,
     session: ProjectSession,
     *,
+    hop_bin: str,
     used: set[str],
 ) -> GeneratedScript:
     role = window.role
     filename = _unique(WINDOW_FILENAME_PREFIX + _sanitize(role), used=used)
     title = f"Hop {role}"
     description = f"Open or focus the {role!r} window in the {session.session_name!r} hop session."
+    hop = shlex.quote(hop_bin)
     # `setsid -f` detaches hop into its own session so vicinae's SIGTERM
     # (sent when its UI closes after the action fires) doesn't kill hop
     # mid-bootstrap. Without it, a slow first-time `prepare` (compose
     # recreate, image pull) leaves the user with "nothing happens" because
     # hop dies before kitty launches.
     if role == BROWSER_ROLE:
-        body = "exec setsid -f hop browser\n"
+        body = f"exec setsid -f {hop} browser\n"
     else:
-        body = f"exec setsid -f hop term --role {shlex.quote(role)}\n"
+        body = f"exec setsid -f {hop} term --role {shlex.quote(role)}\n"
     content = _render(
         title=title,
         description=description,
@@ -191,7 +200,7 @@ def _window_script(
     return GeneratedScript(filename=filename, content=content)
 
 
-def _kill_script(session: ProjectSession, *, used: set[str]) -> GeneratedScript:
+def _kill_script(session: ProjectSession, *, hop_bin: str, used: set[str]) -> GeneratedScript:
     filename = _unique(KILL_FILENAME, used=used)
     title = "Hop kill"
     description = f"Kill the {session.session_name!r} hop session."
@@ -200,11 +209,12 @@ def _kill_script(session: ProjectSession, *, used: set[str]) -> GeneratedScript:
         description=description,
         package_name=session.session_name,
         project_root=session.project_root,
+        hop_bin=hop_bin,
     )
     return GeneratedScript(filename=filename, content=content)
 
 
-def _create_script() -> GeneratedScript:
+def _create_script(*, hop_bin: str) -> GeneratedScript:
     # The candidate set (every directory under $HOME, modulo dot-dirs and
     # well-known build noise) is far too big for static enumeration as
     # vicinae root entries, so this script falls through to a second
@@ -260,12 +270,12 @@ def _create_script() -> GeneratedScript:
             # UI closes after the action fires) doesn't kill it mid-prepare.
             # A slow first-time `prepare` (compose recreate, image pull) is
             # otherwise enough to lose the whole bootstrap.
-            "exec setsid -f hop\n"
+            f"exec setsid -f {shlex.quote(hop_bin)}\n"
         ),
     )
 
 
-def _move_script() -> GeneratedScript:
+def _move_script(*, hop_bin: str) -> GeneratedScript:
     # Single entry that delegates the destination pick to `vicinae dmenu`
     # over `hop list` output, mirroring `_create_script`'s pattern. Setting
     # the destination per session would require one entry per session (the
@@ -284,7 +294,7 @@ def _move_script() -> GeneratedScript:
             "\n"
             "set -euo pipefail\n"
             "\n"
-            "candidates=$(hop list)\n"
+            f"candidates=$({shlex.quote(hop_bin)} list)\n"
             'if [ -z "$candidates" ]; then\n'
             "    exit 0\n"
             "fi\n"
@@ -301,18 +311,18 @@ def _move_script() -> GeneratedScript:
             # `setsid -f` mirrors the rationale in `_window_script` — vicinae
             # SIGTERMs the action on UI close, and we don't want that to
             # interrupt the IPC sequence.
-            'exec setsid -f hop move "$chosen"\n'
+            f'exec setsid -f {shlex.quote(hop_bin)} move "$chosen"\n'
         ),
     )
 
 
-def _switch_script(session: SessionListing, *, used: set[str]) -> GeneratedScript:
+def _switch_script(session: SessionListing, *, hop_bin: str, used: set[str]) -> GeneratedScript:
     filename = _unique(SWITCH_FILENAME_PREFIX + _sanitize(session.name), used=used)
     title = f"Hop switch to {session.name}"
     description = f"Switch focus to the {session.name!r} hop session's workspace."
     # `setsid -f` for the same reason `_window_script` uses it — vicinae
     # SIGTERMs the action on UI close.
-    body = f"exec setsid -f hop switch {shlex.quote(session.name)}\n"
+    body = f"exec setsid -f {shlex.quote(hop_bin)} switch {shlex.quote(session.name)}\n"
     # Switch entries already name the target session in the title, so
     # the right-side label would be redundant. Empty packageName hides
     # the launcher's default ("scripts" — derived from the dir name).
@@ -356,7 +366,7 @@ def _render_no_cd(*, title: str, description: str, package_name: str, body: str)
     )
 
 
-def _render_kill(*, title: str, description: str, package_name: str, project_root: Path) -> str:
+def _render_kill(*, title: str, description: str, package_name: str, project_root: Path, hop_bin: str) -> str:
     # `hop kill` from inside a vicinae action gets SIGTERMed when vicinae
     # closes the UI before teardown completes (devcontainer left in
     # `stopping`, etc.). `setsid -f` detaches into a fresh session so the
@@ -378,21 +388,23 @@ def _render_kill(*, title: str, description: str, package_name: str, project_roo
         "    set -e\n"
         "    vicinae close || true\n"
         f"    cd {shlex.quote(str(project_root))}\n"
-        "    exec hop kill\n"
+        f"    exec {shlex.quote(hop_bin)} kill\n"
         "'\n"
     )
 
 
-def write_daemon_down_script(scripts_dir: Path, *, error: BaseException) -> None:
+def write_daemon_down_script(scripts_dir: Path, *, error: BaseException, hopd_bin: str) -> None:
     """Replace the hop-* script set with a single "daemon stopped" entry.
 
     Called from ``hopd``'s exception handler so the user sees a clear
     "click to restart" entry in vicinae instead of a stale hop-* set
     that silently reflects whatever state the daemon last computed.
 
-    Picking the entry runs ``setsid -f hopd`` to detach a fresh daemon
-    process — works whether or not the user has systemd-style supervision
-    (systemd will adopt the child if the unit is alive).
+    Picking the entry runs ``setsid -f <hopd_bin>`` to detach a fresh
+    daemon process. ``hopd_bin`` is an absolute path because the action
+    runs under vicinae's inherited PATH, which need not contain hop's
+    install dir — a bare ``hopd`` would not resolve, leaving the restart
+    entry as dead as the daemon it's meant to revive.
     """
 
     scripts_dir.mkdir(parents=True, exist_ok=True)
@@ -411,7 +423,7 @@ def write_daemon_down_script(scripts_dir: Path, *, error: BaseException) -> None
         f"# @vicinae.icon {_ICON_PATH}\n"
         "# @vicinae.mode silent\n"
         "\n"
-        "exec setsid -f hopd </dev/null >/dev/null 2>&1\n"
+        f"exec setsid -f {shlex.quote(hopd_bin)} </dev/null >/dev/null 2>&1\n"
     )
     _atomic_write(scripts_dir / DAEMON_DOWN_FILENAME, content)
 
