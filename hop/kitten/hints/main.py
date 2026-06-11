@@ -8,6 +8,16 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
 
+# kitty's bundled build ships a hermetic Python: `site` is stripped and sys.path
+# starts empty, so it never reads the site-packages `hop` was installed into.
+# (The Fedora system kitty uses the system Python and does, which is why this
+# only broke after switching kitty builds.) This file always lives at
+# hop/kitten/hints/main.py, so the directory holding the `hop` package is three
+# parents up — put it on sys.path so the import resolves under any kitty build.
+_HOP_PARENT = str(Path(__file__).resolve().parents[3])
+if _HOP_PARENT not in sys.path:
+    sys.path.insert(0, _HOP_PARENT)
+
 # handle_result runs in the long-lived kitty boss process, which caches
 # `hop.*` imports in sys.modules. When we detect we're inside a kitty boss
 # (kitty's C extension is loaded), drop the cached hop modules so source edits

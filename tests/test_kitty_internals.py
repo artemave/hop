@@ -203,7 +203,11 @@ def test_list_session_windows_rejects_invalid_payload_shape() -> None:
         adapter.list_session_windows(build_session())
 
 
-def test_socket_transport_requires_listen_on() -> None:
+def test_socket_transport_requires_listen_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    # SocketKittyTransport falls back to the KITTY_LISTEN_ON env var, which is
+    # set whenever the suite runs inside a kitty with remote control on. Clear
+    # it so the "no listen address at all" path is what's exercised.
+    monkeypatch.delenv("KITTY_LISTEN_ON", raising=False)
     with pytest.raises(KittyConnectionError, match="KITTY_LISTEN_ON"):
         SocketKittyTransport(listen_on=None).send_command("ls")
 
