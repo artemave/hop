@@ -405,9 +405,11 @@ def test_command_backend_probe_workspace_path_returns_none_on_empty_stdout(tmp_p
 
 
 def test_command_backend_paths_exist_runs_loop_with_noninteractive_prefix(tmp_path: Path) -> None:
-    """When `noninteractive_prefix` is set, the synthesized command
-    starts with it (not `interactive_prefix`). The recorded stdin is the newline-
-    joined paths; stdout names which exist."""
+    """When `noninteractive_prefix` is set, the synthesized command is the
+    prefix plus a bare `sh` (not `interactive_prefix`). The existence-check
+    script — one inlined check per path — rides stdin; stdout names which exist.
+    Piping over stdin (vs a `sh -c '<script>'` arg) is what lets an ssh prefix
+    work: `ssh host …` flattens argv and would mangle a quoted script."""
     runner = RecordingRunner(stdout="/abs/exists.rb\n")
     backend = backend_from_config(
         make_backend(noninteractive_prefix="compose exec -T devcontainer"),
@@ -422,16 +424,15 @@ def test_command_backend_paths_exist_runs_loop_with_noninteractive_prefix(tmp_pa
     assert existing == {Path("/abs/exists.rb")}
     assert len(runner.calls) == 1
     argv, _, stdin = runner.calls[0]
-    assert argv[:2] == ("sh", "-c")
-    composed = argv[2]
-    assert composed.startswith("compose exec -T devcontainer sh -c ")
-    assert "while IFS= read -r p" in composed
-    assert stdin == "/abs/exists.rb\n/abs/missing.rb\n"
+    assert argv == ("sh", "-c", "compose exec -T devcontainer sh")
+    assert stdin is not None
+    assert "test -e /abs/exists.rb" in stdin
+    assert "test -e /abs/missing.rb" in stdin
 
 
 def test_command_backend_paths_exist_with_empty_prefix_runs_loop_unwrapped(tmp_path: Path) -> None:
-    """With empty noninteractive_prefix (the built-in host case),
-    the synthesized command is just ``sh -c '<loop>'`` — runs locally."""
+    """With empty noninteractive_prefix (the built-in host case), the
+    synthesized command is just a bare ``sh`` — the script runs locally."""
     runner = RecordingRunner(stdout="/abs/exists.rb\n")
     backend = backend_from_config(
         make_backend(interactive_prefix="", noninteractive_prefix=""),
@@ -441,7 +442,7 @@ def test_command_backend_paths_exist_with_empty_prefix_runs_loop_unwrapped(tmp_p
     backend.paths_exist(build_session(tmp_path), (Path("/abs/exists.rb"),))
 
     argv = runner.calls[0][0]
-    assert argv[2].startswith("sh -c ")
+    assert argv == ("sh", "-c", "sh")
     assert "compose" not in argv[2]
 
 
@@ -486,14 +487,14 @@ def test_command_backend_read_file_wraps_cat_with_noninteractive_prefix(tmp_path
     result = backend.read_file(build_session(tmp_path), Path("/app/users_controller.rb"))
 
     assert result == "contents of the file\n"
-    # One subprocess call, wrapped through noninteractive_prefix + sh -c with
-    # the pre-check + cat script (exit 42 sentinel encoded in the script).
+    # One subprocess call: prefix + bare `sh`, with the pre-check + cat script
+    # (exit 42 sentinel) delivered over stdin so it survives an ssh prefix.
     assert len(runner.calls) == 1
-    argv, _cwd, _stdin = runner.calls[0]
-    assert argv[:2] == ("sh", "-c")
-    assert "compose exec -T devcontainer" in argv[2]
-    assert "exit 42" in argv[2]
-    assert "/app/users_controller.rb" in argv[2]
+    argv, _cwd, stdin = runner.calls[0]
+    assert argv == ("sh", "-c", "compose exec -T devcontainer sh")
+    assert stdin is not None
+    assert "exit 42" in stdin
+    assert "/app/users_controller.rb" in stdin
 
 
 def test_command_backend_read_file_raises_backend_file_not_found_on_sentinel_exit(tmp_path: Path) -> None:

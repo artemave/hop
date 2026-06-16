@@ -31,14 +31,6 @@ LOCALHOST_HOSTS = frozenset({"localhost", "127.0.0.1", "0.0.0.0"})
 # environment (the typical case for container-backed dev setups).
 SHELL_FALLBACK = "${SHELL:-sh}"
 
-# Inner shell loop hop wraps in `<noninteractive_prefix> sh -c '...'` to ask
-# a backend which of a set of paths exists. Reads newline-separated paths
-# from stdin and writes the existing ones, newline-separated, to stdout.
-# IFS= preserves leading whitespace; -r disables backslash interpretation.
-# Trailing `:` keeps the loop's exit code at 0 — a missing file in the last
-# iteration would otherwise leak through as the shell's overall exit.
-_PATH_EXISTS_LOOP = 'while IFS= read -r p; do test -e "$p" && printf "%s\\n" "$p"; :; done'
-
 # Sentinel exit code used by ``CommandBackend.read_file`` to signal
 # "path doesn't exist" from inside the shell script (so the caller can
 # distinguish missing-file from other cat failures by exit code alone).
@@ -350,10 +342,18 @@ class CommandBackend:
         if not paths:
             return set()
         substituted_prefix = substitute(self.noninteractive_prefix, session=session)
-        composed = f"{substituted_prefix} sh -c {shlex.quote(_PATH_EXISTS_LOOP)}".lstrip()
+        # Pipe the existence-check script to a bare `sh` over stdin rather than
+        # passing it as a `sh -c '<script>'` argument. A quoted argument doesn't
+        # survive a prefix that flattens argv — `ssh host …` joins the remote
+        # argv with spaces and strips one quote level, so the remote shell then
+        # re-parses the bare script and errors. `sh` is a single token that
+        # passes through any prefix unchanged; the script (each path inlined)
+        # rides stdin untouched. Trailing `:` keeps the exit code at 0 when the
+        # last path is missing.
+        composed = f"{substituted_prefix} sh".lstrip()
         argv = _sh_c(composed)
-        stdin = "\n".join(str(p) for p in paths) + "\n"
-        result = self.runner(argv, session.project_root, stdin=stdin)
+        script = "".join(f'test -e {shlex.quote(str(p))} && printf "%s\\n" {shlex.quote(str(p))}\n' for p in paths)
+        result = self.runner(argv, session.project_root, stdin=f"{script}:\n")
         debug.log_command(argv, session.project_root, result)
         if result.returncode != 0:
             stderr = (result.stderr or result.stdout or "").strip()
@@ -367,11 +367,13 @@ class CommandBackend:
         quoted = shlex.quote(str(path))
         # exit 42 distinguishes "file missing" from any other cat failure
         # (permissions, dead backend) — the resolver treats missing as a
-        # normal miss but lets other failures propagate.
-        script = f"[ -f {quoted} ] || exit 42; cat {quoted}"
-        composed = f"{substituted_prefix} sh -c {shlex.quote(script)}".lstrip()
+        # normal miss but lets other failures propagate. Delivered over stdin
+        # to a bare `sh` (not `sh -c '<script>'`) so it survives argv-flattening
+        # prefixes like `ssh host …` — see paths_exist.
+        script = f"[ -f {quoted} ] || exit 42\ncat {quoted}\n"
+        composed = f"{substituted_prefix} sh".lstrip()
         argv = _sh_c(composed)
-        result = self.runner(argv, session.project_root)
+        result = self.runner(argv, session.project_root, stdin=script)
         debug.log_command(argv, session.project_root, result)
         if result.returncode == _READ_FILE_NOT_FOUND_EXIT:
             msg = f"backend {self.name!r}: {path} not found"
