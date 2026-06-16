@@ -4,6 +4,8 @@ This guide walks through the one-time setup for running hop sessions inside cont
 
 `devcontainer` is just a name — hop has no built-in knowledge of compose. Every backend is a chain of commands you describe in `~/.config/hop/config.toml` or in a project's `.hop.toml`; the recipes below happen to use `podman-compose`, but the same shape works for `docker compose`, `podman compose`, `lima`, `kubectl exec`, etc.
 
+This guide assumes the container runs on the **same host** as kitty. For a container on a **remote** machine reached over ssh, see **[ssh + container session backend](ssh-devcontainer.md)** — the composition adds a whole class of gotchas (argv-flattening, non-login PATH, clipboard, the bridge over ssh).
+
 ## What hop runs
 
 For a session whose backend is `devcontainer`, hop will:

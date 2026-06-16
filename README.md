@@ -270,7 +270,7 @@ hop --backend <name>
 
 Forces a backend at session creation regardless of auto-detect. Use `hop --backend host` to keep the host backend in a project that would otherwise auto-activate something else. The choice is persisted for the session's lifetime.
 
-For step-by-step devcontainer setup and troubleshooting, see [`docs/devcontainer.md`](docs/devcontainer.md).
+For step-by-step devcontainer setup and troubleshooting, see [`docs/devcontainer.md`](docs/devcontainer.md). For a session over ssh, see [`docs/ssh.md`](docs/ssh.md); for a container on a **remote** machine reached over ssh, [`docs/ssh-devcontainer.md`](docs/ssh-devcontainer.md).
 
 ## Automation
 

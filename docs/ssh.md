@@ -120,8 +120,14 @@ Errors from the acceptor — `no focused Sway window`, `session 'X' from focused
 - **Kitty hint-pick latency.** Each kitten invocation pays one ssh round-trip (~30-100ms warm) to ask `paths_exist`. Acceptable for a keypress-driven highlight; if you find it laggy, consider a host-side file index (hop doesn't ship one yet).
 - **Browser URL translation is on you.** `host_translate` swaps the hostname; the port stays as the remote process bound it. If the remote isn't reachable from the local network, you'll need `ssh -L` and a custom `port_translate`.
 
+## Composing with a container
+
+Running the ssh backend over a remote *container* (nvim inside `podman exec`) is
+its own thing — argv-flattening, the non-login PATH, the bridge over ssh, the
+clipboard, and more. See **[ssh + container session backend](ssh-devcontainer.md)**
+for the full worked recipe and its gotchas.
+
 ## Out of scope for this guide
 
-- **ssh + devcontainer composition** (an ssh backend wrapping a devcontainer on the remote). Doable in principle; not yet covered by a built-in recipe.
 - **Auto-detect ssh** (an `activate` probe that walks the filesystem for an ssh marker). The stub-directory pattern + `activate = "true"` is the recommended shape; no probe needed.
 - **A first-class `type = "ssh"` backend.** Hop has no code that knows about ssh — it's all config recipe.
