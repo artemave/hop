@@ -34,7 +34,7 @@
   </g>
 
   <text x="500" y="302" font-family="DejaVu Sans Mono" font-weight="bold" font-size="158" fill="url(#hopgrad)">hop</text>
-  <text x="506" y="372" font-family="DejaVu Sans" font-size="40" fill="#c7cad8">A project session manager</text>
+  <text x="506" y="372" font-family="DejaVu Sans" font-size="40" fill="#c7cad8">Switch contexts, not windows</text>
   <rect x="506" y="404" width="220" height="4" rx="2" fill="url(#divider)"/>
   <text x="506" y="452" font-family="DejaVu Sans Mono" font-size="26" fill="#7c8294">sway &#183; kitty &#183; neovim</text>
 </svg>
