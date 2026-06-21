@@ -90,6 +90,7 @@ def compute_target_scripts(
             project_root=focused_session.project_root,
             session_name=focused_session.name,
             workspace_name=focused_session.workspace,
+            host=focused_session.host,
         )
         windows = windows_for(project_session)
         for window in windows:
@@ -195,6 +196,7 @@ def _window_script(
         # a glance — vital for `Hop kill`, useful for everything else.
         package_name=session.session_name,
         project_root=session.project_root,
+        host=session.host,
         body=body,
     )
     return GeneratedScript(filename=filename, content=content)
@@ -209,6 +211,7 @@ def _kill_script(session: ProjectSession, *, hop_bin: str, used: set[str]) -> Ge
         description=description,
         package_name=session.session_name,
         project_root=session.project_root,
+        host=session.host,
         hop_bin=hop_bin,
     )
     return GeneratedScript(filename=filename, content=content)
@@ -335,7 +338,21 @@ def _switch_script(session: SessionListing, *, hop_bin: str, used: set[str]) -> 
     return GeneratedScript(filename=filename, content=content)
 
 
-def _render(*, title: str, description: str, package_name: str, project_root: Path, body: str) -> str:
+def _session_setup(project_root: Path, host: str | None, *, indent: str = "") -> str:
+    """The line that tells the dispatched ``hop`` which session to act on.
+
+    Local: ``cd`` into the project dir (hop derives identity from cwd). Remote:
+    the project dir is on the *remote*, so ``cd`` would fail on the laptop —
+    pass identity via ``HOP_REMOTE_*`` instead, and every session command rebuilds
+    the remote session from it.
+    """
+
+    if host is None:
+        return f"{indent}cd {shlex.quote(str(project_root))}\n"
+    return f"{indent}export HOP_REMOTE_HOST={shlex.quote(host)} HOP_REMOTE_CWD={shlex.quote(str(project_root))}\n"
+
+
+def _render(*, title: str, description: str, package_name: str, project_root: Path, host: str | None, body: str) -> str:
     return (
         "#!/usr/bin/env bash\n"
         "# @vicinae.schemaVersion 1\n"
@@ -346,7 +363,7 @@ def _render(*, title: str, description: str, package_name: str, project_root: Pa
         "# @vicinae.mode silent\n"
         "\n"
         "set -euo pipefail\n"
-        f"cd {shlex.quote(str(project_root))}\n"
+        f"{_session_setup(project_root, host)}"
         f"{body}"
     )
 
@@ -366,7 +383,9 @@ def _render_no_cd(*, title: str, description: str, package_name: str, body: str)
     )
 
 
-def _render_kill(*, title: str, description: str, package_name: str, project_root: Path, hop_bin: str) -> str:
+def _render_kill(
+    *, title: str, description: str, package_name: str, project_root: Path, host: str | None, hop_bin: str
+) -> str:
     # `hop kill` from inside a vicinae action gets SIGTERMed when vicinae
     # closes the UI before teardown completes (devcontainer left in
     # `stopping`, etc.). `setsid -f` detaches into a fresh session so the
@@ -387,7 +406,7 @@ def _render_kill(*, title: str, description: str, package_name: str, project_roo
         "exec setsid -f bash -c '\n"
         "    set -e\n"
         "    vicinae close || true\n"
-        f"    cd {shlex.quote(str(project_root))}\n"
+        f"{_session_setup(project_root, host, indent='    ')}"
         f"    exec {shlex.quote(hop_bin)} kill\n"
         "'\n"
     )

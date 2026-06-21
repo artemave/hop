@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Protocol
 
-from hop.session import ProjectSession, resolve_project_session
+from hop.session import ProjectSession, remote_session_from_env, resolve_project_session
 
 
 class SessionBrowserAdapter(Protocol):
@@ -16,6 +16,6 @@ def focus_browser(
     browser: SessionBrowserAdapter,
     url: str | None = None,
 ) -> ProjectSession:
-    session = resolve_project_session(cwd)
+    session = remote_session_from_env() or resolve_project_session(cwd)
     browser.ensure_browser(session, url=url)
     return session

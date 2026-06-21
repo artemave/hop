@@ -355,7 +355,7 @@ class SharedNeovimEditorAdapter:
         shell_command = shell_spec.command if shell_spec is not None and shell_spec.command else SHELL_FALLBACK
         editor_inline = backend.inline(editor_command, session)
         shell_inline = backend.inline(shell_command, session)
-        return ("sh", "-c", f"{editor_inline}; {shell_inline}")
+        return backend.compose(f"{editor_inline}; {shell_inline}")
 
     def _find_editor_window(self, session: ProjectSession) -> SwayWindow | None:
         mark = _editor_mark(session)

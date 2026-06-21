@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from hop.session import ProjectSession, resolve_project_session
+from hop.session import ProjectSession, remote_session_from_env, resolve_project_session
 
 DEFAULT_RUN_ROLE = "shell"
 
@@ -47,7 +47,7 @@ def run_command(
     focus: bool = False,
     runs_dir: Path | None = None,
 ) -> RunDispatch:
-    session = resolve_project_session(cwd)
+    session = remote_session_from_env() or resolve_project_session(cwd)
     window_id = terminals.run_in_terminal(session, role=role, command=command, focus=focus)
 
     run_id = uuid.uuid4().hex

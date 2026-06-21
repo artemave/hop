@@ -564,3 +564,43 @@ def test_top_level_window_overrides_layout_window(tmp_path: Path) -> None:
     assert server is not None
     assert server.command == "layout-bin/dev"  # command from layout, no override
     assert server.active is False  # activate from top-level
+
+
+def test_resolve_windows_routes_remote_probes_through_transport_with_local_cwd(tmp_path: Path) -> None:
+    """For a remote session the activate probes must run through the transport
+    (ssh) with the local runner cwd — never a bare `sh -c` rooted at the remote
+    project_root, which doesn't exist locally (the crash a remote `hop` hit)."""
+    config = HopConfig(
+        layouts=(
+            LayoutConfig(
+                name="rails",
+                activate="test -f bin/rails && echo {host}",
+                windows=(WindowConfig(role="server", command="bin/dev"),),
+            ),
+        )
+    )
+    remote_session = ProjectSession(
+        project_root=Path("/remote/proj"),
+        session_name="proj",
+        workspace_name="p:proj",
+        host="devbox",
+    )
+    runner = RecordingRunner()
+
+    def transport(command: str) -> tuple[str, ...]:
+        return ("ssh", "devbox", command)
+
+    windows = resolve_windows(
+        config,
+        remote_session,
+        runner=runner,
+        transport=transport,
+        host="devbox",
+        cwd=tmp_path,  # stands in for the host home
+    )
+
+    assert find_window(windows, "server") is not None  # layout matched (probe exit 0)
+    argv, cwd = runner.calls[0]
+    assert argv[0] == "ssh"  # went through the transport, not a bare `sh -c`
+    assert cwd == tmp_path  # local cwd, never the remote project_root
+    assert "{host}" not in argv[-1] and "devbox" in argv[-1]  # {host} substituted

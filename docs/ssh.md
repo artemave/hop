@@ -1,5 +1,13 @@
 # ssh session backend
 
+> **The supported path is now `hop ssh <host>`** — see the usage guide at
+> **[docs/hop-ssh.md](hop-ssh.md)**. It sets up the ssh transport (ControlMaster,
+> the reverse-forwarded bridge socket, the installed shim) and drops you into a
+> remote shell where `cd <project> && hop` starts a session on the remote — the
+> project's own `.hop.toml` drives it, with no ssh in the recipe and no local
+> stub directory. This guide documents the underlying hand-wired recipe `hop ssh`
+> automates, and for setups it doesn't cover.
+
 This guide walks through running hop sessions whose files, shells, and editor live on a remote machine reached over ssh.
 
 `ssh` is just a backend recipe — hop has no built-in ssh awareness. Like `devcontainer`, the recipe is a chain of `[backends.<name>]` commands in `~/.config/hop/config.toml` or a project's `.hop.toml`. The key idea: ssh's `interactive_prefix` is just `ssh host`, and hop's existing chain — shells, editor, kitten path-resolution — composes through it.

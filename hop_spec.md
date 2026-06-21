@@ -93,7 +93,15 @@ The four lifecycle and translate fields (`prepare`, `teardown`, `port_translate`
 
 `interactive_prefix` and `noninteractive_prefix` remain string-only — they are wraps, not sequences. Use a triple-quoted string for multi-line pipelines.
 
-All commands are run via `sh -c <substituted-string>`, so pipes, redirects, and `$(...)` are part of the contract. Substitution placeholders supported inside any command: `{project_root}`. `{port}` is additionally available inside `port_translate` and `host_translate` (the URL's original port, or empty string when absent). Substituted values are shell-quoted before insertion so paths with spaces or shell metacharacters round-trip safely.
+All commands are run through a **transport** that turns the substituted command string into argv. For a local session the transport is `sh -c <substituted-string>`, so pipes, redirects, and `$(...)` are part of the contract. For a remote session (see *Remote sessions*) the same string is wrapped to run on the remote host over ssh — the recipe is identical either way; the ssh is hop's, never in `.hop.toml`. Substitution placeholders supported inside any command: `{project_root}` and `{host}` (the session's externally-reachable host — the ssh target remotely, `localhost` locally). `{port}` is additionally available inside `port_translate` and `host_translate` (the URL's original port, or empty string when absent). Substituted values are shell-quoted before insertion so paths with spaces or shell metacharacters round-trip safely.
+
+### Remote sessions
+
+A session can run on a remote machine reached over ssh. The same project `.hop.toml` drives it — there is **no second config and no ssh in the recipe**. The prefixes (`podman-compose … exec devcontainer`, etc.) are byte-identical to the local case; hop wraps every composed command (window launches and the runner-mediated `prepare`/`teardown`/`paths_exist`/`read_file`/translate/`activate` calls) in an outer `ssh <host> '<cmd>'` keyed off the session's host. The ssh layer is intrinsic: a kitty window is a host GUI surface, so a remote shell inside it requires an ssh client as the window's child — hop builds that, the user never writes it.
+
+A remote session needs **no local directory and no local `.hop.toml`**. It is a session record carrying `(name, host, remote_cwd)`: the name and `p:<name>` workspace come from the remote directory's basename, the `.hop.toml` is fetched from the remote on demand (not read locally), and kitty windows open in the user's home (their child immediately `ssh`'s out). `{project_root}` and the transport's `cd` use the remote path string, which is never touched as a local filesystem path.
+
+The transport reuses one ssh ControlMaster per host (`ControlMaster=auto` + `ControlPersist`), so a session survives a laptop-sleep / connection drop and redials lazily on the next command. The composed command is base64-encoded behind a fixed decode wrapper so ssh's argv-flattening can't corrupt it and stdin stays free for piped data (the `paths_exist`/`read_file` script-over-stdin path); the decoded command runs under a remote login shell so the remote user's normal PATH resolves with no extra config. See *Remote session setup (`hop ssh`)* for how a session is created.
 
 ### Workspace layout
 
@@ -447,16 +455,19 @@ Activated entries in vicinae dispatch via `hop browser` (browser role), `hop ter
 
 Wire protocol — HTTP/1.0 over `AF_UNIX`:
 
-- Request: `POST /call` with the body as the shim's argv NUL-separated. The first element is the shim's `$0` and is ignored; subsequent elements are forwarded to `hop`. No `cwd` or session handle is carried in the request.
+- Request: `POST /call` with the body as NUL-separated fields framed `host \0 cwd \0 $0 \0 *args`. `host` and `cwd` are the shim's baked ssh host (empty for the in-backend shim) and its `pwd` at call time; `$0` is the shim's own name and is ignored; the rest are forwarded to `hop`.
 - Response on successful dispatch: `200 OK` with body equal to the `hop` subprocess's stdout, header `X-Hop-Exit: <integer>` carrying its exit code, and header `X-Hop-Stderr: <base64>` carrying its stderr (base64-encoded because HTTP headers are text-only).
 - Response on acceptor-level failure: `400` (caller context — no focused session, malformed argv) or `500` (acceptor fault) with a plain-text `text/plain; charset=utf-8` body explaining the problem.
 
-Session identity is resolved on the host from existing Sway state, not from anything the shim sends. The acceptor queries Sway for the focused window and applies two resolution rules in order:
+The acceptor dispatches by request shape:
 
-1. If the focused window carries an `_hop_editor:<session>` mark (set by the editor adapter at launch), the suffix is the session name. This path also works when the editor window has drifted off its session workspace.
-2. Otherwise, if the focused window's workspace name matches `p:<session>`, the suffix is the session name. This covers kitty role terminals (test/server/console/…) and any other window inside a session workspace — they carry no per-window session identity in Sway, but the workspace tag is hop's canonical session-to-window mapping.
+- **Remote session entry** — a call carrying a non-empty `host` and *no* args (`hop` with no subcommand, from a `hop ssh`-installed shim). No session exists yet, so identity comes from the shim's `(host, cwd)`, not from focus: hop is run with `HOP_REMOTE_HOST` / `HOP_REMOTE_CWD` set and builds the remote `ProjectSession` from them.
+- **Everything else** — session identity is resolved on the host from existing Sway state, not from the request. The acceptor queries Sway for the focused window and applies two resolution rules in order:
 
-The session record is then looked up in `$XDG_RUNTIME_DIR/hop/sessions/<name>.json`; the `hop` subprocess is spawned with `cwd` set to that session's `project_root`. Bridge calls from windows that are neither a hop editor nor on a `p:<session>` workspace are rejected with `400`.
+  1. If the focused window carries an `_hop_editor:<session>` mark (set by the editor adapter at launch), the suffix is the session name. This path also works when the editor window has drifted off its session workspace.
+  2. Otherwise, if the focused window's workspace name matches `p:<session>`, the suffix is the session name. This covers kitty role terminals (test/server/console/…) and any other window inside a session workspace — they carry no per-window session identity in Sway, but the workspace tag is hop's canonical session-to-window mapping.
+
+  The session record is then looked up in `$XDG_RUNTIME_DIR/hop/sessions/<name>.json`; the `hop` subprocess is spawned with `cwd` set to that session's `project_root`. Bridge calls from windows that are neither a hop editor nor on a `p:<session>` workspace are rejected with `400`.
 
 Dispatch is via subprocess (`python -m hop <argv>`) per request. Output is buffered before the response is written; streaming is out of scope. The protocol is curl-compatible — `curl --unix-socket $XDG_RUNTIME_DIR/hop/api.sock --data-binary @- http://_/call < argv.nul` is sufficient to drive it from the host, which is also how the host-side test suite exercises it.
 
@@ -470,9 +481,19 @@ hop bridge shim [--socket PATH]
 
 Backends install it into the backend's filesystem at the path `hop` (typically `/usr/local/bin/hop`); inside the backend it forwards argv to the host acceptor and demultiplexes the response into stdout, stderr, and an exit code. Required backend-side tools: `curl`, `awk`, `base64`, `tr`, `mktemp` — coreutils-universal or near-universal in dev container base images.
 
-The shim's socket path is `${HOP_SOCKET:-<default>}`. `<default>` is `/run/hop.sock` unless overridden at print time via `hop bridge shim --socket <path>` — useful when a recipe already shares the host's `$XDG_RUNTIME_DIR` into the backend and wants the bridge socket to "just work" without changing the backend's environment.
+The shim's socket path is `${HOP_SOCKET:-<default>}`. `<default>` is `/run/hop.sock` unless overridden at print time via `hop bridge shim --socket <path>` — useful when a recipe already shares the host's `$XDG_RUNTIME_DIR` into the backend and wants the bridge socket to "just work" without changing the backend's environment. The shim's ssh host is likewise `${HOP_SSH_HOST:-<default>}`, baked empty by default and to the real host by `hop ssh` (see *Remote session setup*).
 
 Per-backend recipes (compose volume mount for devcontainer; ssh `-R` for the ssh backend) along with the `prepare`-time shim install live in the recipe guides under `docs/`.
+
+### Remote session setup (`hop ssh`)
+
+```bash
+hop ssh <host>
+```
+
+Sets up the ssh transport for remote sessions, then drops into a remote shell. It opens an ssh ControlMaster to `<host>`, reverse-forwards `hopd`'s bridge socket onto the remote, installs the `hop` shim on the remote's PATH (rendered with `<host>` and the forwarded socket baked in), and `exec`s an interactive login shell that reuses the master. It does *only* transport setup — no session is created and no container is touched. Requires `hopd` to be running (the reverse-forward's target); aborts with a clear error otherwise.
+
+From that remote shell, `cd <project> && hop` creates the session: the installed shim reports `(host, cwd)` to `hopd`, which starts a remote session for that directory (see *Remote sessions* and the bridge *Remote session entry* path) with windows spawned on the host and driven over the same ssh connection.
 
 ---
 

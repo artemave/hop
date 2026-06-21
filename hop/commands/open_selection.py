@@ -7,8 +7,8 @@ from typing import Callable, Sequence
 from hop.backends import CommandBackend, SessionBackend
 from hop.commands.open import OpenBrowserAdapter, OpenHandlerRunner, OpenNeovimAdapter, dispatch_resolved_target
 from hop.kitty import session_name_from_listen_on
-from hop.session import ProjectSession, resolve_project_session
-from hop.state import SessionState, load_sessions
+from hop.session import ProjectSession
+from hop.state import SessionState, load_sessions, session_from_state
 from hop.targets import (
     ResolvedFileTarget,
     ResolvedUrlTarget,
@@ -44,7 +44,7 @@ def open_selection_in_window(
         logger.warning("no recorded session state for %r; selection=%r", session_name, selection)
         return None
 
-    session = resolve_project_session(state.project_root)
+    session = session_from_state(state)
     backend = session_backend_for(session)
 
     # Pick the cwd against which relative candidates resolve. ``source_cwd``

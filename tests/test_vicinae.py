@@ -340,6 +340,32 @@ def test_kill_script_uses_setsid_detach_and_vicinae_close_guard() -> None:
     assert f"exec {HOP_BIN} kill" in kill.content
 
 
+def test_remote_session_scripts_use_hop_remote_env_not_cd() -> None:
+    # A remote session's project root only exists on the remote, so the vicinae
+    # window / kill scripts must pass identity via HOP_REMOTE_* env rather than
+    # `cd`-ing into a path that doesn't exist on the laptop.
+    sessions = (
+        SessionListing(
+            name="thonon-les-pains",
+            workspace="p:thonon-les-pains",
+            project_root=Path("/home/admin/projects/thonon-les-pains"),
+            host="devbox.local",
+        ),
+    )
+
+    scripts = _targets("p:thonon-les-pains", sessions, windows_for=lambda _: _windows(("editor", "nvim")))
+    by_filename = {s.filename: s.content for s in scripts}
+    env_line = "export HOP_REMOTE_HOST=devbox.local HOP_REMOTE_CWD=/home/admin/projects/thonon-les-pains\n"
+
+    window = by_filename["hop-window-editor"]
+    assert "cd " not in window
+    assert env_line in window
+
+    kill = by_filename["hop-kill"]
+    assert env_line in kill
+    assert f"exec {HOP_BIN} kill" in kill
+
+
 def test_switch_script_dispatches_hop_switch_with_quoted_session_name() -> None:
     sessions = (
         SessionListing(name="rails", workspace="p:rails", project_root=Path("/tmp/rails")),

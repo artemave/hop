@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Callable, Literal, Protocol, Sequence
 
 from hop import debug
-from hop.backends import SessionBackend, SessionBackendError, backend_lock_path, substitute
+from hop.backends import SessionBackend, SessionBackendError, runner_cwd
 from hop.errors import HopError
 from hop.session import ProjectSession
 from hop.sway import SwayWindow
@@ -119,13 +119,13 @@ class KittyHopPopup:
         command = backend.prepare_command
         if command is None:
             return
-        self._run_lifecycle(session, command, kind="prepare")
+        self._run_lifecycle(session, command, kind="prepare", backend=backend)
 
     def run_teardown(self, session: ProjectSession, backend: SessionBackend) -> None:
         command = backend.teardown_command
         if command is None:
             return
-        self._run_lifecycle(session, command, kind="teardown")
+        self._run_lifecycle(session, command, kind="teardown", backend=backend)
 
     def show_error(self, error: HopError) -> None:
         # Best-effort: launcher exit code is informational only. The user
@@ -139,8 +139,9 @@ class KittyHopPopup:
         steps: Sequence[str],
         *,
         kind: Literal["prepare", "teardown"],
+        backend: SessionBackend,
     ) -> None:
-        exit_code = self._spawn_and_wait(_lifecycle_script(session, steps, kind=kind))
+        exit_code = self._spawn_and_wait(_lifecycle_script(session, steps, kind=kind, backend=backend))
         if exit_code != 0:
             msg = f"session {kind} did not succeed for {session.session_name!r}; see the popup for details"
             raise SessionBackendError(msg, surfaced_by_popup=True)
@@ -201,14 +202,17 @@ def _lifecycle_script(
     steps: Sequence[str],
     *,
     kind: Literal["prepare", "teardown"],
+    backend: SessionBackend,
 ) -> str:
     """Render the popup-side shell script for an N-step lifecycle sequence.
 
-    Each step renders as ``printf '$ ...'`` + ``flock ... sh -c '<step>'``
-    followed by a per-step status check that drops into a held-open ``sh``
-    on failure (so the user sees the failing step's output, can scroll, and
-    Ctrl-D closes the popup). A non-zero step short-circuits the rest of the
-    sequence by ``exit "$status"`` after the held shell returns.
+    Each step renders as ``printf '$ ...'`` + the backend's own
+    ``flock + transport`` argv (``sh -c`` locally, ``ssh`` for a remote
+    session — see ``CommandBackend.lifecycle_argv``) followed by a per-step
+    status check that drops into a held-open ``sh`` on failure (so the user
+    sees the failing step's output, can scroll, and Ctrl-D closes the popup).
+    A non-zero step short-circuits the rest of the sequence by ``exit
+    "$status"`` after the held shell returns.
 
     Held-open-on-failure: don't ``exec sh`` — the user dismissing it (sh
     exiting 0) would clobber the captured non-zero status and silently
@@ -217,25 +221,26 @@ def _lifecycle_script(
 
     verb = "Preparing" if kind == "prepare" else "Tearing down"
     noun = kind
-    lock_path = str(backend_lock_path(session))
     log_path = popup_log_path(session, kind)
     # `tee` (no `-a`) truncates each run so the file always holds the most
     # recent invocation's output. The directory is created via the parent
     # shell's `mkdir -p` ahead of the `exec` so the redirect can't fail on a
-    # missing parent.
+    # missing parent. The popup's own cwd is the backend's *local* working dir
+    # (the project root locally, the host home for a remote session whose
+    # project root only exists on the remote); the remote cd rides inside the
+    # transport.
     lines: list[str] = [
         "set -u",
         f"mkdir -p {shlex.quote(str(log_path.parent))}",
         f"exec > >(tee {shlex.quote(str(log_path))}) 2>&1",
-        f"cd {shlex.quote(str(session.project_root))}",
+        f"cd {shlex.quote(str(runner_cwd(session.host, session.project_root)))}",
         f"printf '%s\\n' {shlex.quote(f'{verb} {session.session_name}')}",
     ]
     for index, step in enumerate(steps):
-        substituted = substitute(step, session=session)
         if index > 0:
             lines.append("")
         lines.append(f"printf '$ %s\\n\\n' {shlex.quote(step)}")
-        lines.append(f"flock -o {shlex.quote(lock_path)} sh -c {shlex.quote(substituted)}")
+        lines.append(shlex.join(backend.lifecycle_argv(step, session)))
         lines.append("status=$?")
         lines.append('if [ "$status" -ne 0 ]; then')
         lines.append(f"    printf '\\n%s failed (exit %d). Press Ctrl-D to close.\\n' {shlex.quote(noun)} \"$status\"")

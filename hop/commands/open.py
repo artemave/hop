@@ -8,7 +8,7 @@ from typing import Callable, Protocol, Sequence
 
 from hop.backends import CommandBackend, SessionBackend
 from hop.errors import HopError
-from hop.session import ProjectSession, resolve_project_session
+from hop.session import ProjectSession, remote_session_from_env, resolve_project_session
 from hop.targets import (
     ResolvedTarget,
     ResolvedUrlTarget,
@@ -124,7 +124,7 @@ def open_target_in_session(
     action to exist anyway.
     """
 
-    session = resolve_project_session(cwd)
+    session = remote_session_from_env() or resolve_project_session(cwd)
 
     syntactic = parse_visible_output_target(target)
     if syntactic is None:

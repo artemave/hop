@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import os
 import shlex
 import subprocess
@@ -12,6 +13,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from hop import debug
 from hop.config import (
+    PLACEHOLDER_HOST,
     PLACEHOLDER_PORT,
     PLACEHOLDER_PROJECT_ROOT,
     BackendConfig,
@@ -71,6 +73,8 @@ class SessionBackend(Protocol):
 
     def wrap(self, command: str, session: ProjectSession) -> Sequence[str]: ...
 
+    def compose(self, command: str) -> Sequence[str]: ...
+
     def inline(self, command: str, session: ProjectSession) -> str: ...
 
     def translate_localhost_url(self, session: ProjectSession, url: str) -> str: ...
@@ -78,6 +82,8 @@ class SessionBackend(Protocol):
     def paths_exist(self, session: ProjectSession, paths: Sequence[Path]) -> set[Path]: ...
 
     def read_file(self, session: ProjectSession, path: Path) -> str: ...
+
+    def lifecycle_argv(self, step: str, session: ProjectSession) -> tuple[str, ...]: ...
 
     def teardown(self, session: ProjectSession) -> None: ...
 
@@ -132,6 +138,115 @@ def default_runner(
 _default_runner = default_runner
 
 
+class Transport(Protocol):
+    """Turns a composed shell command string into the argv that runs it.
+
+    The seam that makes a backend portable between host and remote: the same
+    composed ``<prefix> <command>`` string is wrapped either to run locally
+    (``sh -c``) or on a remote machine over ssh. Everything a backend does —
+    window launches, ``prepare``/``teardown``, ``paths_exist``, ``read_file``,
+    the translates, the ``activate`` probe — funnels through a transport, so a
+    single swap relocates the whole backend.
+    """
+
+    def __call__(self, command: str) -> tuple[str, ...]: ...
+
+
+def local_transport(command: str) -> tuple[str, ...]:
+    """Run ``command`` on the host via ``sh -c`` — the default transport."""
+
+    return ("sh", "-c", command)
+
+
+def _substitution_host(host: str | None) -> str:
+    """The ``{host}`` value — the bare hostname, or ``localhost`` when local.
+
+    Strips any ``user@`` from the ssh target (``admin@devbox.local`` →
+    ``devbox.local``): the transport uses the full target, but ``{host}`` stands
+    for the externally-reachable hostname (``LOCAL_HOSTNAME``, host translation).
+    """
+
+    if host is None:
+        return "localhost"
+    return host.rsplit("@", 1)[-1]
+
+
+def runner_cwd(host: str | None, project_root: Path) -> Path:
+    """Local working directory for a backend subprocess.
+
+    For a local backend (``host is None``) this is the project root — backend
+    commands (e.g. ``podman-compose -f docker-compose.dev.yml …``) must run
+    there. For a remote backend the transport carries its own ``cd <remote_cwd>``
+    and the ssh client ignores the local cwd, so use the host home: ``project_root``
+    is a path on the *remote* and handing it to ``subprocess.run(cwd=…)`` would
+    fail because it doesn't exist locally.
+
+    Keyed off the *backend's* host rather than the session's — a session rebuilt
+    from a record (e.g. in the open-selection kitten) may not carry ``host``,
+    but the backend always does.
+    """
+
+    if host is not None:
+        return Path.home()
+    return project_root
+
+
+def default_ssh_options() -> tuple[str, ...]:
+    """Shared ssh flags for the master + every transported command.
+
+    ``ControlMaster=auto`` + ``ControlPath`` + ``ControlPersist`` mean the
+    first ssh call establishes a multiplexed master and the rest reuse it; a
+    later call after the master died silently re-establishes it, so a session
+    survives a laptop-sleep / connection drop and redials lazily on the next
+    command. ``ServerAliveInterval`` keeps the master warm; ``StreamLocalBindUnlink``
+    lets a re-entered ``hop ssh`` rebind the reverse-forward socket cleanly.
+    """
+
+    runtime_root = os.environ.get("XDG_RUNTIME_DIR") or gettempdir()
+    control_path = Path(runtime_root).expanduser() / "hop" / "cm-%r@%h:%p"
+    return (
+        "-o",
+        "ControlMaster=auto",
+        "-o",
+        f"ControlPath={control_path}",
+        "-o",
+        "ControlPersist=600",
+        "-o",
+        "ServerAliveInterval=60",
+        "-o",
+        "StreamLocalBindUnlink=yes",
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class SshTransport:
+    """Run a composed command on ``host`` over ssh, cd'd into ``remote_cwd``.
+
+    The composed command is base64-encoded and dropped behind a *fixed* decode
+    wrapper, so the only variable token ssh sees carries no shell metacharacters
+    — ssh's argv-flattening can't corrupt it, and stdin stays free for data
+    (``printf``/``base64`` don't read it), which is what lets the
+    ``paths_exist``/``read_file`` "script over stdin" pattern keep working over
+    ssh. The decoded command runs under a login shell (``$SHELL -lc``) so the
+    remote user's normal PATH (e.g. Homebrew) resolves with no extra config.
+
+    ``interactive`` adds ``-tt`` to allocate a remote tty for window-launch
+    shells; non-interactive runner calls leave it off and pipe stdin instead.
+    """
+
+    host: str
+    remote_cwd: str
+    interactive: bool = False
+    options: tuple[str, ...] = field(default_factory=default_ssh_options)
+
+    def __call__(self, command: str) -> tuple[str, ...]:
+        inner = f"cd {shlex.quote(self.remote_cwd)} && {command}"
+        encoded = base64.b64encode(inner.encode()).decode("ascii")
+        remote = f'exec "${{SHELL:-/bin/sh}}" -lc "$(printf %s {encoded} | base64 -d)"'
+        tty = ("-tt",) if self.interactive else ()
+        return ("ssh", *tty, *self.options, self.host, remote)
+
+
 @dataclass(frozen=True, slots=True)
 class CommandBackend:
     """A session backend described entirely by shell command strings.
@@ -173,11 +288,29 @@ class CommandBackend:
     # the host backend or when the probe failed.
     workspace_path: str | None = None
     runner: CommandRunner = field(default=_default_runner)
+    # How composed commands become argv. ``transport`` wraps window-launch
+    # commands (interactive, gets a remote tty over ssh); ``noninteractive_transport``
+    # wraps runner-mediated calls (prepare/teardown, paths_exist, read_file,
+    # translate, the activate probe) where stdin is piped and no tty is wanted.
+    # Both default to ``local_transport`` (``sh -c``); a remote session swaps in
+    # ``SshTransport``. ``host`` is the ssh target for ``{host}`` substitution
+    # (``None`` ⇒ the local ``localhost``).
+    transport: Transport = local_transport
+    noninteractive_transport: Transport = local_transport
+    host: str | None = None
 
     def prepare(self, session: ProjectSession) -> None:
         if self.prepare_command is None:
             return
         self._run_lifecycle_steps(self.prepare_command, session=session, kind="prepare")
+
+    @property
+    def _host(self) -> str:
+        # The value substituted for ``{host}`` — the externally-reachable
+        # *hostname*, not the ssh target: a user passes ``admin@devbox.local`` to
+        # ``hop ssh`` but ``LOCAL_HOSTNAME={host}`` / ``host_translate = "echo
+        # {host}"`` want ``devbox.local`` (the name a browser or the app uses).
+        return _substitution_host(self.host)
 
     def wrap(self, command: str, session: ProjectSession) -> Sequence[str]:
         if not command and not self.interactive_prefix:
@@ -188,23 +321,34 @@ class CommandBackend:
             # inside the backend; fall back to ${SHELL:-sh}.
             return ()
         if not command:
-            return _sh_c(self.inline(SHELL_FALLBACK, session=session))
-        return _sh_c(self.inline(command, session=session))
+            return self.compose(self.inline(SHELL_FALLBACK, session=session))
+        return self.compose(self.inline(command, session=session))
+
+    def compose(self, command: str) -> Sequence[str]:
+        """Wrap an already-composed inline command string into launch argv.
+
+        The window-launch transport seam: locally ``("sh","-c",command)``,
+        remotely ``("ssh", …, command-over-ssh)``. Callers that build a
+        ``<a>; <b>`` script from two ``inline`` pieces (kitty/editor) route it
+        through here so the single outer wrapper is transport-aware.
+        """
+
+        return self.transport(command)
 
     def inline(self, command: str, session: ProjectSession) -> str:
-        """Build the substituted, prefix-wrapped command string (no sh -c).
+        """Build the substituted, prefix-wrapped command string (no transport).
 
         Used when the caller composes multiple commands (e.g. the editor
         adapter's ``<editor>; <shell>`` post-exit drop) before a single
-        outer ``sh -c`` wraps the script. Each piece must be wrapped by
+        outer transport wraps the script. Each piece must be wrapped by
         the prefix individually so the ``;`` separator runs each piece
         as its own backend exec, preserving today's two-call behavior.
         """
 
-        substituted = substitute(command, session=session)
+        substituted = substitute(command, session=session, host=self._host)
         if not self.interactive_prefix:
             return substituted
-        substituted_prefix = substitute(self.interactive_prefix, session=session)
+        substituted_prefix = substitute(self.interactive_prefix, session=session, host=self._host)
         return f"{substituted_prefix} {substituted}"
 
     def translate_localhost_url(self, session: ProjectSession, url: str) -> str:
@@ -264,9 +408,9 @@ class CommandBackend:
         multi_step = len(steps) > 1
         last_stdout = ""
         for index, step in enumerate(steps, start=1):
-            substituted = _substitute_translate(step, session=session, port=port)
-            argv = _sh_c(substituted)
-            result = self.runner(argv, session.project_root)
+            substituted = _substitute_translate(step, session=session, port=port, host=self._host)
+            argv = self.noninteractive_transport(substituted)
+            result = self.runner(argv, runner_cwd(self.host, session.project_root))
             debug.log_command(argv, session.project_root, result)
             if result.returncode != 0:
                 stderr = (result.stderr or result.stdout or "").strip()
@@ -283,6 +427,17 @@ class CommandBackend:
         if self.teardown_command is None:
             return
         self._run_lifecycle_steps(self.teardown_command, session=session, kind="teardown")
+
+    def lifecycle_argv(self, step: str, session: ProjectSession) -> tuple[str, ...]:
+        """The exact ``flock + transport`` argv for one prepare/teardown step.
+
+        Public so the headless popup renders the *same* command hop would run
+        inline — flock-serialized, transported (``sh -c`` locally, ``ssh`` for a
+        remote session). Without this the popup would re-compose the step itself
+        and run it on the host, ignoring the transport.
+        """
+
+        return _flock_sh(step, session=session, transport=self.noninteractive_transport, host=self._host)
 
     def _run_lifecycle_steps(
         self,
@@ -303,8 +458,8 @@ class CommandBackend:
 
         multi_step = len(steps) > 1
         for index, step in enumerate(steps, start=1):
-            argv = _flock_sh(step, session=session)
-            result = self.runner(argv, session.project_root)
+            argv = _flock_sh(step, session=session, transport=self.noninteractive_transport, host=self._host)
+            result = self.runner(argv, runner_cwd(self.host, session.project_root))
             debug.log_command(argv, session.project_root, result)
             if result.returncode != 0:
                 stderr = (result.stderr or result.stdout or "").strip()
@@ -328,10 +483,10 @@ class CommandBackend:
 
         if not self.noninteractive_prefix:
             return None
-        substituted_prefix = substitute(self.noninteractive_prefix, session=session)
+        substituted_prefix = substitute(self.noninteractive_prefix, session=session, host=self._host)
         composed = f"{substituted_prefix} pwd"
-        argv = _sh_c(composed)
-        result = self.runner(argv, session.project_root)
+        argv = self.noninteractive_transport(composed)
+        result = self.runner(argv, runner_cwd(self.host, session.project_root))
         debug.log_command(argv, session.project_root, result)
         if result.returncode != 0:
             return None
@@ -341,7 +496,7 @@ class CommandBackend:
     def paths_exist(self, session: ProjectSession, paths: Sequence[Path]) -> set[Path]:
         if not paths:
             return set()
-        substituted_prefix = substitute(self.noninteractive_prefix, session=session)
+        substituted_prefix = substitute(self.noninteractive_prefix, session=session, host=self._host)
         # Pipe the existence-check script to a bare `sh` over stdin rather than
         # passing it as a `sh -c '<script>'` argument. A quoted argument doesn't
         # survive a prefix that flattens argv — `ssh host …` joins the remote
@@ -351,9 +506,9 @@ class CommandBackend:
         # rides stdin untouched. Trailing `:` keeps the exit code at 0 when the
         # last path is missing.
         composed = f"{substituted_prefix} sh".lstrip()
-        argv = _sh_c(composed)
+        argv = self.noninteractive_transport(composed)
         script = "".join(f'test -e {shlex.quote(str(p))} && printf "%s\\n" {shlex.quote(str(p))}\n' for p in paths)
-        result = self.runner(argv, session.project_root, stdin=f"{script}:\n")
+        result = self.runner(argv, runner_cwd(self.host, session.project_root), stdin=f"{script}:\n")
         debug.log_command(argv, session.project_root, result)
         if result.returncode != 0:
             stderr = (result.stderr or result.stdout or "").strip()
@@ -363,7 +518,7 @@ class CommandBackend:
         return {p for p in paths if str(p) in reported}
 
     def read_file(self, session: ProjectSession, path: Path) -> str:
-        substituted_prefix = substitute(self.noninteractive_prefix, session=session)
+        substituted_prefix = substitute(self.noninteractive_prefix, session=session, host=self._host)
         quoted = shlex.quote(str(path))
         # exit 42 distinguishes "file missing" from any other cat failure
         # (permissions, dead backend) — the resolver treats missing as a
@@ -372,8 +527,8 @@ class CommandBackend:
         # prefixes like `ssh host …` — see paths_exist.
         script = f"[ -f {quoted} ] || exit 42\ncat {quoted}\n"
         composed = f"{substituted_prefix} sh".lstrip()
-        argv = _sh_c(composed)
-        result = self.runner(argv, session.project_root, stdin=script)
+        argv = self.noninteractive_transport(composed)
+        result = self.runner(argv, runner_cwd(self.host, session.project_root), stdin=script)
         debug.log_command(argv, session.project_root, result)
         if result.returncode == _READ_FILE_NOT_FOUND_EXIT:
             msg = f"backend {self.name!r}: {path} not found"
@@ -395,6 +550,8 @@ def select_backend(
     *,
     pinned_name: str | None = None,
     runner: CommandRunner = _default_runner,
+    transport: Transport = local_transport,
+    host: str | None = None,
 ) -> BackendConfig:
     """Choose which backend applies to ``session``.
 
@@ -421,9 +578,9 @@ def select_backend(
     for candidate in backends:
         if candidate.activate is None:
             continue
-        substituted = substitute(candidate.activate, session=session)
-        argv = _sh_c(substituted)
-        result = runner(argv, session.project_root)
+        substituted = substitute(candidate.activate, session=session, host=_substitution_host(host))
+        argv = transport(substituted)
+        result = runner(argv, runner_cwd(host, session.project_root))
         debug.log_command(argv, session.project_root, result)
         if result.returncode == 0:
             return candidate
@@ -438,6 +595,9 @@ def backend_from_config(
     config: BackendConfig,
     *,
     runner: CommandRunner = _default_runner,
+    transport: Transport = local_transport,
+    noninteractive_transport: Transport = local_transport,
+    host: str | None = None,
 ) -> CommandBackend:
     if config.interactive_prefix is None:
         msg = f"backend {config.name!r} requires 'interactive_prefix'"
@@ -454,12 +614,16 @@ def backend_from_config(
         port_translate_command=config.port_translate,
         host_translate_command=config.host_translate,
         runner=runner,
+        transport=transport,
+        noninteractive_transport=noninteractive_transport,
+        host=host,
     )
 
 
-def substitute(template: str, *, session: ProjectSession) -> str:
+def substitute(template: str, *, session: ProjectSession, host: str = "localhost") -> str:
     replacements: dict[str, str] = {
         PLACEHOLDER_PROJECT_ROOT: shlex.quote(str(session.project_root)),
+        PLACEHOLDER_HOST: shlex.quote(host),
     }
     return _apply(template, replacements)
 
@@ -469,10 +633,12 @@ def _substitute_translate(
     *,
     session: ProjectSession,
     port: int | None,
+    host: str = "localhost",
 ) -> str:
     replacements: dict[str, str] = {
         PLACEHOLDER_PROJECT_ROOT: shlex.quote(str(session.project_root)),
         PLACEHOLDER_PORT: "" if port is None else shlex.quote(str(port)),
+        PLACEHOLDER_HOST: shlex.quote(host),
     }
     return _apply(template, replacements)
 
@@ -498,10 +664,6 @@ def _apply(template: str, replacements: dict[str, str]) -> str:
     return result
 
 
-def _sh_c(command: str) -> tuple[str, ...]:
-    return ("sh", "-c", command)
-
-
 def backend_lock_path(session: ProjectSession) -> Path:
     runtime_root = os.environ.get("XDG_RUNTIME_DIR") or gettempdir()
     runtime_dir = Path(runtime_root).expanduser().resolve() / "hop"
@@ -509,7 +671,13 @@ def backend_lock_path(session: ProjectSession) -> Path:
     return runtime_dir / f"backend-{session.session_name}.lock"
 
 
-def _flock_sh(command: str, *, session: ProjectSession) -> tuple[str, ...]:
+def _flock_sh(
+    command: str,
+    *,
+    session: ProjectSession,
+    transport: Transport,
+    host: str,
+) -> tuple[str, ...]:
     # Serialize prepare and teardown for the same session: when `hop kill`
     # detaches its teardown via setsid -f (so it survives vicinae's SIGTERM),
     # a subsequent `hop` would otherwise race the still-running teardown and
@@ -522,5 +690,9 @@ def _flock_sh(command: str, *, session: ProjectSession) -> tuple[str, ...]:
     # the one that bit us) inherits the fd and pins the lock open forever —
     # the next prepare/teardown then blocks on flock with no recourse short
     # of killing the daemon by hand.
-    substituted = substitute(command, session=session)
-    return ("flock", "-o", str(backend_lock_path(session)), "sh", "-c", substituted)
+    #
+    # The flock stays *local* (it serializes host-side prepare/teardown); the
+    # transport wraps only the command inside it, so for a remote session the
+    # `compose down` runs over ssh while the lock is still held on the host.
+    substituted = substitute(command, session=session, host=host)
+    return ("flock", "-o", str(backend_lock_path(session)), *transport(substituted))

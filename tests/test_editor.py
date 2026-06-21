@@ -366,6 +366,9 @@ def test_launch_composes_editor_then_shell_through_backend_inline() -> None:
         def inline(self, command: str, _session: ProjectSession) -> str:
             return f"podman-compose exec devcontainer {command}"
 
+        def compose(self, command: str) -> Sequence[str]:
+            return ("sh", "-c", command)
+
     adapter = make_adapter(
         sway=sway,
         factory=factory,

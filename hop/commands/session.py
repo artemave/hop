@@ -22,6 +22,11 @@ class SessionListing:
     name: str
     workspace: str
     project_root: Path | None
+    # The ssh target when the session runs on a remote machine, ``None`` locally.
+    # Carried so hopd can rebuild a remote ``ProjectSession`` (e.g. to enumerate
+    # its windows for vicinae) and drive probes over the transport, not locally
+    # against a ``project_root`` that only exists on the remote.
+    host: str | None = None
 
 
 class SessionSwayAdapter(Protocol):
@@ -63,8 +68,15 @@ def enter_project_session(
     browser: SessionBrowserAutostartAdapter | None = None,
     windows: Sequence[WindowSpec] = (),
     workspace_layout: str | None = None,
+    session: ProjectSession | None = None,
 ) -> ProjectSession:
-    session = resolve_project_session(cwd)
+    # ``session`` lets the caller supply an already-resolved session — required
+    # for a remote session, whose identity comes from the shim's (host, cwd),
+    # not from ``cwd`` (which is the *local* home of the dispatching subprocess
+    # and would otherwise re-resolve to the wrong, local session). Local callers
+    # omit it and identity is derived from ``cwd`` as before.
+    if session is None:
+        session = resolve_project_session(cwd)
     # Switch only when we aren't already on the session's workspace. Two
     # reasons: (a) sway's `workspace_auto_back_and_forth yes` flips off the
     # focused workspace when re-targeted, which would yank the user away;
@@ -151,8 +163,13 @@ def spawn_session_terminal(
     cwd: Path | str,
     *,
     terminals: SpawnTerminalAdapter,
+    session: ProjectSession | None = None,
 ) -> ProjectSession:
-    session = resolve_project_session(cwd)
+    # ``session`` lets the caller pass an already-resolved (possibly remote)
+    # session; a remote one can't be re-derived from ``cwd`` (the local home of
+    # the dispatching subprocess). Local callers omit it.
+    if session is None:
+        session = resolve_project_session(cwd)
     # `hop` from inside a session with a live kitty spawns the next free
     # `shell-<N>`. The dead-kitty case never reaches here — bare `hop` in
     # `EnterSessionCommand` routes that through the full first-entry
@@ -205,6 +222,7 @@ def list_sessions(
                 name=name,
                 workspace=workspace_name,
                 project_root=recorded.project_root if recorded is not None else None,
+                host=recorded.backend.transport_host if recorded is not None else None,
             )
         )
     return tuple(sorted(listings, key=lambda listing: listing.name))

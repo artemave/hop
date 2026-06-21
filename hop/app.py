@@ -10,8 +10,12 @@ from hop.backends import (
     CommandBackend,
     CommandRunner,
     SessionBackend,
+    SshTransport,
+    Transport,
     backend_from_config,
     default_runner,
+    local_transport,
+    runner_cwd,
     select_backend,
 )
 from hop.bridge import BRIDGE_SHIM_DEFAULT_SOCKET, render_bridge_shim
@@ -28,6 +32,7 @@ from hop.commands import (
     OpenCommand,
     PathCommand,
     RunCommand,
+    SshCommand,
     SwitchSessionCommand,
     TailCommand,
     TermCommand,
@@ -44,19 +49,22 @@ from hop.commands.session import (
     spawn_session_terminal,
     switch_session,
 )
+from hop.commands.ssh import run_hop_ssh
 from hop.commands.tail import tail_command
 from hop.commands.term import focus_terminal
 from hop.config import (
+    PROJECT_CONFIG_FILE,
     HopConfig,
     load_global_config,
     load_project_config,
     merge_configs,
+    parse_project_config_text,
 )
 from hop.editor import SharedNeovimEditorAdapter
 from hop.kitty import KittyRemoteControlAdapter, KittyWindow, KittyWindowContext, KittyWindowState
 from hop.layouts import WindowSpec, resolve_windows
 from hop.popup import HopPopup, KittyHopPopup
-from hop.session import ProjectSession, resolve_project_session
+from hop.session import ProjectSession, remote_session_from_env, resolve_project_session
 from hop.state import (
     BackendRecord,
     CommandBackendRecord,
@@ -161,7 +169,7 @@ class SessionBackendRegistry:
 
         persisted = self._sessions_loader().get(session.session_name)
         if persisted is not None:
-            return _backend_from_record(persisted.backend)
+            return _backend_from_record(persisted.backend, project_root=persisted.project_root)
 
         # No persisted state and no in-process override: a command running
         # against a session that hop never bootstrapped (e.g. someone calling
@@ -187,27 +195,26 @@ class SessionBackendRegistry:
         if kitty_alive:
             persisted = self._sessions_loader().get(session.session_name)
             if persisted is not None:
-                return _backend_from_record(persisted.backend)
+                return _backend_from_record(persisted.backend, project_root=persisted.project_root)
 
         configured = self._merged_config(session).backends
 
-        if self._runner is not None:
-            chosen = select_backend(
-                session,
-                configured,
-                pinned_name=backend_name,
-                runner=self._runner,
-            )
-        else:
-            chosen = select_backend(
-                session,
-                configured,
-                pinned_name=backend_name,
-            )
-        backend = (
-            backend_from_config(chosen, runner=self._runner)
-            if self._runner is not None
-            else backend_from_config(chosen)
+        runner = self._runner if self._runner is not None else default_runner
+        interactive_transport, noninteractive_transport, host = _transports_for(session)
+        chosen = select_backend(
+            session,
+            configured,
+            pinned_name=backend_name,
+            runner=runner,
+            transport=noninteractive_transport,
+            host=host,
+        )
+        backend = backend_from_config(
+            chosen,
+            runner=runner,
+            transport=interactive_transport,
+            noninteractive_transport=noninteractive_transport,
+            host=host,
         )
         # Prepare the backend (e.g. compose up -d) before any role terminals
         # are launched. Skipped when the caller is going to run prepare itself
@@ -245,15 +252,38 @@ class SessionBackendRegistry:
     def resolve_windows_for_entry(self, session: ProjectSession) -> tuple[WindowSpec, ...]:
         merged = self._merged_config(session)
         runner = self._runner if self._runner is not None else default_runner
-        return resolve_windows(merged, session, runner=runner)
+        _, noninteractive_transport, host = _transports_for(session)
+        return resolve_windows(
+            merged,
+            session,
+            runner=runner,
+            transport=noninteractive_transport,
+            host=host if host is not None else "localhost",
+            cwd=runner_cwd(host, session.project_root),
+        )
 
     def workspace_layout_for_entry(self, session: ProjectSession) -> str | None:
         return self._merged_config(session).workspace_layout
 
     def _merged_config(self, session: ProjectSession) -> HopConfig:
         global_config = self._global_config_loader()
-        project_config = load_project_config(session.project_root)
+        project_config = self._load_project_config(session)
         return merge_configs(project_config, global_config)
+
+    def _load_project_config(self, session: ProjectSession) -> HopConfig:
+        host = session.host
+        if host is None:
+            return load_project_config(session.project_root)
+        # Remote session: there is no local `.hop.toml` — fetch it from the
+        # remote over the transport and parse the bytes in memory.
+        runner = self._runner if self._runner is not None else default_runner
+        transport = SshTransport(host, str(session.project_root), interactive=False)
+        argv = transport(f"cat {PROJECT_CONFIG_FILE}")
+        result = runner(argv, Path.home())
+        if result.returncode != 0:
+            return HopConfig()
+        source = Path(f"{host}:{session.project_root}") / PROJECT_CONFIG_FILE
+        return parse_project_config_text(result.stdout, source=source)
 
     def open_handlers_for_session(self, session: ProjectSession) -> tuple[tuple[str, str], ...]:
         return self._merged_config(session).open_handlers
@@ -265,13 +295,39 @@ class SessionBackendRegistry:
         self._overrides.pop(session_name, None)
 
 
-def backend_from_record(record: BackendRecord) -> SessionBackend:
+def _transports(host: str | None, remote_cwd: str) -> tuple[Transport, Transport, str | None]:
+    """Resolve the (interactive, non-interactive, host) transports for a session.
+
+    Local (``host is None``): both transports run ``sh -c`` and the backend's
+    ``host`` is ``None`` (so ``{host}`` resolves to ``localhost``). Remote: both
+    are ``SshTransport`` to ``host``, cd'd into ``remote_cwd`` — the interactive
+    one allocates a tty for window-launch shells, the other pipes stdin for
+    runner-mediated calls.
+    """
+
+    if host is None:
+        return local_transport, local_transport, None
+    return (
+        SshTransport(host, remote_cwd, interactive=True),
+        SshTransport(host, remote_cwd, interactive=False),
+        host,
+    )
+
+
+def _transports_for(session: ProjectSession) -> tuple[Transport, Transport, str | None]:
+    return _transports(session.host, str(session.project_root))
+
+
+def backend_from_record(record: BackendRecord, *, project_root: Path) -> SessionBackend:
     """Reconstruct a ``SessionBackend`` from a persisted ``BackendRecord``.
 
     Public so the open-selection kitten (via ``hop.focused.paths_exist``)
     can rebuild the focused session's backend without re-running auto-detect.
+    ``project_root`` is the (possibly remote) path the rebuilt ``SshTransport``
+    cd's into; for a local record it is unused beyond the local default.
     """
 
+    interactive_transport, noninteractive_transport, host = _transports(record.transport_host, str(project_root))
     return CommandBackend(
         name=record.name,
         interactive_prefix=record.interactive_prefix,
@@ -281,6 +337,9 @@ def backend_from_record(record: BackendRecord) -> SessionBackend:
         port_translate_command=record.port_translate_command,
         host_translate_command=record.host_translate_command,
         workspace_path=record.workspace_path,
+        transport=interactive_transport,
+        noninteractive_transport=noninteractive_transport,
+        host=host,
     )
 
 
@@ -298,6 +357,7 @@ def _record_for_backend(backend: SessionBackend) -> BackendRecord:
         port_translate_command=backend.port_translate_command,
         host_translate_command=backend.host_translate_command,
         workspace_path=backend.workspace_path,
+        transport_host=backend.host,
     )
 
 
@@ -325,7 +385,7 @@ def execute_command(
 
     match command:
         case EnterSessionCommand(backend=backend_name):
-            session = resolve_project_session(current_directory)
+            session = remote_session_from_env() or resolve_project_session(current_directory)
             kitty_alive = services.kitty.is_alive(session)
             on_session_workspace = services.sway.get_focused_workspace() == session.workspace_name
             if on_session_workspace and kitty_alive:
@@ -336,6 +396,7 @@ def execute_command(
                 spawn_session_terminal(
                     current_directory,
                     terminals=services.kitty,
+                    session=session,
                 )
             else:
                 # First entry creates both shell and editor; re-entry from
@@ -390,6 +451,7 @@ def execute_command(
                         browser=services.browser if is_first_entry else None,
                         windows=windows,
                         workspace_layout=workspace_layout,
+                        session=session,
                     )
                 finally:
                     services.session_backends.clear_override(session.session_name)
@@ -473,6 +535,8 @@ def execute_command(
             sys.stdout.write(render_bridge_shim(socket_default=socket or BRIDGE_SHIM_DEFAULT_SOCKET))
         case PathCommand(name=name):
             print(resolve_asset_path(name))
+        case SshCommand(host=host):
+            run_hop_ssh(host)
         case _:
             msg = f"Unsupported command {command!r}"
             raise ValueError(msg)

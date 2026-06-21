@@ -12,6 +12,7 @@ from hop.commands import (
     OpenCommand,
     PathCommand,
     RunCommand,
+    SshCommand,
     SwitchSessionCommand,
     TailCommand,
     TermCommand,
@@ -57,6 +58,7 @@ from hop.commands import (
         ),
         (["path", "kitten/hints"], PathCommand(name="kitten/hints")),
         (["path", "sway/term-or-kitty"], PathCommand(name="sway/term-or-kitty")),
+        (["ssh", "devbox"], SshCommand(host="devbox")),
     ],
 )
 def test_parse_command_maps_argv_to_typed_commands(argv: list[str], expected: object) -> None:

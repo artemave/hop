@@ -19,6 +19,7 @@ from hop.commands import (
     OpenCommand,
     PathCommand,
     RunCommand,
+    SshCommand,
     SwitchSessionCommand,
     TailCommand,
     TermCommand,
@@ -78,6 +79,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print the absolute path to a bundled hop asset (e.g. kitten/hints, sway/term-or-kitty).",
     )
     path_parser.add_argument("name")
+
+    ssh_parser = subparsers.add_parser(
+        "ssh",
+        help="Set up the ssh transport to a remote host, then drop into a shell where `hop` runs sessions there.",
+    )
+    ssh_parser.add_argument("host")
 
     bridge_parser = subparsers.add_parser("bridge")
     bridge_subparsers = bridge_parser.add_subparsers(dest="bridge_command", required=True)
@@ -139,6 +146,8 @@ def parse_command(argv: Sequence[str] | None = None) -> Command:
             return BridgeShimCommand(socket=namespace.socket)
         case "path":
             return PathCommand(name=namespace.name)
+        case "ssh":
+            return SshCommand(host=namespace.host)
         case command_name:
             msg = f"Unsupported command {command_name!r}"
             raise ValueError(msg)

@@ -18,6 +18,10 @@ class HopConfigError(HopError):
 # Substitution placeholders supported in command strings.
 PLACEHOLDER_PROJECT_ROOT = "{project_root}"
 PLACEHOLDER_PORT = "{port}"
+# Resolves to the session's externally-reachable host — the ssh target for a
+# remote session, ``localhost`` for a local one. Lets one repo `.hop.toml`
+# write host-dependent values (e.g. ``LOCAL_HOSTNAME={host}``) once.
+PLACEHOLDER_HOST = "{host}"
 
 # Reserved backend name — refers to the implicit host backend, never a
 # configured one. Auto-detect always falls back to host when no configured
@@ -448,6 +452,19 @@ def _load_config_file(path: Path) -> HopConfig:
     with path.open("rb") as handle:
         data = tomllib.load(handle)
     return _parse_top_level(data, source=path)
+
+
+def parse_project_config_text(text: str, *, source: Path) -> HopConfig:
+    """Parse a project config from in-memory TOML text.
+
+    Used when the ``.hop.toml`` isn't a local file — a remote session fetches
+    it over the transport (``ssh host cat <cwd>/.hop.toml``) and parses the
+    bytes here. ``source`` is only a label for error messages (e.g.
+    ``devbox:/home/user/proj/.hop.toml``); it is never opened.
+    """
+
+    data = tomllib.loads(text)
+    return _parse_top_level(data, source=source)
 
 
 def _parse_top_level(data: dict[str, Any], *, source: Path) -> HopConfig:

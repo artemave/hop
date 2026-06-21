@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-import shlex
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence
 
+from hop.backends import Transport, local_transport, substitute
 from hop.config import (
     BROWSER_ROLE,
     EDITOR_ROLE,
-    PLACEHOLDER_PROJECT_ROOT,
     SHELL_ROLE,
     HopConfig,
     LayoutConfig,
@@ -31,6 +30,10 @@ _BUILTIN_DEFAULTS: tuple[tuple[str, str, bool], ...] = (
 _BUILTIN_ROLES = frozenset(role for role, _, _ in _BUILTIN_DEFAULTS)
 
 CommandRunner = Callable[[Sequence[str], Path], subprocess.CompletedProcess[str]]
+# A layout/window ``activate`` probe: returns True when the command exits 0.
+# Built once per ``resolve_windows`` call so every probe runs through the same
+# transport (``sh -c`` locally, ``ssh`` for a remote session) and local cwd.
+Probe = Callable[[str], bool]
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,6 +67,9 @@ def resolve_windows(
     session: ProjectSession,
     *,
     runner: CommandRunner,
+    transport: Transport = local_transport,
+    host: str = "localhost",
+    cwd: Path | None = None,
 ) -> tuple[WindowSpec, ...]:
     """Compute the ordered windows for ``session`` from ``config``.
 
@@ -79,7 +85,19 @@ def resolve_windows(
     level one); the window auto-launches when it exits 0. Windows whose
     merged ``command`` is empty are kept only for the built-in roles
     (where empty is a meaningful sentinel).
+
+    Probes run through ``transport`` (``sh -c`` locally, ``ssh`` for a remote
+    session) with ``{host}``/``{project_root}`` substituted, in ``cwd`` (the
+    local runner cwd — the project root locally, the host home for a remote
+    session whose project root only exists on the remote; the remote cd rides
+    inside the transport).
     """
+
+    probe_cwd = cwd if cwd is not None else session.project_root
+
+    def probe(command: str) -> bool:
+        substituted = substitute(command, session=session, host=host)
+        return runner(transport(substituted), probe_cwd).returncode == 0
 
     specs: dict[str, _MutableSpec] = {}
     # Pre-load built-in specs so layout / top-level windows that override
@@ -92,13 +110,13 @@ def resolve_windows(
 
     declared_order: list[str] = []
     for layout in config.layouts:
-        if not _layout_matches(layout, session=session, runner=runner):
+        if not _layout_matches(layout, probe=probe):
             continue
         for window in layout.windows:
-            _apply_layout_window(window, specs=specs, declared_order=declared_order, session=session, runner=runner)
+            _apply_layout_window(window, specs=specs, declared_order=declared_order, probe=probe)
 
     for window in config.windows:
-        _apply_top_level_window(window, specs=specs, declared_order=declared_order, session=session, runner=runner)
+        _apply_top_level_window(window, specs=specs, declared_order=declared_order, probe=probe)
 
     final_order: list[str] = [SHELL_ROLE, EDITOR_ROLE]
     final_order.extend(role for role in declared_order if role not in (SHELL_ROLE, EDITOR_ROLE))
@@ -139,8 +157,7 @@ class _MutableSpec:
 def _layout_matches(
     layout: LayoutConfig,
     *,
-    session: ProjectSession,
-    runner: CommandRunner,
+    probe: Probe,
 ) -> bool:
     if layout.activate is None:
         # A layout without an activate probe never activates. The parser
@@ -149,9 +166,7 @@ def _layout_matches(
         # layout); a layout with no probe in either layer is effectively
         # off, which is safer than always-on.
         return False
-    substituted = _substitute(layout.activate, session=session)
-    result = runner(("sh", "-c", substituted), session.project_root)
-    return result.returncode == 0
+    return probe(layout.activate)
 
 
 def _apply_layout_window(
@@ -159,13 +174,12 @@ def _apply_layout_window(
     *,
     specs: dict[str, _MutableSpec],
     declared_order: list[str],
-    session: ProjectSession,
-    runner: CommandRunner,
+    probe: Probe,
 ) -> None:
     if window.role not in declared_order:
         declared_order.append(window.role)
     existing = specs.get(window.role)
-    active = _resolve_window_activate(window.activate, default=True, session=session, runner=runner)
+    active = _resolve_window_activate(window.activate, default=True, probe=probe)
     if existing is None:
         specs[window.role] = _MutableSpec(
             role=window.role,
@@ -189,14 +203,13 @@ def _apply_top_level_window(
     *,
     specs: dict[str, _MutableSpec],
     declared_order: list[str],
-    session: ProjectSession,
-    runner: CommandRunner,
+    probe: Probe,
 ) -> None:
     if window.role not in declared_order:
         declared_order.append(window.role)
     existing = specs.get(window.role)
     if existing is None:
-        active = _resolve_window_activate(window.activate, default=True, session=session, runner=runner)
+        active = _resolve_window_activate(window.activate, default=True, probe=probe)
         specs[window.role] = _MutableSpec(
             role=window.role,
             command=window.command,
@@ -208,9 +221,7 @@ def _apply_top_level_window(
     if window.command is not None:
         existing.command = window.command
     if window.activate is not None:
-        existing.active = _resolve_window_activate(
-            window.activate, default=existing.active, session=session, runner=runner
-        )
+        existing.active = _resolve_window_activate(window.activate, default=existing.active, probe=probe)
     if window.open_keys is not None:
         existing.open_keys = window.open_keys
     if window.open_keys_with_line is not None:
@@ -221,17 +232,11 @@ def _resolve_window_activate(
     activate: str | None,
     *,
     default: bool,
-    session: ProjectSession,
-    runner: CommandRunner,
+    probe: Probe,
 ) -> bool:
     if activate is None:
         return default
-    substituted = _substitute(activate, session=session)
-    return runner(("sh", "-c", substituted), session.project_root).returncode == 0
-
-
-def _substitute(template: str, *, session: ProjectSession) -> str:
-    return template.replace(PLACEHOLDER_PROJECT_ROOT, shlex.quote(str(session.project_root)))
+    return probe(activate)
 
 
 def find_window(windows: Sequence[WindowSpec], role: str) -> WindowSpec | None:

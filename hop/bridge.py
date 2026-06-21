@@ -25,6 +25,14 @@ from hop.sway import SwayWindow
 
 SwaySource = Callable[[], Sequence[SwayWindow]]
 Dispatcher = Callable[[ProjectSession, Sequence[str]], "CompletedProcess[bytes]"]
+RemoteDispatcher = Callable[[str, str, Sequence[str]], "CompletedProcess[bytes]"]
+SessionlessDispatcher = Callable[[Sequence[str]], "CompletedProcess[bytes]"]
+
+# Stateless ``hop`` subcommands that don't act on a session — they run
+# regardless of which window is focused. The shim is a transparent proxy for
+# these (e.g. a recipe running ``hop bridge shim`` on a remote where ``hop`` is
+# the shim still gets the real shim text back from the host).
+SESSIONLESS_COMMANDS = frozenset({"bridge", "path"})
 
 
 # POSIX-sh client for the bridge acceptor. Rendered by
@@ -41,13 +49,21 @@ Dispatcher = Callable[[ProjectSession, Sequence[str]], "CompletedProcess[bytes]"
 # container base images.
 BRIDGE_SHIM_DEFAULT_SOCKET = "/run/hop.sock"
 
+# Default ssh host baked into a shim. ``hop ssh <host>`` bakes the real target so
+# the remote-machine shim reports which host it came from; the recipe-installed
+# in-container shim leaves it empty (the acceptor then resolves the session from
+# the host's focused window, as before). Overridable at run time via
+# ``$HOP_SSH_HOST``.
+BRIDGE_SHIM_DEFAULT_HOST = ""
+
 _BRIDGE_SHIM_TEMPLATE = r"""#!/bin/sh
 sock=${HOP_SOCKET:-__SOCKET_DEFAULT__}
+host=${HOP_SSH_HOST:-__HOST_DEFAULT__}
 hdr=$(mktemp) || exit 2
 body=$(mktemp) || { rm -f "$hdr"; exit 2; }
 trap 'rm -f "$hdr" "$body"' EXIT
 
-status=$(printf '%s\0' "$0" "$@" | curl -sS --unix-socket "$sock" \
+status=$(printf '%s\0' "$host" "$(pwd)" "$0" "$@" | curl -sS --unix-socket "$sock" \
     -D "$hdr" -o "$body" -w '%{http_code}' \
     --data-binary @- "http://_/call") || exit 2
 
@@ -69,10 +85,13 @@ esac
 """
 
 
-def render_bridge_shim(socket_default: str = BRIDGE_SHIM_DEFAULT_SOCKET) -> str:
-    """Render the POSIX-sh client with the given default socket path baked in."""
+def render_bridge_shim(
+    socket_default: str = BRIDGE_SHIM_DEFAULT_SOCKET,
+    host_default: str = BRIDGE_SHIM_DEFAULT_HOST,
+) -> str:
+    """Render the POSIX-sh client with the default socket + ssh host baked in."""
 
-    return _BRIDGE_SHIM_TEMPLATE.replace("__SOCKET_DEFAULT__", socket_default)
+    return _BRIDGE_SHIM_TEMPLATE.replace("__SOCKET_DEFAULT__", socket_default).replace("__HOST_DEFAULT__", host_default)
 
 
 # Default-rendered shim text — convenience for callers that don't customize the
@@ -148,25 +167,94 @@ def resolve_session_from_focus(
     # Construct directly from persisted state — re-deriving via
     # ``resolve_project_session`` would recompute ``session_name`` from
     # ``project_root.name``, which doesn't match in tests and is redundant in
-    # production (the persisted name is already the canonical value).
+    # production (the persisted name is already the canonical value). ``host``
+    # rides along so a remote session's dispatch runs over the transport rather
+    # than locally against a path that only exists on the remote.
     return ProjectSession(
         project_root=state.project_root,
         session_name=state.name,
         workspace_name=f"{SESSION_WORKSPACE_PREFIX}{state.name}",
+        host=state.backend.transport_host,
     )
 
 
 def dispatch_via_subprocess(
     session: ProjectSession,
     argv: Sequence[str],
+    *,
+    runner: Callable[..., "CompletedProcess[bytes]"] = subprocess.run,
 ) -> CompletedProcess[bytes]:
-    """Production dispatcher: run ``hop`` as a subprocess rooted at the session."""
+    """Production dispatcher: run ``hop`` as a subprocess for the focused session.
+
+    A local session roots the subprocess at its project dir. A *remote* session's
+    project dir only exists on the remote, so root the subprocess in the local
+    home and pass identity via ``HOP_REMOTE_HOST`` / ``HOP_REMOTE_CWD`` — the
+    command paths rebuild the remote session from those (``remote_session_from_env``)
+    and drive the backend over the transport. This is what makes in-container
+    ``hop open`` / ``hop run`` work for a remote devcontainer session.
+    """
+
+    env = dict(os.environ)
+    cwd: Path = session.project_root
+    if session.host is not None:
+        env["HOP_REMOTE_HOST"] = session.host
+        env["HOP_REMOTE_CWD"] = str(session.project_root)
+        cwd = Path.home()
+    return runner(
+        [sys.executable, "-m", "hop", *argv],
+        cwd=cwd,
+        input=b"",
+        capture_output=True,
+        env=env,
+        check=False,
+    )
+
+
+def dispatch_sessionless(argv: Sequence[str]) -> CompletedProcess[bytes]:
+    """Run a stateless ``hop`` subcommand on the host, independent of any session.
+
+    For ``bridge shim`` / ``path`` there's nothing to resolve from focus — the
+    command is a pure function of its args — so run ``hop <argv>`` from the home
+    directory and return its output. This is what lets a remote recipe's
+    ``hop bridge shim`` (where ``hop`` is the shim) get the real shim text back.
+    """
 
     return subprocess.run(
         [sys.executable, "-m", "hop", *argv],
-        cwd=session.project_root,
+        cwd=str(Path.home()),
         input=b"",
         capture_output=True,
+        check=False,
+    )
+
+
+def dispatch_remote(
+    host: str,
+    cwd: str,
+    argv: Sequence[str],
+    *,
+    runner: Callable[..., "CompletedProcess[bytes]"] = subprocess.run,
+) -> CompletedProcess[bytes]:
+    """Run ``hop <argv>`` for a remote session reported by the ``hop ssh`` shim.
+
+    The shim runs on a remote machine and reports ``(host, cwd)``; the ``cwd``
+    identifies the session exactly as it does for a local ``hop`` (no focus
+    needed), and there is no local directory to root the subprocess in (``cwd``
+    is a path on ``host``). So ``hop`` runs from the local home with the identity
+    passed via environment — the CLI rebuilds the remote ``ProjectSession`` from
+    it (``remote_session_from_env``) for *any* command: enter (empty argv),
+    ``kill``, ``run``, ``open``, … all over the ssh transport.
+    """
+
+    env = dict(os.environ)
+    env["HOP_REMOTE_HOST"] = host
+    env["HOP_REMOTE_CWD"] = cwd
+    return runner(
+        [sys.executable, "-m", "hop", *argv],
+        cwd=str(Path.home()),
+        input=b"",
+        capture_output=True,
+        env=env,
         check=False,
     )
 
@@ -187,16 +275,32 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
             return
         content_length = int(self.headers.get("Content-Length") or "0")
         body = self.rfile.read(content_length) if content_length else b""
-        argv = [piece.decode("utf-8", errors="replace") for piece in body.split(b"\x00") if piece]
-        # First element is the shim's $0 — ignored.
-        hop_argv = argv[1:]
+        # Frame: host \0 cwd \0 $0 \0 *args. host/cwd are always positional
+        # (either may be an empty string, so they can't be filtered); $0 is the
+        # shim's own name and is ignored; the hop args are everything after it,
+        # with the trailing empty field that printf '%s\0' leaves dropped.
+        raw = body.split(b"\x00")
+        host = raw[0].decode("utf-8", errors="replace") if raw else ""
+        cwd = raw[1].decode("utf-8", errors="replace") if len(raw) > 1 else ""
+        hop_argv = [piece.decode("utf-8", errors="replace") for piece in raw[3:] if piece]
         bridge_server = self.bridge_server
         try:
-            session = resolve_session_from_focus(
-                bridge_server.sway_source,
-                sessions_dir=bridge_server.sessions_dir,
-            )
-            result = bridge_server.dispatcher(session, hop_argv)
+            if host:
+                # Remote-machine shim (`hop ssh` installed it with the host baked):
+                # the user ran `hop <cmd>` in a remote shell, so the cwd identifies
+                # the session exactly as for a local `hop` — route by (host, cwd),
+                # not the laptop's focused window. Covers enter, kill, run, open, …
+                result = bridge_server.remote_dispatcher(host, cwd, hop_argv)
+            elif hop_argv and hop_argv[0] in SESSIONLESS_COMMANDS:
+                # Stateless command (e.g. `hop bridge shim`): no session to
+                # resolve, so run it directly rather than requiring focus.
+                result = bridge_server.sessionless_dispatcher(hop_argv)
+            else:
+                session = resolve_session_from_focus(
+                    bridge_server.sway_source,
+                    sessions_dir=bridge_server.sessions_dir,
+                )
+                result = bridge_server.dispatcher(session, hop_argv)
         except BridgeError as error:
             self._send_text(error.status, error.message)
             return
@@ -233,11 +337,15 @@ class BridgeServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
         dispatcher: Dispatcher,
         *,
         sessions_dir: Path | None = None,
+        remote_dispatcher: RemoteDispatcher = dispatch_remote,
+        sessionless_dispatcher: SessionlessDispatcher = dispatch_sessionless,
     ) -> None:
         super().__init__(socket_path, BridgeRequestHandler)
         self.sway_source = sway_source
         self.dispatcher = dispatcher
         self.sessions_dir = sessions_dir
+        self.remote_dispatcher = remote_dispatcher
+        self.sessionless_dispatcher = sessionless_dispatcher
 
 
 def serve_forever(
@@ -246,6 +354,8 @@ def serve_forever(
     dispatcher: Dispatcher,
     *,
     sessions_dir: Path | None = None,
+    remote_dispatcher: RemoteDispatcher = dispatch_remote,
+    sessionless_dispatcher: SessionlessDispatcher = dispatch_sessionless,
 ) -> None:
     """Bind ``socket_path`` (unlinking any stale entry) and serve until shutdown."""
 
@@ -258,5 +368,7 @@ def serve_forever(
         sway_source=sway_source,
         dispatcher=dispatcher,
         sessions_dir=sessions_dir,
+        remote_dispatcher=remote_dispatcher,
+        sessionless_dispatcher=sessionless_dispatcher,
     ) as server:
         server.serve_forever()

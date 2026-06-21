@@ -106,6 +106,31 @@ def test_enter_project_session_switches_to_workspace_and_bootstraps_shell(tmp_pa
     assert terminals.already_prepared_flags == [True]
 
 
+def test_enter_project_session_uses_supplied_session_over_cwd(tmp_path: Path) -> None:
+    """A remote session's identity comes from the shim's (host, cwd), not the
+    local cwd of the dispatching subprocess. A supplied session must override
+    what ``cwd`` would resolve to — the bug where windows came up for the local
+    home session ("artem") instead of the remote one."""
+    sway = StubSwayAdapter()
+    terminals = StubTerminalAdapter()
+    remote = ProjectSession(
+        project_root=Path("/home/admin/projects/thonon-les-pains"),
+        session_name="thonon-les-pains",
+        workspace_name="p:thonon-les-pains",
+        host="devbox",
+    )
+
+    # ``tmp_path`` stands in for the local home a remote-enter subprocess passes;
+    # it must be ignored in favour of the supplied remote session.
+    returned = enter_project_session(tmp_path, sway=sway, terminals=terminals, session=remote)
+
+    assert returned is remote
+    assert sway.switched_workspaces == ["p:thonon-les-pains"]
+    assert terminals.ensured_terminals == [
+        ("thonon-les-pains", "shell", Path("/home/admin/projects/thonon-les-pains")),
+    ]
+
+
 def test_enter_project_session_ensures_editor_when_one_is_supplied(tmp_path: Path) -> None:
     """Bootstrap path: callers (app.py on first entry) pass an editor
     adapter so the new session comes up with both shell and editor."""

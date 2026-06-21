@@ -47,6 +47,13 @@ class _FakeBackend:
         del command, session
         return ()
 
+    def compose(self, command: str) -> Sequence[str]:
+        return ("sh", "-c", command)
+
+    def lifecycle_argv(self, step: str, session: ProjectSession) -> tuple[str, ...]:
+        del session
+        return ("sh", "-c", step)
+
     def inline(self, command: str, session: ProjectSession) -> str:
         del session
         return command

@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Protocol, Sequence
 
 from hop.config import EDITOR_ROLE
-from hop.session import ProjectSession, resolve_project_session
+from hop.session import ProjectSession, remote_session_from_env, resolve_project_session
 from hop.sway import SwayWindow
 
 
@@ -30,7 +30,7 @@ def focus_terminal(
     neovim: TermNeovimAdapter,
     role: str,
 ) -> ProjectSession:
-    session = resolve_project_session(cwd)
+    session = remote_session_from_env() or resolve_project_session(cwd)
     if role == EDITOR_ROLE:
         # The editor isn't a plain kitty role terminal — it has its own
         # launch path (composed `<editor>; <shell>`, deterministic listen

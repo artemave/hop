@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, cast
 
-from hop.session import ProjectSession
+from hop.session import ProjectSession, resolve_project_session
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,6 +35,12 @@ class CommandBackendRecord:
     # Used as a fallback base cwd in ``hop.focused.paths_exist`` when the
     # focused window's OSC-7-driven ``cwd_of_child`` is unset.
     workspace_path: str | None = None
+    # The ssh target when this session runs on a remote machine; ``None`` for a
+    # local session. Round-trips so later commands (the open-selection kitten's
+    # ``paths_exist``, ``hop run``, …) rebuild the same ``SshTransport`` instead
+    # of re-running ``hop ssh``. When set, ``SessionState.project_root`` is a
+    # path on this remote host.
+    transport_host: str | None = None
     type: str = "command"
 
     def to_json(self) -> dict[str, object]:
@@ -54,6 +60,8 @@ class CommandBackendRecord:
             payload["host_translate_command"] = list(self.host_translate_command)
         if self.workspace_path is not None:
             payload["workspace_path"] = self.workspace_path
+        if self.transport_host is not None:
+            payload["transport_host"] = self.transport_host
         return payload
 
 
@@ -115,6 +123,20 @@ def forget_session(session_name: str, *, sessions_dir: Path | None = None) -> No
     state_file.unlink(missing_ok=True)
 
 
+def session_from_state(state: SessionState) -> ProjectSession:
+    """Rebuild a ``ProjectSession`` from a persisted record, *including* host.
+
+    Anything that reconstructs a session from state (the open-selection kitten,
+    the bridge) must go through here rather than ``resolve_project_session``
+    alone — a remote session's ``host`` lives in the record's ``transport_host``,
+    and without it every ``session.host``-keyed decision (the transport choice,
+    the local runner cwd) silently treats the session as local and runs remote
+    commands against a path that only exists on the remote.
+    """
+
+    return replace(resolve_project_session(state.project_root), host=state.backend.transport_host)
+
+
 def load_sessions(*, sessions_dir: Path | None = None) -> dict[str, SessionState]:
     target = sessions_dir if sessions_dir is not None else default_sessions_dir()
     if not target.is_dir():
@@ -155,6 +177,7 @@ def _decode_backend_record(raw: object) -> BackendRecord:
                     port_translate_command=_optional_steps(record.get("port_translate_command")),
                     host_translate_command=_optional_steps(record.get("host_translate_command")),
                     workspace_path=_optional_str(record.get("workspace_path")),
+                    transport_host=_optional_str(record.get("transport_host")),
                 )
     # Anything we can't decode (legacy ``{"type": "host"}`` records, malformed
     # payloads, the ``workspace_command``/``workspace_path``-era shape) falls

@@ -555,6 +555,9 @@ def test_launch_payload_composes_command_and_shell_for_non_shell_role() -> None:
 
     class FakeBackend:
         # No prefix → inline is identity-substituted; matches a host backend.
+        def compose(self, command: str) -> Sequence[str]:
+            return ("sh", "-c", command)
+
         def inline(self, command: str, _session: ProjectSession) -> str:
             return command
 
@@ -596,6 +599,9 @@ def test_launch_payload_composes_through_backend_prefix() -> None:
     from hop.layouts import WindowSpec
 
     class FakeBackend:
+        def compose(self, command: str) -> Sequence[str]:
+            return ("sh", "-c", command)
+
         def inline(self, command: str, _session: ProjectSession) -> str:
             return f"compose exec devcontainer {command}"
 
@@ -640,6 +646,9 @@ def test_empty_command_non_shell_role_inherits_shell_role_command() -> None:
     from hop.layouts import WindowSpec
 
     class FakeBackend:
+        def compose(self, command: str) -> Sequence[str]:
+            return ("sh", "-c", command)
+
         def inline(self, command: str, _session: ProjectSession) -> str:
             return command
 
@@ -681,6 +690,9 @@ def test_shell_role_empty_command_does_not_self_inherit() -> None:
     from hop.layouts import WindowSpec
 
     class FakeBackend:
+        def compose(self, command: str) -> Sequence[str]:
+            return ("sh", "-c", command)
+
         def inline(self, command: str, _session: ProjectSession) -> str:
             return command
 
@@ -719,6 +731,9 @@ def test_non_shell_role_with_primary_command_composes_with_shell_role_wrap() -> 
     from hop.layouts import WindowSpec
 
     class FakeBackend:
+        def compose(self, command: str) -> Sequence[str]:
+            return ("sh", "-c", command)
+
         def inline(self, command: str, _session: ProjectSession) -> str:
             return command
 
@@ -759,6 +774,9 @@ def test_launch_payload_does_not_compose_for_shell_role() -> None:
     from hop.layouts import WindowSpec
 
     class FakeBackend:
+        def compose(self, command: str) -> Sequence[str]:
+            return ("sh", "-c", command)
+
         def inline(self, command: str, _session: ProjectSession) -> str:
             return command  # never called when wrap is used
 

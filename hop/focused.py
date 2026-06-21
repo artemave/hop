@@ -19,8 +19,7 @@ from typing import Callable, Iterable
 
 from hop.backends import SessionBackend
 from hop.kitty import get_focused_window_cwd
-from hop.session import resolve_project_session
-from hop.state import SessionState, load_sessions
+from hop.state import SessionState, load_sessions, session_from_state
 from hop.sway import SwayIpcAdapter
 from hop.targets import (
     ResolvedFileTarget,
@@ -101,7 +100,7 @@ def paths_exist(
     else:
         base_cwd = state.project_root
 
-    session = resolve_project_session(state.project_root)
+    session = session_from_state(state)
 
     # Two checks happen here. Plain file refs flow through ``backend.paths_exist``
     # in one batched call. Rails refs run through ``resolve_target``, which
@@ -139,7 +138,7 @@ def _default_backend_loader(state: SessionState) -> SessionBackend | None:
     # adapters that don't need to know about hop.focused.
     from hop.app import backend_from_record
 
-    return backend_from_record(state.backend)
+    return backend_from_record(state.backend, project_root=state.project_root)
 
 
 def _session_name_from_workspace(workspace_name: str) -> str | None:

@@ -7,7 +7,7 @@ from typing import Callable, Protocol, Sequence
 from hop.backends import CommandBackend, SessionBackend
 from hop.browser import DEFAULT_BROWSER_MARK_PREFIX
 from hop.editor import EDITOR_MARK_PREFIX
-from hop.session import ProjectSession, resolve_project_session
+from hop.session import ProjectSession, remote_session_from_env, resolve_project_session
 from hop.state import forget_session
 from hop.sway import SwayWindow
 
@@ -33,7 +33,7 @@ def kill_session(
     clock: Callable[[], float] = time.monotonic,
     teardown_runner: Callable[[ProjectSession, SessionBackend], None] | None = None,
 ) -> ProjectSession:
-    session = resolve_project_session(cwd)
+    session = remote_session_from_env() or resolve_project_session(cwd)
 
     # Capture the backend reference now, before windows close. The daemon
     # (hopd) sweeps stale persisted state on every workspace event; closing

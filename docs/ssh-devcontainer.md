@@ -1,5 +1,13 @@
 # ssh + container session backend
 
+> **The supported path is now `hop ssh <host>`** — see the usage guide at
+> **[docs/hop-ssh.md](hop-ssh.md)**. With it, the project's own portable
+> `.hop.toml` (the plain [devcontainer](devcontainer.md) recipe) runs a local *or*
+> remote container with no second config and no ssh in the recipe: `hop ssh devbox`,
+> then `cd <project> && hop`. hop wraps the recipe in the ssh transport for you.
+> This guide remains the rationale — it shows, by hand, the transport, quoting,
+> PATH, bridge, clipboard, and translation concerns that `hop ssh` now owns.
+
 A worked guide to running a hop session whose dev container lives on a **remote**
 machine reached over ssh — the GUI (kitty/Sway) on your laptop, the container on
 the remote box. It composes hop's [ssh](ssh.md) and [devcontainer](devcontainer.md)

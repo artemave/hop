@@ -1,9 +1,10 @@
+import shlex
 from pathlib import Path
 from typing import Sequence
 
 import pytest
 
-from hop.backends import CommandBackend, SessionBackendError
+from hop.backends import CommandBackend, SessionBackendError, SshTransport
 from hop.errors import HopError
 from hop.popup import (
     POPUP_APP_ID,
@@ -304,7 +305,7 @@ def test_show_error_does_not_raise_when_launcher_exits_non_zero() -> None:
 
 def test_lifecycle_script_prepare_shape(tmp_path: Path) -> None:
     session = _make_session(tmp_path)
-    script = _lifecycle_script(session, ("compose up -d devcontainer",), kind="prepare")
+    script = _lifecycle_script(session, ("compose up -d devcontainer",), kind="prepare", backend=_host_backend())
 
     assert f"cd {session.project_root}" in script
     assert f"Preparing {session.session_name}" in script
@@ -330,7 +331,9 @@ def test_lifecycle_script_multi_step_emits_per_step_blocks(tmp_path: Path) -> No
     execute. Successful steps fall through to the next without dropping the
     user into a shell."""
     session = _make_session(tmp_path)
-    script = _lifecycle_script(session, ("compose up", "install hop", "install kitten"), kind="prepare")
+    script = _lifecycle_script(
+        session, ("compose up", "install hop", "install kitten"), kind="prepare", backend=_host_backend()
+    )
 
     assert "compose up" in script
     assert "install hop" in script
@@ -350,7 +353,7 @@ def test_lifecycle_script_preserves_failure_status_through_held_shell(tmp_path: 
     session = _make_session(tmp_path)
     # Substitute a command that always fails (the `flock` invocation runs
     # `sh -c "false"`).
-    script = _lifecycle_script(session, ("false",), kind="prepare")
+    script = _lifecycle_script(session, ("false",), kind="prepare", backend=_host_backend())
 
     result = subprocess.run(
         ["bash", "-c", script],
@@ -373,7 +376,7 @@ def test_lifecycle_script_success_does_not_hold_shell(tmp_path: Path) -> None:
     import subprocess
 
     session = _make_session(tmp_path)
-    script = _lifecycle_script(session, ("true",), kind="prepare")
+    script = _lifecycle_script(session, ("true",), kind="prepare", backend=_host_backend())
 
     result = subprocess.run(
         ["bash", "-c", script],
@@ -397,7 +400,7 @@ def test_lifecycle_script_writes_output_to_per_session_log(tmp_path: Path, monke
 
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
     session = _make_session(tmp_path)
-    script = _lifecycle_script(session, ("printf 'hello-from-prepare\\n'",), kind="prepare")
+    script = _lifecycle_script(session, ("printf 'hello-from-prepare\\n'",), kind="prepare", backend=_host_backend())
 
     subprocess.run(["bash", "-c", script], input="", capture_output=True, text=True, check=True)
 
@@ -416,10 +419,10 @@ def test_lifecycle_script_log_overwrites_on_each_invocation(tmp_path: Path, monk
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
     session = _make_session(tmp_path)
 
-    first = _lifecycle_script(session, ("printf 'FIRST\\n'",), kind="prepare")
+    first = _lifecycle_script(session, ("printf 'FIRST\\n'",), kind="prepare", backend=_host_backend())
     subprocess.run(["bash", "-c", first], input="", capture_output=True, text=True, check=True)
 
-    second = _lifecycle_script(session, ("printf 'SECOND\\n'",), kind="prepare")
+    second = _lifecycle_script(session, ("printf 'SECOND\\n'",), kind="prepare", backend=_host_backend())
     subprocess.run(["bash", "-c", second], input="", capture_output=True, text=True, check=True)
 
     contents = (tmp_path / "hop" / f"popup-{session.session_name}-prepare.log").read_text()
@@ -429,7 +432,7 @@ def test_lifecycle_script_log_overwrites_on_each_invocation(tmp_path: Path, monk
 
 def test_lifecycle_script_teardown_shape(tmp_path: Path) -> None:
     session = _make_session(tmp_path)
-    script = _lifecycle_script(session, ("compose down",), kind="teardown")
+    script = _lifecycle_script(session, ("compose down",), kind="teardown", backend=_host_backend())
 
     assert f"Tearing down {session.session_name}" in script
     assert "compose down" in script
@@ -447,7 +450,7 @@ def test_lifecycle_script_quotes_shell_metacharacters(tmp_path: Path) -> None:
     session = _make_session(tmp_path)
     nasty = "echo $(date) > /tmp/'foo bar'.log && true"
 
-    script = _lifecycle_script(session, (nasty,), kind="prepare")
+    script = _lifecycle_script(session, (nasty,), kind="prepare", backend=_host_backend())
 
     # Slice out everything up to (and including) the announcement printfs —
     # before `flock` actually runs the user command. Running the full script
@@ -464,6 +467,36 @@ def test_lifecycle_script_quotes_shell_metacharacters(tmp_path: Path) -> None:
     # The user-visible announcement contains the verbatim command despite
     # the embedded `'`, `$(...)`, `&&`.
     assert nasty in result.stdout
+
+
+def test_lifecycle_script_routes_remote_session_through_ssh_transport() -> None:
+    """For a remote session the popup must cd locally to the host home and run
+    each step over the ssh transport — never `cd <remote project root>` (which
+    only exists on the remote) followed by a local `sh -c`."""
+    session = ProjectSession(
+        project_root=Path("/remote/proj"),
+        session_name="proj",
+        workspace_name="p:proj",
+        host="devbox",
+    )
+    backend = CommandBackend(
+        name="dc",
+        interactive_prefix="podman-compose exec dc",
+        noninteractive_prefix="podman-compose exec -T dc",
+        transport=SshTransport("devbox", "/remote/proj", interactive=True),
+        noninteractive_transport=SshTransport("devbox", "/remote/proj", interactive=False),
+        host="devbox",
+    )
+
+    script = _lifecycle_script(session, ("podman-compose up -d",), kind="prepare", backend=backend)
+
+    # The popup's own cwd is the local home, not the remote project root.
+    assert f"cd {shlex.quote(str(Path.home()))}" in script
+    # The step runs over ssh under flock; the remote cd is inside the base64
+    # payload, so the remote path never appears as a bare local `cd`.
+    flock_line = next(line for line in script.splitlines() if line.startswith("flock -o"))
+    assert " ssh " in f" {flock_line} "
+    assert "cd /remote/proj &&" not in script
 
 
 def test_error_script_includes_class_name_and_message() -> None:

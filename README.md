@@ -17,7 +17,9 @@ hop is built on top of [Sway](https://swaywm.org/) window manager and [Kitty](ht
 - **Session terminals start in the project directory** - spawn a shell anywhere in a session and it's already `cd`-ed into the project root.
 - **Dedicated session browser** - to keep project specific pages close to home.
 - **Open from terminal output** - bundled Kitty kitten picks file paths and URLs from visible output and dispatches them to the session's editor or browser.
-- **Pluggable backends** - shells and editor can run on the host, inside a docker container, over ssh, or anywhere describable as a chain of commands - without changing how you drive the session.
+- **Pluggable backends** - shells and editor can run on the host, inside a docker container, or anywhere describable as a chain of commands - without changing how you drive the session.
+- **Remote sessions over ssh** - run any of those backends on a remote machine with `hop ssh`; the same project config drives it whether you're local or remote.
+- **Layouts** - configure certain projects to start with extra windows (e.g. "server" or "console" for rails).
 - **Vicinae-driven workflow** - sessions, windows, and switches surface as direct entries in the launcher's main search; a single `exec hopd` line in the Sway config wires it up.
 - **Scriptable** - everything Vicinae dispatches to is also a `hop` CLI subcommand.
 
@@ -116,9 +118,13 @@ Configs live in `~/.config/hop/config.toml` or a project's `.hop.toml`.
 
 ## Session backends
 
-A session has a **backend** that decides where its windows run. The default is **host**. Other backends - docker container (devcontainer), ssh, anything else describable as a chain of commands - are configured as named entries in the config file.
+A session has a **backend** that decides what kind of environment its windows run in. The default is **host**. Other backends - docker container (devcontainer) or anything else describable as a chain of commands - are configured as named entries in the config file. Running a backend on a *remote* machine is a separate axis — the ssh transport (`hop ssh`, see [Remote sessions over ssh](#remote-sessions-over-ssh)) — not a backend of its own.
 
 Note, that nvim runs on the backend, not on the host (unless backend is the host).
+
+### Remote sessions over ssh
+
+Run any project's session on a remote machine with **`hop ssh <host>`**: it sets up the ssh transport (ControlMaster, the reverse-forwarded bridge socket, the installed shim) and drops you into a remote shell, where `cd <project> && hop` starts the session there. The project's own `.hop.toml` drives it — the *same* recipe runs a container locally or on the remote, with no ssh in the config and no local stub directory. hop wraps each command in the ssh transport for you, and `{host}` resolves to the remote (or `localhost` locally) for host-dependent values like `LOCAL_HOSTNAME={host}`. See **[docs/hop-ssh.md](docs/hop-ssh.md)** for the usage guide (and troubleshooting, e.g. raising sshd `MaxSessions`).
 
 ### Auto-detection
 
@@ -270,7 +276,7 @@ hop --backend <name>
 
 Forces a backend at session creation regardless of auto-detect. Use `hop --backend host` to keep the host backend in a project that would otherwise auto-activate something else. The choice is persisted for the session's lifetime.
 
-For step-by-step devcontainer setup and troubleshooting, see [`docs/devcontainer.md`](docs/devcontainer.md). For a session over ssh, see [`docs/ssh.md`](docs/ssh.md); for a container on a **remote** machine reached over ssh, [`docs/ssh-devcontainer.md`](docs/ssh-devcontainer.md).
+For step-by-step devcontainer setup and troubleshooting, see [`docs/devcontainer.md`](docs/devcontainer.md). For running a session on a **remote** machine, see [`docs/hop-ssh.md`](docs/hop-ssh.md) — [`docs/ssh.md`](docs/ssh.md) and [`docs/ssh-devcontainer.md`](docs/ssh-devcontainer.md) document the hand-wired recipes it supersedes.
 
 ## Automation
 

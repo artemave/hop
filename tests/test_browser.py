@@ -203,6 +203,32 @@ def test_ensure_browser_launches_new_window_marks_it_and_focuses_it() -> None:
     assert sway.focused_window_ids == [41]
 
 
+def test_ensure_browser_launches_from_home_for_a_remote_session() -> None:
+    # The browser is a host GUI, but its launch cwd must be a real *local* dir.
+    # A remote session's project_root only exists on the remote, so launching
+    # there raises FileNotFoundError (the translated-URL bug); use the host home.
+    sway = StubSwayAdapter([])
+
+    def add_new_window(_command: tuple[str, ...]) -> None:
+        sway.windows.append(
+            SwayWindow(id=41, workspace_name="scratch", app_id="brave-browser", window_class=None, marks=())
+        )
+
+    launcher = StubBrowserLauncher(on_launch=add_new_window)
+    adapter = SessionBrowserAdapter(sway=sway, launcher=launcher, browser_spec=build_browser_spec())
+    remote = ProjectSession(
+        project_root=Path("/home/admin/projects/thonon-les-pains"),
+        session_name="thonon-les-pains",
+        workspace_name="p:thonon-les-pains",
+        host="devbox",
+    )
+
+    adapter.ensure_browser(remote, url="http://devbox.local:54321")
+
+    (_command, cwd) = launcher.commands[0]
+    assert cwd == Path.home()
+
+
 def test_ensure_browser_raises_when_launch_does_not_create_a_new_window() -> None:
     adapter = SessionBrowserAdapter(
         sway=StubSwayAdapter([]),

@@ -9,7 +9,7 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 from subprocess import CompletedProcess
-from typing import Callable, Iterator, Sequence
+from typing import Callable, Iterator, Sequence, cast
 
 import pytest
 
@@ -18,6 +18,7 @@ from hop.bridge import (
     BRIDGE_SHIM_DEFAULT_SOCKET,
     BridgeServer,
     default_api_socket_path,
+    dispatch_sessionless,
     dispatch_via_subprocess,
     render_bridge_shim,
     serve_forever,
@@ -81,12 +82,22 @@ def _curl_post(socket_path: Path, body: bytes) -> CurlResponse:
     return CurlResponse(status=status, headers=headers, body=proc.stdout)
 
 
+def _refuse_remote_enter(host: str, cwd: str, argv: Sequence[str]) -> CompletedProcess[bytes]:
+    raise AssertionError(f"remote_dispatcher should not be invoked (host={host!r}, cwd={cwd!r}, argv={list(argv)!r})")
+
+
+def _refuse_sessionless(argv: Sequence[str]) -> CompletedProcess[bytes]:
+    raise AssertionError(f"sessionless_dispatcher should not be invoked (argv={list(argv)!r})")
+
+
 @contextlib.contextmanager
 def _running_bridge(
     socket_path: Path,
     sway_source: Callable[[], Sequence[SwayWindow]],
     dispatcher: Callable[[ProjectSession, Sequence[str]], CompletedProcess[bytes]],
     sessions_dir: Path | None = None,
+    remote_dispatcher: Callable[[str, str, Sequence[str]], CompletedProcess[bytes]] = _refuse_remote_enter,
+    sessionless_dispatcher: Callable[[Sequence[str]], CompletedProcess[bytes]] = _refuse_sessionless,
 ) -> Iterator[BridgeServer]:
     socket_path.parent.mkdir(parents=True, exist_ok=True)
     server = BridgeServer(
@@ -94,6 +105,8 @@ def _running_bridge(
         sway_source=sway_source,
         dispatcher=dispatcher,
         sessions_dir=sessions_dir,
+        remote_dispatcher=remote_dispatcher,
+        sessionless_dispatcher=sessionless_dispatcher,
     )
     thread = threading.Thread(target=server.serve_forever, args=(0.05,), daemon=True)
     thread.start()
@@ -139,7 +152,7 @@ def test_round_trip_with_focused_editor_window(tmp_path: Path) -> None:
         return CompletedProcess(args=[], returncode=0, stdout=b"abc123\n", stderr=b"")
 
     with _running_bridge(socket_path, lambda: sway_windows, dispatcher, sessions_dir=sessions_dir):
-        response = _curl_post(socket_path, b"hop\x00run\x00--role\x00test\x00ls\x00")
+        response = _curl_post(socket_path, b"\x00\x00hop\x00run\x00--role\x00test\x00ls\x00")
 
     assert response.status == 200
     assert response.body == b"abc123\n"
@@ -157,7 +170,7 @@ def test_non_zero_exit_propagates(tmp_path: Path) -> None:
         return CompletedProcess(args=[], returncode=2, stdout=b"out", stderr=b"err")
 
     with _running_bridge(socket_path, lambda: [_editor_window("demo")], dispatcher, sessions_dir=sessions_dir):
-        response = _curl_post(socket_path, b"hop\x00fail\x00")
+        response = _curl_post(socket_path, b"\x00\x00hop\x00fail\x00")
 
     assert response.status == 200
     assert response.body == b"out"
@@ -173,7 +186,7 @@ def test_no_focused_window_returns_400(tmp_path: Path) -> None:
         raise AssertionError("dispatcher should not be invoked")
 
     with _running_bridge(socket_path, lambda: [], dispatcher, sessions_dir=sessions_dir):
-        response = _curl_post(socket_path, b"hop\x00")
+        response = _curl_post(socket_path, b"\x00\x00hop\x00")
 
     assert response.status == 400
     assert b"no focused Sway window" in response.body
@@ -195,7 +208,7 @@ def test_focused_window_off_any_session_workspace_returns_400(tmp_path: Path) ->
         focused=True,
     )
     with _running_bridge(socket_path, lambda: [bare_window], dispatcher, sessions_dir=sessions_dir):
-        response = _curl_post(socket_path, b"hop\x00")
+        response = _curl_post(socket_path, b"\x00\x00hop\x00")
 
     assert response.status == 400
     assert b"neither a hop editor nor on a session workspace" in response.body
@@ -222,7 +235,7 @@ def test_focused_role_terminal_on_session_workspace_resolves_session(tmp_path: P
         focused=True,
     )
     with _running_bridge(socket_path, lambda: [role_terminal], dispatcher, sessions_dir=sessions_dir):
-        response = _curl_post(socket_path, b"hop\x00run\x00--role\x00test\x00ls\x00")
+        response = _curl_post(socket_path, b"\x00\x00hop\x00run\x00--role\x00test\x00ls\x00")
 
     assert response.status == 200
     assert len(captured) == 1
@@ -239,7 +252,7 @@ def test_mark_points_to_unknown_session_returns_400(tmp_path: Path) -> None:
         raise AssertionError("dispatcher should not be invoked")
 
     with _running_bridge(socket_path, lambda: [_editor_window("ghost")], dispatcher, sessions_dir=sessions_dir):
-        response = _curl_post(socket_path, b"hop\x00")
+        response = _curl_post(socket_path, b"\x00\x00hop\x00")
 
     assert response.status == 400
     assert b"'ghost'" in response.body
@@ -258,7 +271,7 @@ def test_dispatcher_receives_resolved_session(tmp_path: Path) -> None:
         return CompletedProcess(args=[], returncode=0, stdout=b"", stderr=b"")
 
     with _running_bridge(socket_path, lambda: [_editor_window("demo")], dispatcher, sessions_dir=sessions_dir):
-        _curl_post(socket_path, b"hop\x00run\x00--role\x00test\x00ls\x00")
+        _curl_post(socket_path, b"\x00\x00hop\x00run\x00--role\x00test\x00ls\x00")
 
     assert len(captured) == 1
     session, argv = captured[0]
@@ -279,9 +292,89 @@ def test_stderr_round_trips_through_base64_header(tmp_path: Path) -> None:
         return CompletedProcess(args=[], returncode=1, stdout=b"", stderr=binary_stderr)
 
     with _running_bridge(socket_path, lambda: [_editor_window("demo")], dispatcher, sessions_dir=sessions_dir):
-        response = _curl_post(socket_path, b"hop\x00")
+        response = _curl_post(socket_path, b"\x00\x00hop\x00")
 
     assert base64.b64decode(response.headers["x-hop-stderr"]) == binary_stderr
+
+
+def test_remote_enter_dispatches_with_host_and_cwd(tmp_path: Path) -> None:
+    socket_path = tmp_path / "api.sock"
+    captured: list[tuple[str, str, list[str]]] = []
+
+    def remote_dispatcher(host: str, cwd: str, argv: Sequence[str]) -> CompletedProcess[bytes]:
+        captured.append((host, cwd, list(argv)))
+        return CompletedProcess(args=[], returncode=0, stdout=b"created\n", stderr=b"")
+
+    def dispatcher(session: ProjectSession, argv: Sequence[str]) -> CompletedProcess[bytes]:
+        raise AssertionError("focus dispatcher should not run for a remote enter")
+
+    # No focused window at all — a remote enter is resolved purely from the
+    # shim's (host, cwd), so it must not depend on focus resolution.
+    with _running_bridge(
+        socket_path,
+        lambda: [],
+        dispatcher,
+        remote_dispatcher=remote_dispatcher,
+    ):
+        # Frame: host=devbox, cwd=/home/u/proj, $0=hop, no args.
+        response = _curl_post(socket_path, b"devbox\x00/home/u/proj\x00hop\x00")
+
+    assert response.status == 200
+    assert response.body == b"created\n"
+    assert captured == [("devbox", "/home/u/proj", [])]
+
+
+def test_remote_machine_subcommand_dispatches_by_host_and_cwd(tmp_path: Path) -> None:
+    # A non-enter call from the remote machine (the `hop ssh`-installed shim, host
+    # baked) — e.g. `hop kill` from a remote shell — identifies the session by its
+    # (host, cwd) like a local `hop`, not the laptop's focused window.
+    socket_path = tmp_path / "api.sock"
+    captured: list[tuple[str, str, list[str]]] = []
+
+    def remote_dispatcher(host: str, cwd: str, argv: Sequence[str]) -> CompletedProcess[bytes]:
+        captured.append((host, cwd, list(argv)))
+        return CompletedProcess(args=[], returncode=0, stdout=b"killed\n", stderr=b"")
+
+    def dispatcher(session: ProjectSession, argv: Sequence[str]) -> CompletedProcess[bytes]:
+        raise AssertionError("focus dispatcher should not run for a remote-machine command")
+
+    # No focused window — the remote-machine command must not depend on focus.
+    with _running_bridge(socket_path, lambda: [], dispatcher, remote_dispatcher=remote_dispatcher):
+        response = _curl_post(socket_path, b"devbox\x00/home/u/proj\x00hop\x00kill\x00")
+
+    assert response.status == 200
+    assert response.body == b"killed\n"
+    assert captured == [("devbox", "/home/u/proj", ["kill"])]
+
+
+def test_stateless_command_runs_without_a_focused_session(tmp_path: Path) -> None:
+    # `hop bridge shim` is a pure function of its args. From the empty-host
+    # in-container shim it must still run regardless of focus, never the
+    # focus-resolution error. (A host-set call routes via the remote dispatcher
+    # instead — covered separately — and bridge shim ignores the env there.)
+    socket_path = tmp_path / "api.sock"
+    captured: list[Sequence[str]] = []
+
+    def sessionless_dispatcher(argv: Sequence[str]) -> CompletedProcess[bytes]:
+        captured.append(list(argv))
+        return CompletedProcess(args=[], returncode=0, stdout=b"#!/bin/sh\n", stderr=b"")
+
+    def dispatcher(session: ProjectSession, argv: Sequence[str]) -> CompletedProcess[bytes]:
+        raise AssertionError("focus dispatcher should not run for a stateless command")
+
+    # No focused window at all — a stateless command must not need one.
+    with _running_bridge(
+        socket_path,
+        lambda: [],
+        dispatcher,
+        sessionless_dispatcher=sessionless_dispatcher,
+    ):
+        # Empty host (the recipe-installed in-container shim), bridge-shim args.
+        response = _curl_post(socket_path, b"\x00/home/u/proj\x00hop\x00bridge\x00shim\x00")
+
+    assert response.status == 200
+    assert response.body == b"#!/bin/sh\n"
+    assert captured == [["bridge", "shim"]]
 
 
 def test_dispatch_via_subprocess_runs_real_hop(tmp_path: Path) -> None:
@@ -294,6 +387,40 @@ def test_dispatch_via_subprocess_runs_real_hop(tmp_path: Path) -> None:
 
     assert result.returncode == 0
     assert b"usage:" in result.stdout.lower()
+
+
+def test_dispatch_via_subprocess_remote_session_runs_from_home_with_env() -> None:
+    # A remote session's project_root only exists on the remote, so the dispatch
+    # runs from the local home and passes identity via HOP_REMOTE_* — the command
+    # paths rebuild the remote session from it (in-container `hop open`/`hop run`).
+    captured: dict[str, object] = {}
+
+    def runner(args: Sequence[str], **kwargs: object) -> CompletedProcess[bytes]:
+        captured["args"] = list(args)
+        captured["kwargs"] = kwargs
+        return CompletedProcess(args=[], returncode=0, stdout=b"", stderr=b"")
+
+    remote = ProjectSession(
+        project_root=Path("/home/admin/projects/thonon-les-pains"),
+        session_name="thonon-les-pains",
+        workspace_name="p:thonon-les-pains",
+        host="devbox",
+    )
+
+    dispatch_via_subprocess(remote, ["open", "x"], runner=runner)
+
+    kwargs = cast("dict[str, object]", captured["kwargs"])
+    assert kwargs["cwd"] == Path.home()
+    env = cast("dict[str, str]", kwargs["env"])
+    assert env["HOP_REMOTE_HOST"] == "devbox"
+    assert env["HOP_REMOTE_CWD"] == "/home/admin/projects/thonon-les-pains"
+
+
+def test_dispatch_sessionless_runs_real_hop() -> None:
+    result = dispatch_sessionless(["bridge", "shim"])
+
+    assert result.returncode == 0
+    assert result.stdout.startswith(b"#!/bin/sh")
 
 
 def test_serve_forever_unlinks_stale_socket_and_serves(tmp_path: Path) -> None:
@@ -326,7 +453,7 @@ def test_serve_forever_unlinks_stale_socket_and_serves(tmp_path: Path) -> None:
         threading.Event().wait(0.01)
     assert socket_path.is_socket(), "serve_forever did not rebind the socket"
 
-    response = _curl_post(socket_path, b"hop\x00")
+    response = _curl_post(socket_path, b"\x00\x00hop\x00")
     assert response.status == 400
 
     socket_path.unlink(missing_ok=True)
@@ -358,7 +485,7 @@ def test_serve_forever_binds_when_no_stale_socket(tmp_path: Path) -> None:
         threading.Event().wait(0.01)
     assert socket_path.is_socket(), "serve_forever did not bind the socket"
 
-    response = _curl_post(socket_path, b"hop\x00")
+    response = _curl_post(socket_path, b"\x00\x00hop\x00")
     assert response.status == 400
 
     socket_path.unlink(missing_ok=True)
@@ -402,7 +529,7 @@ def test_dispatcher_exception_returns_500(tmp_path: Path) -> None:
         raise RuntimeError("boom")
 
     with _running_bridge(socket_path, lambda: [_editor_window("demo")], dispatcher, sessions_dir=sessions_dir):
-        response = _curl_post(socket_path, b"hop\x00")
+        response = _curl_post(socket_path, b"\x00\x00hop\x00")
 
     assert response.status == 500
     assert b"boom" in response.body

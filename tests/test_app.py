@@ -21,6 +21,7 @@ from hop.commands import (
     OpenCommand,
     PathCommand,
     RunCommand,
+    SshCommand,
     SwitchSessionCommand,
     TailCommand,
     TermCommand,
@@ -630,6 +631,16 @@ def test_execute_command_lists_sessions_as_json_with_project_roots(
         {"name": "alpha", "workspace": "p:alpha", "project_root": "/projects/alpha"},
         {"name": "zeta", "workspace": "p:zeta", "project_root": None},
     ]
+
+
+def test_execute_command_ssh_requires_running_hopd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`hop ssh <host>` aborts with a clear error when hopd's bridge socket is
+    absent — the reverse-forward needs it as its target."""
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    services = build_services().as_services()
+
+    with pytest.raises(HopError, match="bridge socket"):
+        execute_command(SshCommand(host="devbox"), cwd=tmp_path, services=services)
 
 
 def test_execute_command_lists_windows_for_current_session(tmp_path: Path) -> None:
@@ -1568,7 +1579,7 @@ def test_record_for_backend_round_trips_command_backend(tmp_path: Path) -> None:
         noninteractive_prefix="compose exec -T devcontainer",
     )
 
-    restored = backend_from_record(record)
+    restored = backend_from_record(record, project_root=Path("/proj"))
     assert isinstance(restored, CommandBackend)
     assert restored.interactive_prefix == "compose exec devcontainer"
     assert restored.noninteractive_prefix == "compose exec -T devcontainer"
@@ -1576,7 +1587,7 @@ def test_record_for_backend_round_trips_command_backend(tmp_path: Path) -> None:
     # Host round-trip: built-in backend ↔ built-in record.
     host_record = _record_for_backend(_host_backend())
     assert host_record == CommandBackendRecord(name="host", interactive_prefix="", noninteractive_prefix="")
-    assert _is_host_backend(backend_from_record(host_record))
+    assert _is_host_backend(backend_from_record(host_record, project_root=Path("/proj")))
 
 
 def test_persist_bootstrap_record_writes_session_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -72,6 +72,11 @@ class PathCommand:
     name: str
 
 
+@dataclass(frozen=True, slots=True)
+class SshCommand:
+    host: str
+
+
 Command = (
     EnterSessionCommand
     | SwitchSessionCommand
@@ -86,4 +91,5 @@ Command = (
     | KillCommand
     | BridgeShimCommand
     | PathCommand
+    | SshCommand
 )
