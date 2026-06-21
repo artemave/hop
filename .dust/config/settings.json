@@ -2,12 +2,8 @@
   "dustCommand": "bunx dust",
   "checks": [
     {
-      "name": "test",
-      "command": "bun test"
-    },
-    {
-      "name": "pytest",
-      "command": "python3 -m pytest"
+      "name": "make",
+      "command": "make"
     }
   ]
 }
