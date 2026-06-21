@@ -11,11 +11,11 @@ from hop.layouts import WindowSpec, find_window, resolve_windows
 from hop.session import ProjectSession
 
 
-def build_session(project_root: Path) -> ProjectSession:
+def build_session(session_root: Path) -> ProjectSession:
     return ProjectSession(
-        project_root=project_root,
-        session_name=project_root.name,
-        workspace_name=f"p:{project_root.name}",
+        session_root=session_root,
+        session_name=session_root.name,
+        workspace_name=f"p:{session_root.name}",
     )
 
 
@@ -253,13 +253,13 @@ def test_multiple_matching_layouts_compose(tmp_path: Path) -> None:
     assert find_window(windows, "vite") is not None
 
 
-def test_layout_probe_substitutes_project_root(tmp_path: Path) -> None:
+def test_layout_probe_substitutes_session_root(tmp_path: Path) -> None:
     runner = RecordingRunner()
     config = HopConfig(
         layouts=(
             LayoutConfig(
                 name="rails",
-                activate="test -f {project_root}/bin/rails",
+                activate="test -f {session_root}/bin/rails",
                 windows=(WindowConfig(role="server", command="bin/dev"),),
             ),
         )
@@ -569,7 +569,7 @@ def test_top_level_window_overrides_layout_window(tmp_path: Path) -> None:
 def test_resolve_windows_routes_remote_probes_through_transport_with_local_cwd(tmp_path: Path) -> None:
     """For a remote session the activate probes must run through the transport
     (ssh) with the local runner cwd — never a bare `sh -c` rooted at the remote
-    project_root, which doesn't exist locally (the crash a remote `hop` hit)."""
+    session_root, which doesn't exist locally (the crash a remote `hop` hit)."""
     config = HopConfig(
         layouts=(
             LayoutConfig(
@@ -580,7 +580,7 @@ def test_resolve_windows_routes_remote_probes_through_transport_with_local_cwd(t
         )
     )
     remote_session = ProjectSession(
-        project_root=Path("/remote/proj"),
+        session_root=Path("/remote/proj"),
         session_name="proj",
         workspace_name="p:proj",
         host="devbox",
@@ -602,5 +602,5 @@ def test_resolve_windows_routes_remote_probes_through_transport_with_local_cwd(t
     assert find_window(windows, "server") is not None  # layout matched (probe exit 0)
     argv, cwd = runner.calls[0]
     assert argv[0] == "ssh"  # went through the transport, not a bare `sh -c`
-    assert cwd == tmp_path  # local cwd, never the remote project_root
+    assert cwd == tmp_path  # local cwd, never the remote session_root
     assert "{host}" not in argv[-1] and "devbox" in argv[-1]  # {host} substituted

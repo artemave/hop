@@ -113,7 +113,7 @@ class IpcKittyEditorIO:
             "launch",
             {
                 "args": list(args),
-                "cwd": str(session.project_root),
+                "cwd": str(session.session_root),
                 "type": "os-window",
                 "keep_focus": keep_focus,
                 "allow_remote_control": True,

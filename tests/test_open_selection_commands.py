@@ -27,8 +27,8 @@ class StubBrowserAdapter:
 
 
 def test_open_selection_in_window_routes_files_to_shared_editor(tmp_path: Path) -> None:
-    project_root = tmp_path / "demo"
-    terminal_cwd = project_root / "src"
+    session_root = tmp_path / "demo"
+    terminal_cwd = session_root / "src"
     selected_file = terminal_cwd / "app/models/user.rb"
     selected_file.parent.mkdir(parents=True)
     selected_file.write_text("class User\nend\n")
@@ -43,7 +43,7 @@ def test_open_selection_in_window_routes_files_to_shared_editor(tmp_path: Path) 
         neovim=neovim,
         browser=browser,
         sessions_loader=lambda: {
-            "demo": SessionState(name="demo", project_root=project_root.resolve()),
+            "demo": SessionState(name="demo", session_root=session_root.resolve()),
         },
     )
 
@@ -54,8 +54,8 @@ def test_open_selection_in_window_routes_files_to_shared_editor(tmp_path: Path) 
 
 
 def test_open_selection_in_window_routes_urls_to_session_browser(tmp_path: Path) -> None:
-    project_root = tmp_path / "demo"
-    terminal_cwd = project_root / "src"
+    session_root = tmp_path / "demo"
+    terminal_cwd = session_root / "src"
     terminal_cwd.mkdir(parents=True)
 
     neovim = StubNeovimAdapter()
@@ -68,7 +68,7 @@ def test_open_selection_in_window_routes_urls_to_session_browser(tmp_path: Path)
         neovim=neovim,
         browser=browser,
         sessions_loader=lambda: {
-            "demo": SessionState(name="demo", project_root=project_root.resolve()),
+            "demo": SessionState(name="demo", session_root=session_root.resolve()),
         },
     )
 
@@ -81,8 +81,8 @@ def test_open_selection_in_window_ignores_files_that_do_not_exist(tmp_path: Path
     """Default ``session_backend_for`` returns hop's built-in host backend
     which runs the existence check locally — a file that doesn't exist on
     disk is filtered out and the dispatch is suppressed."""
-    project_root = tmp_path / "demo"
-    terminal_cwd = project_root / "src"
+    session_root = tmp_path / "demo"
+    terminal_cwd = session_root / "src"
     terminal_cwd.mkdir(parents=True)
 
     neovim = StubNeovimAdapter()
@@ -95,7 +95,7 @@ def test_open_selection_in_window_ignores_files_that_do_not_exist(tmp_path: Path
         neovim=neovim,
         browser=browser,
         sessions_loader=lambda: {
-            "demo": SessionState(name="demo", project_root=project_root.resolve()),
+            "demo": SessionState(name="demo", session_root=session_root.resolve()),
         },
     )
 
@@ -166,7 +166,7 @@ def test_open_selection_in_window_resolves_against_backend_workspace_path(tmp_pa
         sessions_loader=lambda: {
             "demo": SessionState(
                 name="demo",
-                project_root=misleading_source_cwd.resolve(),
+                session_root=misleading_source_cwd.resolve(),
                 backend=CommandBackendRecord(
                     name="devcontainer",
                     interactive_prefix="",
@@ -181,17 +181,17 @@ def test_open_selection_in_window_resolves_against_backend_workspace_path(tmp_pa
     assert neovim.opened_targets == [("demo", str(selected_file.resolve()))]
 
 
-def test_open_selection_in_window_resolves_against_project_root_when_source_cwd_missing(
+def test_open_selection_in_window_resolves_against_session_root_when_source_cwd_missing(
     tmp_path: Path,
 ) -> None:
     """No ``source_cwd`` and no backend ``workspace_path`` (host backend) is
     still a usable input: resolve relatives against the session's project
     root rather than refusing. The kitten doesn't always know the in-shell
     cwd, and forcing it to back out would mean clicking marks does nothing."""
-    project_root = tmp_path / "demo"
-    project_root.mkdir(parents=True)
-    (project_root / "app").mkdir()
-    (project_root / "app" / "user.rb").write_text("")
+    session_root = tmp_path / "demo"
+    session_root.mkdir(parents=True)
+    (session_root / "app").mkdir()
+    (session_root / "app" / "user.rb").write_text("")
     neovim = StubNeovimAdapter()
 
     result = open_selection_in_window(
@@ -201,19 +201,19 @@ def test_open_selection_in_window_resolves_against_project_root_when_source_cwd_
         neovim=neovim,
         browser=StubBrowserAdapter(),
         sessions_loader=lambda: {
-            "demo": SessionState(name="demo", project_root=project_root.resolve()),
+            "demo": SessionState(name="demo", session_root=session_root.resolve()),
         },
     )
 
     assert result is not None
-    assert neovim.opened_targets == [(result.session_name, str((project_root / "app" / "user.rb").resolve()))]
+    assert neovim.opened_targets == [(result.session_name, str((session_root / "app" / "user.rb").resolve()))]
 
 
 def test_open_selection_in_window_logs_when_selection_does_not_parse(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    project_root = tmp_path / "demo"
-    terminal_cwd = project_root / "src"
+    session_root = tmp_path / "demo"
+    terminal_cwd = session_root / "src"
     terminal_cwd.mkdir(parents=True)
 
     with caplog.at_level(logging.INFO, logger="hop.open_selection"):
@@ -224,7 +224,7 @@ def test_open_selection_in_window_logs_when_selection_does_not_parse(
             neovim=StubNeovimAdapter(),
             browser=StubBrowserAdapter(),
             sessions_loader=lambda: {
-                "demo": SessionState(name="demo", project_root=project_root.resolve()),
+                "demo": SessionState(name="demo", session_root=session_root.resolve()),
             },
         )
 
@@ -235,8 +235,8 @@ def test_open_selection_in_window_logs_when_selection_does_not_parse(
 def test_open_selection_in_window_logs_when_file_does_not_exist_on_backend(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    project_root = tmp_path / "demo"
-    terminal_cwd = project_root / "src"
+    session_root = tmp_path / "demo"
+    terminal_cwd = session_root / "src"
     terminal_cwd.mkdir(parents=True)
 
     with caplog.at_level(logging.INFO, logger="hop.open_selection"):
@@ -247,7 +247,7 @@ def test_open_selection_in_window_logs_when_file_does_not_exist_on_backend(
             neovim=StubNeovimAdapter(),
             browser=StubBrowserAdapter(),
             sessions_loader=lambda: {
-                "demo": SessionState(name="demo", project_root=project_root.resolve()),
+                "demo": SessionState(name="demo", session_root=session_root.resolve()),
             },
         )
 
@@ -262,8 +262,8 @@ def test_open_selection_in_window_logs_when_rails_ref_does_not_resolve(
     None → dispatch logs and bails. Distinct from the plain-file
     paths_exist branch because the failure comes from inside the resolver
     rather than the post-resolve existence check."""
-    project_root = tmp_path / "demo"
-    terminal_cwd = project_root / "src"
+    session_root = tmp_path / "demo"
+    terminal_cwd = session_root / "src"
     terminal_cwd.mkdir(parents=True)
 
     with caplog.at_level(logging.INFO, logger="hop.open_selection"):
@@ -274,7 +274,7 @@ def test_open_selection_in_window_logs_when_rails_ref_does_not_resolve(
             neovim=StubNeovimAdapter(),
             browser=StubBrowserAdapter(),
             sessions_loader=lambda: {
-                "demo": SessionState(name="demo", project_root=project_root.resolve()),
+                "demo": SessionState(name="demo", session_root=session_root.resolve()),
             },
         )
 
@@ -286,8 +286,8 @@ def test_open_selection_in_window_dispatches_path_unchanged_to_nvim(tmp_path: Pa
     """The kitten resolves candidates against the source window's in-shell
     cwd before they get here; this command must hand the resolved path to
     nvim without further translation (no host-path↔backend-path rewrite)."""
-    project_root = tmp_path / "demo"
-    terminal_cwd = project_root / "src"
+    session_root = tmp_path / "demo"
+    terminal_cwd = session_root / "src"
     selected_file = terminal_cwd / "app/models/user.rb"
     selected_file.parent.mkdir(parents=True)
     selected_file.write_text("class User\nend\n")
@@ -308,7 +308,7 @@ def test_open_selection_in_window_dispatches_path_unchanged_to_nvim(tmp_path: Pa
         neovim=neovim,
         browser=StubBrowserAdapter(),
         sessions_loader=lambda: {
-            "demo": SessionState(name="demo", project_root=project_root.resolve()),
+            "demo": SessionState(name="demo", session_root=session_root.resolve()),
         },
         session_backend_for=lambda _session: FakeBackend(),  # type: ignore[arg-type]
     )
@@ -318,8 +318,8 @@ def test_open_selection_in_window_dispatches_path_unchanged_to_nvim(tmp_path: Pa
 
 
 def test_open_selection_in_window_translates_localhost_url_via_backend(tmp_path: Path) -> None:
-    project_root = tmp_path / "demo"
-    project_root.mkdir(parents=True)
+    session_root = tmp_path / "demo"
+    session_root.mkdir(parents=True)
 
     browser = StubBrowserAdapter()
 
@@ -333,12 +333,12 @@ def test_open_selection_in_window_translates_localhost_url_via_backend(tmp_path:
 
     session = open_selection_in_window(
         "http://localhost:3000/foo",
-        source_cwd=project_root.resolve(),
+        source_cwd=session_root.resolve(),
         listen_on=session_socket_address("demo"),
         neovim=StubNeovimAdapter(),
         browser=browser,
         sessions_loader=lambda: {
-            "demo": SessionState(name="demo", project_root=project_root.resolve()),
+            "demo": SessionState(name="demo", session_root=session_root.resolve()),
         },
         session_backend_for=lambda _session: FakeBackend(),  # type: ignore[arg-type]
     )
@@ -350,8 +350,8 @@ def test_open_selection_in_window_translates_localhost_url_via_backend(tmp_path:
 def test_open_selection_in_window_logs_translated_url_on_dispatch(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    project_root = tmp_path / "demo"
-    project_root.mkdir(parents=True)
+    session_root = tmp_path / "demo"
+    session_root.mkdir(parents=True)
 
     class FakeBackend:
         def paths_exist(self, _session: ProjectSession, paths: Sequence[Path]) -> set[Path]:
@@ -363,12 +363,12 @@ def test_open_selection_in_window_logs_translated_url_on_dispatch(
     with caplog.at_level(logging.INFO, logger="hop.open_selection"):
         open_selection_in_window(
             "http://localhost:3000/",
-            source_cwd=project_root.resolve(),
+            source_cwd=session_root.resolve(),
             listen_on=session_socket_address("demo"),
             neovim=StubNeovimAdapter(),
             browser=StubBrowserAdapter(),
             sessions_loader=lambda: {
-                "demo": SessionState(name="demo", project_root=project_root.resolve()),
+                "demo": SessionState(name="demo", session_root=session_root.resolve()),
             },
             session_backend_for=lambda _session: FakeBackend(),  # type: ignore[arg-type]
         )
@@ -379,8 +379,8 @@ def test_open_selection_in_window_logs_translated_url_on_dispatch(
 
 
 def test_open_selection_in_window_logs_dispatch_on_success(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-    project_root = tmp_path / "demo"
-    terminal_cwd = project_root / "src"
+    session_root = tmp_path / "demo"
+    terminal_cwd = session_root / "src"
     selected_file = terminal_cwd / "app/models/user.rb"
     selected_file.parent.mkdir(parents=True)
     selected_file.write_text("class User\nend\n")
@@ -393,7 +393,7 @@ def test_open_selection_in_window_logs_dispatch_on_success(tmp_path: Path, caplo
             neovim=StubNeovimAdapter(),
             browser=StubBrowserAdapter(),
             sessions_loader=lambda: {
-                "demo": SessionState(name="demo", project_root=project_root.resolve()),
+                "demo": SessionState(name="demo", session_root=session_root.resolve()),
             },
         )
 

@@ -16,7 +16,7 @@ class HopConfigError(HopError):
 
 
 # Substitution placeholders supported in command strings.
-PLACEHOLDER_PROJECT_ROOT = "{project_root}"
+PLACEHOLDER_SESSION_ROOT = "{session_root}"
 PLACEHOLDER_PORT = "{port}"
 # Resolves to the session's externally-reachable host — the ssh target for a
 # remote session, ``localhost`` for a local one. Lets one repo `.hop.toml`
@@ -225,8 +225,8 @@ def load_global_config(path: Path | None = None) -> HopConfig:
     return _load_config_file(target)
 
 
-def load_project_config(project_root: Path | str) -> HopConfig:
-    target = Path(project_root).expanduser() / PROJECT_CONFIG_FILE
+def load_project_config(session_root: Path | str) -> HopConfig:
+    target = Path(session_root).expanduser() / PROJECT_CONFIG_FILE
     return _load_config_file(target)
 
 

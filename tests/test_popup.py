@@ -18,12 +18,12 @@ from hop.sway import SwayWindow
 
 
 def _make_session(tmp_path: Path) -> ProjectSession:
-    project_root = tmp_path / "demo"
-    project_root.mkdir()
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
     return ProjectSession(
-        project_root=project_root,
-        session_name=project_root.name,
-        workspace_name=f"p:{project_root.name}",
+        session_root=session_root,
+        session_name=session_root.name,
+        workspace_name=f"p:{session_root.name}",
     )
 
 
@@ -165,7 +165,7 @@ def test_run_prepare_launches_plain_kitty_with_popup_app_id(tmp_path: Path) -> N
     # per-session log file.
     assert argv[-3:-1] == ("bash", "-c")
     script = argv[-1]
-    assert f"cd {session.project_root}" in script
+    assert f"cd {session.session_root}" in script
     assert f"Preparing {session.session_name}" in script
     assert "flock -o" in script
     assert "compose up -d devcontainer" in script
@@ -307,7 +307,7 @@ def test_lifecycle_script_prepare_shape(tmp_path: Path) -> None:
     session = _make_session(tmp_path)
     script = _lifecycle_script(session, ("compose up -d devcontainer",), kind="prepare", backend=_host_backend())
 
-    assert f"cd {session.project_root}" in script
+    assert f"cd {session.session_root}" in script
     assert f"Preparing {session.session_name}" in script
     assert "$ %s\\n\\n" in script  # template literal — escaped \n for the printf format string
     assert "flock -o" in script
@@ -474,7 +474,7 @@ def test_lifecycle_script_routes_remote_session_through_ssh_transport() -> None:
     each step over the ssh transport — never `cd <remote project root>` (which
     only exists on the remote) followed by a local `sh -c`."""
     session = ProjectSession(
-        project_root=Path("/remote/proj"),
+        session_root=Path("/remote/proj"),
         session_name="proj",
         workspace_name="p:proj",
         host="devbox",

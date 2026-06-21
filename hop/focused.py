@@ -98,7 +98,7 @@ def paths_exist(
     elif state.backend.workspace_path is not None:
         base_cwd = Path(state.backend.workspace_path)
     else:
-        base_cwd = state.project_root
+        base_cwd = state.session_root
 
     session = session_from_state(state)
 
@@ -138,7 +138,7 @@ def _default_backend_loader(state: SessionState) -> SessionBackend | None:
     # adapters that don't need to know about hop.focused.
     from hop.app import backend_from_record
 
-    return backend_from_record(state.backend, project_root=state.project_root)
+    return backend_from_record(state.backend, session_root=state.session_root)
 
 
 def _session_name_from_workspace(workspace_name: str) -> str | None:

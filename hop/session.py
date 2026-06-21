@@ -7,43 +7,43 @@ from pathlib import Path
 
 @dataclass(frozen=True, slots=True)
 class ProjectSession:
-    project_root: Path
+    session_root: Path
     session_name: str
     workspace_name: str
     # The ssh target when this session runs on a remote machine; ``None`` for a
-    # local session. When set, ``project_root`` is a path on that remote host
+    # local session. When set, ``session_root`` is a path on that remote host
     # (never touched as a local filesystem path) and hopd drives the backend
     # through an ``SshTransport`` to ``host``.
     host: str | None = None
 
 
-def derive_project_root(
+def derive_session_root(
     start: Path | str,
 ) -> Path:
     return Path(start).expanduser().resolve()
 
 
-def derive_session_name(project_root: Path | str) -> str:
-    root = Path(project_root).expanduser().resolve()
+def derive_session_name(session_root: Path | str) -> str:
+    root = Path(session_root).expanduser().resolve()
     if not root.name:
         msg = f"Cannot derive a session name from {root!s}"
         raise ValueError(msg)
     return root.name
 
 
-def derive_workspace_name(project_root: Path | str) -> str:
-    root = Path(project_root).expanduser().resolve()
+def derive_workspace_name(session_root: Path | str) -> str:
+    root = Path(session_root).expanduser().resolve()
     return f"p:{root.name}"
 
 
 def resolve_project_session(
     start: Path | str,
 ) -> ProjectSession:
-    project_root = derive_project_root(start)
-    session_name = derive_session_name(project_root)
-    workspace_name = derive_workspace_name(project_root)
+    session_root = derive_session_root(start)
+    session_name = derive_session_name(session_root)
+    workspace_name = derive_workspace_name(session_root)
     return ProjectSession(
-        project_root=project_root,
+        session_root=session_root,
         session_name=session_name,
         workspace_name=workspace_name,
     )
@@ -67,7 +67,7 @@ def remote_session_from_env() -> ProjectSession | None:
         return None
     root = Path(cwd)
     return ProjectSession(
-        project_root=root,
+        session_root=root,
         session_name=root.name,
         workspace_name=f"p:{root.name}",
         host=host,

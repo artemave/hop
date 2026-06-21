@@ -66,9 +66,9 @@ class StubSwayAdapter:
 
 
 def build_session() -> ProjectSession:
-    project_root = Path("/tmp/demo").resolve()
+    session_root = Path("/tmp/demo").resolve()
     return ProjectSession(
-        project_root=project_root,
+        session_root=session_root,
         session_name="demo",
         workspace_name="p:demo",
     )

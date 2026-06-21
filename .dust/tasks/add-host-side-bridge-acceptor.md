@@ -29,7 +29,7 @@ Each accepted call resolves to a `ProjectSession` by querying Sway for the focus
 
 1. `SwayIpcAdapter.list_windows()` already exposes `focused: bool` and `marks: tuple[str, ...]` on each `SwayWindow` (`hop/sway.py:59`). The acceptor walks the list and picks the focused window.
 2. The focused window must carry an `_hop_editor:<session>` mark (set by `hop/editor.py:368` / `:396` via `_editor_mark`). The acceptor strips the `_hop_editor:` prefix to recover the session name.
-3. Session name → `SessionState` via `load_sessions()` (`hop/state.py:118`). Session state → `ProjectSession` via `resolve_project_session(state.project_root)` (`hop/session.py:33`). Mirrors the pattern at `hop/focused.py:73`.
+3. Session name → `SessionState` via `load_sessions()` (`hop/state.py:118`). Session state → `ProjectSession` via `resolve_project_session(state.session_root)` (`hop/session.py:33`). Mirrors the pattern at `hop/focused.py:73`.
 
 Failure modes (each returns `400` with a plain-text body):
 
@@ -44,7 +44,7 @@ This deliberately rejects calls from role terminals (which don't carry session m
 For each call the acceptor:
 
 1. Parses argv from the request body by `body.split(b'\x00')`.
-2. Spawns `subprocess.run([sys.executable, "-m", "hop", *argv[1:]], cwd=session.project_root, input=b"", capture_output=True)`. Using `sys.executable -m hop` rather than the `hop` script in PATH avoids surprises when the daemon's PATH differs from the operator's.
+2. Spawns `subprocess.run([sys.executable, "-m", "hop", *argv[1:]], cwd=session.session_root, input=b"", capture_output=True)`. Using `sys.executable -m hop` rather than the `hop` script in PATH avoids surprises when the daemon's PATH differs from the operator's.
 3. Builds the response: status `200`, body is `result.stdout`, `X-Hop-Exit: result.returncode`, `X-Hop-Stderr: base64(result.stderr)`.
 
 The acceptor buffers full stdout/stderr — no streaming. Acceptable for the targeted commands (`hop run` returns ~32 bytes; `hop open` returns nothing; `hop tail`'s payload is the wrapped command's recent output, which is small).
@@ -84,7 +84,7 @@ Test cases in `tests/test_bridge.py`:
 3. **No focused window** — sway source returns all-unfocused. Asserts: `400`, body mentions `no focused Sway window`.
 4. **Focused window has no `_hop_editor:` mark** — focused window has unrelated marks. Asserts: `400`, body mentions the editor-window requirement.
 5. **Mark points to nonexistent session** — focused window mark `_hop_editor:ghost`, `load_sessions()` returns `{}`. Asserts: `400`, body names the missing session.
-6. **Dispatcher receives the resolved session** — dispatcher is a closure recording its `session` argument. Asserts: `session.project_root` equals the path stored under the named session in `load_sessions()`.
+6. **Dispatcher receives the resolved session** — dispatcher is a closure recording its `session` argument. Asserts: `session.session_root` equals the path stored under the named session in `load_sessions()`.
 7. **Stderr round-trips through base64 header** — stderr containing binary bytes (NULs, non-UTF8). Asserts: client base64-decodes the header back to the original bytes.
 8. **`dispatch_via_subprocess` integration** — calls the production dispatcher directly with `argv=["hop", "--help"]` and a `ProjectSession` for `tmp_path`. Asserts: returncode is 0, stdout contains `usage:`.
 9. **Stale socket file is unlinked** — pre-create the socket path as a regular file. `serve_forever` removes it and binds successfully.

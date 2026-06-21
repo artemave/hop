@@ -402,11 +402,11 @@ class KittyRemoteControlAdapter:
         socket_path = session_socket_path(session.session_name)
         socket_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # A remote session's project_root is a path on the remote host, not a
+        # A remote session's session_root is a path on the remote host, not a
         # local directory — the bootstrap window's child immediately `ssh`'s out,
         # so the local starting directory is irrelevant. Open kitty in the user's
         # home (which exists) rather than handing kitty a nonexistent path.
-        directory = str(Path.home()) if session.host is not None else str(session.project_root)
+        directory = str(Path.home()) if session.host is not None else str(session.session_root)
         kitty_args = [
             "kitty",
             "--directory",
@@ -571,7 +571,7 @@ class KittyRemoteControlAdapter:
         args = list(self._launch_args(session, backend=backend, role=role))
         return {
             "args": args,
-            "cwd": str(session.project_root),
+            "cwd": str(session.session_root),
             "type": "os-window",
             "keep_focus": keep_focus,
             "allow_remote_control": True,

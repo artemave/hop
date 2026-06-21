@@ -66,7 +66,7 @@ class StubKittyAdapter:
         command: str,
         focus: bool = False,
     ) -> int:
-        self.runs.append((session.session_name, role, command, session.project_root, focus))
+        self.runs.append((session.session_name, role, command, session.session_root, focus))
         return 99
 
     def inspect_window(self, window_id: int, *, listen_on: str | None = None) -> KittyWindowContext | None:
@@ -153,8 +153,8 @@ def build_services() -> StubHopServices:
 
 
 def test_main_smoke_routes_vigun_test_command(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    project_root = tmp_path / "demo"
-    nested_directory = project_root / "src"
+    session_root = tmp_path / "demo"
+    nested_directory = session_root / "src"
     nested_directory.mkdir(parents=True)
     monkeypatch.setenv("HOP_RUNS_DIR", str(tmp_path / "runs"))
 

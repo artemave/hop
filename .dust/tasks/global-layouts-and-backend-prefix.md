@@ -49,7 +49,7 @@ autostart = "false"  # opt out of the built-in editor for this config
 command = "bin/jobs"
 ```
 
-There is **no difference** between global config (`~/.config/hop/config.toml`) and project config (`<project_root>/.hop.toml`) — both accept the full schema. Project entries layer over global entries with project-wins-per-field merge:
+There is **no difference** between global config (`~/.config/hop/config.toml`) and project config (`<session_root>/.hop.toml`) — both accept the full schema. Project entries layer over global entries with project-wins-per-field merge:
 
 - Backends: by name (existing behavior).
 - Layouts: by name; windows within a layout merge by role; the layout's `autostart` is replaced if project sets it.
@@ -159,7 +159,7 @@ Real subprocesses where possible (no mocks per project convention).
   - layout windows: probe-failing → none of the layout's windows enter the result.
   - multiple matching layouts: both contribute their windows in declaration order.
   - real-fs probe: `autostart = "test -f bin/rails"` triggers when the file exists in tmp_path.
-  - placeholder substitution: `{project_root}` in the layout autostart probe is shell-quoted at probe time.
+  - placeholder substitution: `{session_root}` in the layout autostart probe is shell-quoted at probe time.
 - `tests/test_backends.py`:
   - `CommandBackend.wrap("bin/dev", session)` with prefix set returns `("sh", "-c", "<prefix> bin/dev")` after substitution.
   - `CommandBackend.wrap` without prefix returns `("sh", "-c", "<substituted>")`.
@@ -199,7 +199,7 @@ implement
 
 - `BackendConfig` carries `prefix` (string, optional); the just-shipped `windows` field is removed; the parser rejects both the just-shipped per-backend windows shape and the legacy flat `shell`/`editor` shape with actionable error messages.
 - `LayoutConfig` and top-level `HopConfig.windows` parse and merge with project-wins-per-field semantics. Layout `autostart` is required; per-window `autostart` accepts only `"true"` / `"false"`.
-- Both global (`~/.config/hop/config.toml`) and project (`<project_root>/.hop.toml`) configs accept the identical schema.
+- Both global (`~/.config/hop/config.toml`) and project (`<session_root>/.hop.toml`) configs accept the identical schema.
 - `CommandBackend.wrap(command, session)` returns `("sh", "-c", "<prefix> <substituted>")` when prefix is set, `("sh", "-c", "<substituted>")` otherwise. `HostBackend.wrap` returns identity-substituted argv.
 - A new resolver in `hop/layouts.py` produces the ordered windows tuple for a session: built-in defaults, layered with active-layout window declarations and top-level window declarations, with per-window autostart opt-in/opt-out applied. Layout autostart probes run via the injected `CommandRunner`.
 - `enter_project_session` ensures the shell window unconditionally on first entry, then dispatches every other autostart-active window to the editor / browser / terminal adapter. Re-entry runs only the shell step.

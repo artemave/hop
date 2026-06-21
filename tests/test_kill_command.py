@@ -34,9 +34,9 @@ def _session_window(*, id: int, workspace: str, marks: tuple[str, ...] = ()) -> 
 
 
 def test_kill_session_closes_every_window_on_session_workspace(tmp_path: Path) -> None:
-    project_root = tmp_path / "demo"
-    project_root.mkdir()
-    workspace_name = f"p:{project_root.name}"
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
+    workspace_name = f"p:{session_root.name}"
 
     sway = StubSwayAdapter(
         windows=(
@@ -46,14 +46,14 @@ def test_kill_session_closes_every_window_on_session_workspace(tmp_path: Path) -
         )
     )
 
-    kill_session(project_root, sway=sway)
+    kill_session(session_root, sway=sway)
 
     assert sway.closed_windows == [1, 2, 3]
 
 
 def test_kill_session_closes_browser_that_drifted_to_another_workspace(tmp_path: Path) -> None:
-    project_root = tmp_path / "demo"
-    project_root.mkdir()
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
 
     drifted_browser = SwayWindow(
         id=99,
@@ -64,7 +64,7 @@ def test_kill_session_closes_browser_that_drifted_to_another_workspace(tmp_path:
     )
     sway = StubSwayAdapter(windows=(drifted_browser,))
 
-    kill_session(project_root, sway=sway)
+    kill_session(session_root, sway=sway)
 
     assert sway.closed_windows == [99]
 
@@ -74,8 +74,8 @@ def test_kill_session_closes_editor_marked_window_outside_session_workspace(tmp_
     # the editor was launched from the kitty boss with a stale KITTY_LISTEN_ON.
     # The session's editor mark catches it regardless of which workspace it
     # ended up on.
-    project_root = tmp_path / "demo"
-    project_root.mkdir()
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
 
     drifted_editor = SwayWindow(
         id=42,
@@ -86,14 +86,14 @@ def test_kill_session_closes_editor_marked_window_outside_session_workspace(tmp_
     )
     sway = StubSwayAdapter(windows=(drifted_editor,))
 
-    kill_session(project_root, sway=sway)
+    kill_session(session_root, sway=sway)
 
     assert sway.closed_windows == [42]
 
 
 def test_kill_session_does_not_close_windows_on_other_workspaces(tmp_path: Path) -> None:
-    project_root = tmp_path / "demo"
-    project_root.mkdir()
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
 
     other_window = SwayWindow(
         id=77,
@@ -103,14 +103,14 @@ def test_kill_session_does_not_close_windows_on_other_workspaces(tmp_path: Path)
     )
     sway = StubSwayAdapter(windows=(other_window,))
 
-    kill_session(project_root, sway=sway)
+    kill_session(session_root, sway=sway)
 
     assert sway.closed_windows == []
 
 
 def test_kill_session_returns_resolved_session(tmp_path: Path) -> None:
-    project_root = tmp_path / "demo"
-    nested = project_root / "src"
+    session_root = tmp_path / "demo"
+    nested = session_root / "src"
     nested.mkdir(parents=True)
 
     sway = StubSwayAdapter()
@@ -122,21 +122,21 @@ def test_kill_session_returns_resolved_session(tmp_path: Path) -> None:
 
 
 def test_kill_session_forgets_persisted_session_state(tmp_path: Path) -> None:
-    project_root = tmp_path / "demo"
-    project_root.mkdir()
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
 
     sway = StubSwayAdapter()
     forgotten: list[str] = []
 
-    kill_session(project_root, sway=sway, forget=forgotten.append)
+    kill_session(session_root, sway=sway, forget=forgotten.append)
 
     assert forgotten == ["demo"]
 
 
 def test_kill_session_runs_teardown_after_window_close(tmp_path: Path) -> None:
-    project_root = tmp_path / "demo"
-    project_root.mkdir()
-    workspace_name = f"p:{project_root.name}"
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
+    workspace_name = f"p:{session_root.name}"
 
     events: list[str] = []
 
@@ -160,7 +160,7 @@ def test_kill_session_runs_teardown_after_window_close(tmp_path: Path) -> None:
     )
 
     kill_session(
-        project_root,
+        session_root,
         sway=sway,
         session_backend_for=lambda _session: TrackingBackend(),  # type: ignore[arg-type]
         forget=track_forget,
@@ -176,9 +176,9 @@ def test_kill_session_resolves_backend_before_closing_windows(tmp_path: Path) ->
     backend AFTER closing windows, it would now read no state file and get
     a no-op CommandBackend — silently skipping the user's `compose down`.
     Resolve the backend up-front to survive the race."""
-    project_root = tmp_path / "demo"
-    project_root.mkdir()
-    workspace_name = f"p:{project_root.name}"
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
+    workspace_name = f"p:{session_root.name}"
 
     events: list[str] = []
 
@@ -207,7 +207,7 @@ def test_kill_session_resolves_backend_before_closing_windows(tmp_path: Path) ->
     sway = TrackingSway(windows=(_session_window(id=7, workspace=workspace_name),))
 
     kill_session(
-        project_root,
+        session_root,
         sway=sway,
         session_backend_for=session_backend_for,  # type: ignore[arg-type]
         forget=lambda _name: None,
@@ -219,11 +219,11 @@ def test_kill_session_resolves_backend_before_closing_windows(tmp_path: Path) ->
 
 
 def test_kill_session_uses_host_backend_by_default(tmp_path: Path) -> None:
-    project_root = tmp_path / "demo"
-    project_root.mkdir()
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
 
     kill_session(
-        project_root,
+        session_root,
         sway=StubSwayAdapter(),
         session_backend_for=lambda _session: host_backend(),
     )
@@ -234,8 +234,8 @@ def test_kill_session_with_teardown_runner_delegates_teardown(tmp_path: Path) ->
     `kill_session` delegates the teardown step to it instead of calling
     `backend.teardown(session)` inline. `forget` still runs after the
     delegate returns normally."""
-    project_root = tmp_path / "demo"
-    project_root.mkdir()
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
 
     events: list[str] = []
 
@@ -251,7 +251,7 @@ def test_kill_session_with_teardown_runner_delegates_teardown(tmp_path: Path) ->
         events.append(f"forget-{name}")
 
     kill_session(
-        project_root,
+        session_root,
         sway=StubSwayAdapter(),
         session_backend_for=lambda _session: _NoopBackend(),  # type: ignore[arg-type]
         forget=my_forget,
@@ -268,8 +268,8 @@ def test_kill_session_with_teardown_runner_short_circuits_forget_on_error(tmp_pa
 
     from hop.backends import SessionBackendError
 
-    project_root = tmp_path / "demo"
-    project_root.mkdir()
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
 
     def failing_runner(_session: ProjectSession, _backend: object) -> None:
         raise SessionBackendError("compose down failed", surfaced_by_popup=True)
@@ -278,7 +278,7 @@ def test_kill_session_with_teardown_runner_short_circuits_forget_on_error(tmp_pa
 
     with pytest.raises(SessionBackendError):
         kill_session(
-            project_root,
+            session_root,
             sway=StubSwayAdapter(),
             forget=forgotten.append,
             teardown_runner=failing_runner,
@@ -291,9 +291,9 @@ def test_kill_session_waits_for_windows_to_close_before_teardown(tmp_path: Path)
     # close_window is async in real sway: by the time it returns, the window
     # (and the shell it wraps) may still be alive. teardown must wait so
     # `compose down` doesn't run while exec sessions are still attached.
-    project_root = tmp_path / "demo"
-    project_root.mkdir()
-    workspace_name = f"p:{project_root.name}"
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
+    workspace_name = f"p:{session_root.name}"
 
     events: list[str] = []
 
@@ -330,7 +330,7 @@ def test_kill_session_waits_for_windows_to_close_before_teardown(tmp_path: Path)
     )
 
     kill_session(
-        project_root,
+        session_root,
         sway=sway,
         session_backend_for=lambda _session: TrackingBackend(),  # type: ignore[arg-type]
         forget=lambda _name: None,
@@ -349,9 +349,9 @@ def test_kill_session_waits_for_windows_to_close_before_teardown(tmp_path: Path)
 def test_kill_session_gives_up_waiting_after_timeout(tmp_path: Path) -> None:
     # If a window simply refuses to close (kitty hung, sway dropped the kill,
     # whatever), teardown should still run rather than block hop kill forever.
-    project_root = tmp_path / "demo"
-    project_root.mkdir()
-    workspace_name = f"p:{project_root.name}"
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
+    workspace_name = f"p:{session_root.name}"
 
     class StickySway(StubSwayAdapter):
         def close_window(self, window_id: int) -> None:
@@ -375,7 +375,7 @@ def test_kill_session_gives_up_waiting_after_timeout(tmp_path: Path) -> None:
         fake_now[0] += max(seconds, 1.0)
 
     kill_session(
-        project_root,
+        session_root,
         sway=sway,
         session_backend_for=lambda _session: TrackingBackend(),  # type: ignore[arg-type]
         forget=lambda _name: None,

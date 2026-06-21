@@ -21,11 +21,11 @@ ADHOC_SHELL_ROLE_PREFIX = "shell-"
 class SessionListing:
     name: str
     workspace: str
-    project_root: Path | None
+    session_root: Path | None
     # The ssh target when the session runs on a remote machine, ``None`` locally.
     # Carried so hopd can rebuild a remote ``ProjectSession`` (e.g. to enumerate
     # its windows for vicinae) and drive probes over the transport, not locally
-    # against a ``project_root`` that only exists on the remote.
+    # against a ``session_root`` that only exists on the remote.
     host: str | None = None
 
 
@@ -221,7 +221,7 @@ def list_sessions(
             SessionListing(
                 name=name,
                 workspace=workspace_name,
-                project_root=recorded.project_root if recorded is not None else None,
+                session_root=recorded.session_root if recorded is not None else None,
                 host=recorded.backend.transport_host if recorded is not None else None,
             )
         )

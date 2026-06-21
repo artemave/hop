@@ -136,7 +136,7 @@ class StubBackend:
 
 
 def _session(tmp_path: Path) -> ProjectSession:
-    return ProjectSession(project_root=tmp_path, session_name="demo", workspace_name="p:demo")
+    return ProjectSession(session_root=tmp_path, session_name="demo", workspace_name="p:demo")
 
 
 def test_resolve_url_passes_through(tmp_path: Path) -> None:

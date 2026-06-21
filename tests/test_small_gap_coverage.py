@@ -36,7 +36,7 @@ def test_open_selection_ignores_missing_source_cwd() -> None:
             neovim=StubNeovimAdapter(),
             browser=StubBrowserAdapter(),
             sessions_loader=lambda: {
-                "demo": SessionState(name="demo", project_root=Path("/tmp")),
+                "demo": SessionState(name="demo", session_root=Path("/tmp")),
             },
         )
         is None
@@ -83,7 +83,7 @@ def test_open_selection_returns_none_when_target_does_not_resolve(tmp_path: Path
             neovim=StubNeovimAdapter(),
             browser=StubBrowserAdapter(),
             sessions_loader=lambda: {
-                "demo": SessionState(name="demo", project_root=tmp_path),
+                "demo": SessionState(name="demo", session_root=tmp_path),
             },
         )
         is None

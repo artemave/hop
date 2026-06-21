@@ -26,8 +26,8 @@ Behavior:
 - `CommandBackend.translate_localhost_url`:
   1. Parse `url` with `urllib.parse.urlsplit`.
   2. If hostname is **not** in `{"localhost", "127.0.0.1", "0.0.0.0"}`, return `url` unchanged.
-  3. If `host_translate_command` is set, substitute placeholders, run via `self.runner(args, session.project_root)`, take stripped stdout as the new hostname.
-  4. If `port_translate_command` is set, substitute placeholders (with `{port}` taken from the original URL — empty string when the URL has no port), run via `self.runner(args, session.project_root)`, take stripped stdout as the new port.
+  3. If `host_translate_command` is set, substitute placeholders, run via `self.runner(args, session.session_root)`, take stripped stdout as the new hostname.
+  4. If `port_translate_command` is set, substitute placeholders (with `{port}` taken from the original URL — empty string when the URL has no port), run via `self.runner(args, session.session_root)`, take stripped stdout as the new port.
   5. Rebuild and return the URL with `urlunsplit`, keeping scheme / userinfo / path / query / fragment intact and replacing only host and/or port with the translated values.
   6. If neither command is configured, return `url` unchanged.
   7. Empty stripped stdout from either command → `SessionBackendError`. Non-zero exit from either → `SessionBackendError` with the command's stderr/stdout, mirroring `discover_workspace`.
@@ -38,8 +38,8 @@ Both commands run when both are configured (covers a "container on a remote host
 
 Add two optional command lists to backend configs. Both are independently optional; the absence of one does not affect the other.
 
-- `port_translate` — stripped stdout is the translated port (a number string, e.g. `"35231"`, or empty for failure). Substitution placeholders inside the argv: `{port}`, `{project_root}`.
-- `host_translate` — stripped stdout is the translated hostname (e.g. `"myserver.example.com"`). Substitution placeholders inside the argv: `{project_root}`.
+- `port_translate` — stripped stdout is the translated port (a number string, e.g. `"35231"`, or empty for failure). Substitution placeholders inside the argv: `{port}`, `{session_root}`.
+- `host_translate` — stripped stdout is the translated hostname (e.g. `"myserver.example.com"`). Substitution placeholders inside the argv: `{session_root}`.
 
 `{port}` is substituted with the port from the original URL, or the empty string when the URL has no explicit port.
 
@@ -49,7 +49,7 @@ Example (devcontainer with podman-compose):
 [backends.devcontainer]
 port_translate = [
   "sh", "-c",
-  "podman ps -q --filter label=io.podman.compose.project=$(basename {project_root}) --filter label=io.podman.compose.service=devcontainer | head -1 | xargs -r -I{} podman port {} {port} | cut -d: -f2",
+  "podman ps -q --filter label=io.podman.compose.project=$(basename {session_root}) --filter label=io.podman.compose.service=devcontainer | head -1 | xargs -r -I{} podman port {} {port} | cut -d: -f2",
 ]
 ```
 
@@ -121,7 +121,7 @@ Real subprocesses where possible (no mocks per project convention). Patterns to 
   - `localhost` URL with port + only `host_translate` configured + stdout `"myserver"` → URL host replaced; port unchanged,
   - both commands configured → both runners invoked; both replacements applied,
   - `localhost` URL **without** port + `port_translate` configured → command is still invoked with `{port}` substituted as empty string,
-  - `{port}` and `{project_root}` placeholders substituted into the argv passed to the runner for `port_translate`; `{project_root}` substituted for `host_translate`,
+  - `{port}` and `{session_root}` placeholders substituted into the argv passed to the runner for `port_translate`; `{session_root}` substituted for `host_translate`,
   - non-zero exit from either → `SessionBackendError` with stderr in the message,
   - empty stdout from either → `SessionBackendError`.
 - For `HostBackend.translate_localhost_url`: identity, smoke test.
@@ -154,7 +154,7 @@ implement
 - `port_translate` and `host_translate` are parsed from global and project hop configs and merged correctly (project field wins over same-named global field, independently per field).
 - `BackendConfig`, `CommandBackend`, `CommandBackendRecord`, and the `_record_for_backend` / `_backend_from_record` round-trip in `hop/app.py` all carry both command lists.
 - `SessionBackend` Protocol exposes `translate_localhost_url(session, url)`. `HostBackend` returns the URL unchanged. `CommandBackend` rewrites only URLs whose host is `localhost`, `127.0.0.1`, or `0.0.0.0`, applies `host_translate` (if set) to the host and `port_translate` (if set) to the port, and substitutes the result back into the URL preserving scheme / userinfo / path / query / fragment.
-- `{port}` and `{project_root}` placeholders are substituted into the `port_translate` argv at call time (with `{port}` as empty string when the URL has no port). `{project_root}` is substituted into the `host_translate` argv. Other existing placeholders continue to work where applicable.
+- `{port}` and `{session_root}` placeholders are substituted into the `port_translate` argv at call time (with `{port}` as empty string when the URL has no port). `{session_root}` is substituted into the `host_translate` argv. Other existing placeholders continue to work where applicable.
 - Failure modes (non-zero exit, empty stdout) on either command raise `SessionBackendError` with a useful message; both commands are invoked through the existing `CommandRunner` injection point.
 - The kitten dispatch path in `open_selection_in_window` calls `translate_localhost_url` on resolved URL targets before `browser.ensure_browser`, and the dispatch log line shows the translated URL.
 - New unit tests cover the cases listed in the Tests section, follow the existing no-mock conventions in this repo, and pass under `uv run pytest -q`.

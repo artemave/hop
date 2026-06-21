@@ -11,7 +11,7 @@ class StubKittyAdapter:
 
     def ensure_terminal(self, session: ProjectSession, *, role: str, already_prepared: bool = False) -> None:
         del already_prepared
-        self.ensured.append((session.session_name, role, session.project_root))
+        self.ensured.append((session.session_name, role, session.session_root))
 
 
 class StubSwayAdapter:
@@ -35,8 +35,8 @@ class StubNeovimAdapter:
 
 
 def test_focus_terminal_routes_by_role(tmp_path: Path) -> None:
-    project_root = tmp_path / "demo"
-    nested_directory = project_root / "src"
+    session_root = tmp_path / "demo"
+    nested_directory = session_root / "src"
     nested_directory.mkdir(parents=True)
 
     kitty = StubKittyAdapter()
@@ -59,8 +59,8 @@ def test_focus_terminal_escalates_via_sway_ipc_when_role_window_exists(tmp_path:
     which sway can refuse when vicinae's UI close steals the token. The
     sway IPC focus call is unconditional and survives that race."""
 
-    project_root = tmp_path / "rails"
-    project_root.mkdir(parents=True)
+    session_root = tmp_path / "rails"
+    session_root.mkdir(parents=True)
 
     role_window = SwayWindow(
         id=42,
@@ -79,7 +79,7 @@ def test_focus_terminal_escalates_via_sway_ipc_when_role_window_exists(tmp_path:
     sway = StubSwayAdapter(windows=(other_window, role_window))
 
     focus_terminal(
-        project_root,
+        session_root,
         terminals=kitty,
         sway=sway,
         neovim=StubNeovimAdapter(),
@@ -90,8 +90,8 @@ def test_focus_terminal_escalates_via_sway_ipc_when_role_window_exists(tmp_path:
 
 
 def test_focus_terminal_matches_role_via_x11_window_class_fallback(tmp_path: Path) -> None:
-    project_root = tmp_path / "rails"
-    project_root.mkdir(parents=True)
+    session_root = tmp_path / "rails"
+    session_root.mkdir(parents=True)
 
     # On X11, kitty sets WM_CLASS rather than the Wayland app_id; sway
     # surfaces it as `window_class`. Both should match.
@@ -104,7 +104,7 @@ def test_focus_terminal_matches_role_via_x11_window_class_fallback(tmp_path: Pat
     sway = StubSwayAdapter(windows=(role_window,))
 
     focus_terminal(
-        project_root,
+        session_root,
         terminals=StubKittyAdapter(),
         sway=sway,
         neovim=StubNeovimAdapter(),
@@ -120,21 +120,21 @@ def test_focus_terminal_skips_sway_focus_when_no_role_window_visible_yet(tmp_pat
     so dropping the sway escalation is harmless — the focus is correct
     regardless."""
 
-    project_root = tmp_path / "rails"
-    project_root.mkdir(parents=True)
+    session_root = tmp_path / "rails"
+    session_root.mkdir(parents=True)
 
     kitty = StubKittyAdapter()
     sway = StubSwayAdapter(windows=())
 
     focus_terminal(
-        project_root,
+        session_root,
         terminals=kitty,
         sway=sway,
         neovim=StubNeovimAdapter(),
         role="console",
     )
 
-    assert kitty.ensured == [("rails", "console", project_root)]
+    assert kitty.ensured == [("rails", "console", session_root)]
     assert sway.focused_window_ids == []
 
 
@@ -142,8 +142,8 @@ def test_focus_terminal_ignores_role_windows_on_other_workspaces(tmp_path: Path)
     """A drifted-or-stale window on a different workspace should not
     pull focus into the wrong project."""
 
-    project_root = tmp_path / "rails"
-    project_root.mkdir(parents=True)
+    session_root = tmp_path / "rails"
+    session_root.mkdir(parents=True)
 
     drifted = SwayWindow(
         id=1,
@@ -154,7 +154,7 @@ def test_focus_terminal_ignores_role_windows_on_other_workspaces(tmp_path: Path)
     sway = StubSwayAdapter(windows=(drifted,))
 
     focus_terminal(
-        project_root,
+        session_root,
         terminals=StubKittyAdapter(),
         sway=sway,
         neovim=StubNeovimAdapter(),
@@ -170,15 +170,15 @@ def test_focus_terminal_editor_role_routes_through_neovim_adapter(tmp_path: Path
     the shared-nvim lifecycle (launch socket, sway mark, recreate after :qa).
     The kitty adapter's role-terminal launch path is skipped entirely."""
 
-    project_root = tmp_path / "rails"
-    project_root.mkdir(parents=True)
+    session_root = tmp_path / "rails"
+    session_root.mkdir(parents=True)
 
     kitty = StubKittyAdapter()
     sway = StubSwayAdapter()
     neovim = StubNeovimAdapter()
 
     focus_terminal(
-        project_root,
+        session_root,
         terminals=kitty,
         sway=sway,
         neovim=neovim,

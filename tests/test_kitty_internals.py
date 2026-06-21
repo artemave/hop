@@ -90,11 +90,11 @@ class FakeSocket:
 
 
 def build_session() -> ProjectSession:
-    project_root = Path("/tmp/demo").resolve()
+    session_root = Path("/tmp/demo").resolve()
     return ProjectSession(
-        project_root=project_root,
+        session_root=session_root,
         session_name="demo",
-        workspace_name=f"p:{project_root.name}",
+        workspace_name=f"p:{session_root.name}",
     )
 
 
@@ -169,7 +169,7 @@ def test_list_session_windows_skips_malformed_entries_and_uses_env_fallbacks() -
                                         "env": {
                                             "HOP_SESSION": "demo",
                                             "HOP_ROLE": "shell",
-                                            "HOP_PROJECT_ROOT": str(build_session().project_root),
+                                            "HOP_PROJECT_ROOT": str(build_session().session_root),
                                         },
                                     },
                                     {
@@ -177,7 +177,7 @@ def test_list_session_windows_skips_malformed_entries_and_uses_env_fallbacks() -
                                         "env": {
                                             "HOP_SESSION": "demo",
                                             "HOP_ROLE": "shell",
-                                            "HOP_PROJECT_ROOT": str(build_session().project_root),
+                                            "HOP_PROJECT_ROOT": str(build_session().session_root),
                                         },
                                     },
                                 ]

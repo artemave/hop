@@ -120,7 +120,7 @@ class StubKittyAdapter:
         return session.session_name in self._alive_session_names
 
     def ensure_terminal(self, session: ProjectSession, *, role: str, already_prepared: bool = False) -> None:
-        self.ensured_roles.append((session.session_name, role, session.project_root))
+        self.ensured_roles.append((session.session_name, role, session.session_root))
         self.already_prepared_flags.append(already_prepared)
 
     def run_in_terminal(
@@ -131,7 +131,7 @@ class StubKittyAdapter:
         command: str,
         focus: bool = False,
     ) -> int:
-        self.runs.append((session.session_name, role, command, session.project_root, focus))
+        self.runs.append((session.session_name, role, command, session.session_root, focus))
         return 0
 
     def inspect_window(self, window_id: int, *, listen_on: str | None = None) -> KittyWindowContext | None:
@@ -158,13 +158,13 @@ class StubNeovimAdapter:
         self.opened_targets: list[tuple[str, str, Path]] = []
 
     def ensure(self, session: ProjectSession, *, keep_focus: bool = True) -> None:
-        self.ensured_sessions.append((session.session_name, session.project_root))
+        self.ensured_sessions.append((session.session_name, session.session_root))
 
     def focus(self, session: ProjectSession) -> None:
-        self.focused_sessions.append((session.session_name, session.project_root))
+        self.focused_sessions.append((session.session_name, session.session_root))
 
     def open_target(self, session: ProjectSession, *, target: str) -> None:
-        self.opened_targets.append((session.session_name, target, session.project_root))
+        self.opened_targets.append((session.session_name, target, session.session_root))
 
 
 class StubBrowserAdapter:
@@ -172,7 +172,7 @@ class StubBrowserAdapter:
         self.calls: list[tuple[str, Path, str | None]] = []
 
     def ensure_browser(self, session: ProjectSession, *, url: str | None) -> None:
-        self.calls.append((session.session_name, session.project_root, url))
+        self.calls.append((session.session_name, session.session_root, url))
 
 
 class StubHopPopup:
@@ -229,7 +229,7 @@ class StubHopServices:
         # `resolve_for_entry`); the first-entry vs re-entry decision is
         # gated separately on `kitty.is_alive` (see StubKittyAdapter).
         persisted: dict[str, SessionState] = {
-            name: SessionState(name=name, project_root=Path("/tmp") / name) for name in self.persisted_session_names
+            name: SessionState(name=name, session_root=Path("/tmp") / name) for name in self.persisted_session_names
         }
         return HopServices(
             sway=self.sway,
@@ -306,8 +306,8 @@ def test_hop_enter_session_passes_invocation_directory_as_kitty_launch_cwd(
 ) -> None:
     """End-to-end: cli `hop` from a directory must produce a kitty launch payload
     whose cwd is that exact directory."""
-    project_root = tmp_path / "demo"
-    project_root.mkdir()
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
 
     from hop.app import SessionBackendRegistry
 
@@ -335,18 +335,18 @@ def test_hop_enter_session_passes_invocation_directory_as_kitty_launch_cwd(
         popup=StubHopPopup(),
     )
 
-    assert execute_command(EnterSessionCommand(), cwd=project_root, services=services) == 0
+    assert execute_command(EnterSessionCommand(), cwd=session_root, services=services) == 0
 
     launches = [payload for _, name, payload in factory.commands if name == "launch"]
     assert len(launches) == 1
     payload = launches[0]
     assert payload is not None
-    assert payload["cwd"] == str(project_root.resolve())
+    assert payload["cwd"] == str(session_root.resolve())
 
 
 def test_execute_command_enters_project_session_and_bootstraps_shell(tmp_path: Path) -> None:
-    project_root = tmp_path / "demo"
-    nested_directory = project_root / "src"
+    session_root = tmp_path / "demo"
+    nested_directory = session_root / "src"
     nested_directory.mkdir(parents=True)
 
     services = build_services()
@@ -357,8 +357,8 @@ def test_execute_command_enters_project_session_and_bootstraps_shell(tmp_path: P
 
 
 def test_execute_command_spawns_extra_shell_when_focused_on_session_workspace(tmp_path: Path) -> None:
-    project_root = tmp_path / "demo"
-    project_root.mkdir()
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
 
     # Sway reports we're already focused on this session's workspace, so bare
     # `hop` should spawn another shell rather than re-enter. The editor is
@@ -371,13 +371,13 @@ def test_execute_command_spawns_extra_shell_when_focused_on_session_workspace(tm
     assert (
         execute_command(
             EnterSessionCommand(),
-            cwd=project_root,
+            cwd=session_root,
             services=services.as_services(),
         )
         == 0
     )
     assert services.sway.switched_workspaces == []
-    assert services.kitty.ensured_roles == [("demo", "shell-2", project_root.resolve())]
+    assert services.kitty.ensured_roles == [("demo", "shell-2", session_root.resolve())]
     assert services.neovim.ensured_sessions == []
 
 
@@ -386,8 +386,8 @@ def test_execute_command_recreates_session_when_on_emptied_workspace(tmp_path: P
     workspace — that's normal sway behavior. Bare `hop` from there should
     run a full cold first entry: editor + shell both come up, not just a
     lone host shell from the spawn-extra-shell branch."""
-    project_root = tmp_path / "demo"
-    project_root.mkdir()
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
 
     # Focused on `p:demo` but kitty is dead (kill swept it). The spawn-
     # extra-shell branch is gated on kitty being alive, so we fall through
@@ -397,7 +397,7 @@ def test_execute_command_recreates_session_when_on_emptied_workspace(tmp_path: P
     assert (
         execute_command(
             EnterSessionCommand(),
-            cwd=project_root,
+            cwd=session_root,
             services=services.as_services(),
         )
         == 0
@@ -406,34 +406,34 @@ def test_execute_command_recreates_session_when_on_emptied_workspace(tmp_path: P
     # redundant switch — the user stays where they are while the windows
     # come up around them.
     assert services.sway.switched_workspaces == []
-    assert services.kitty.ensured_roles == [("demo", "shell", project_root.resolve())]
-    assert services.neovim.ensured_sessions == [("demo", project_root.resolve())]
+    assert services.kitty.ensured_roles == [("demo", "shell", session_root.resolve())]
+    assert services.neovim.ensured_sessions == [("demo", session_root.resolve())]
 
 
 def test_execute_command_first_entry_brings_up_both_editor_and_shell(tmp_path: Path) -> None:
     """No persisted session state → this is bootstrap. Editor and shell
     both come up; editor first so the shell wins focus afterwards."""
-    project_root = tmp_path / "demo"
-    project_root.mkdir()
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
 
     services = build_services(focused_workspace="p:other", persisted_session_names=())
 
     assert (
         execute_command(
             EnterSessionCommand(),
-            cwd=project_root,
+            cwd=session_root,
             services=services.as_services(),
         )
         == 0
     )
     assert services.sway.switched_workspaces == ["p:demo"]
-    assert services.kitty.ensured_roles == [("demo", "shell", project_root.resolve())]
-    assert services.neovim.ensured_sessions == [("demo", project_root.resolve())]
+    assert services.kitty.ensured_roles == [("demo", "shell", session_root.resolve())]
+    assert services.neovim.ensured_sessions == [("demo", session_root.resolve())]
 
 
 def test_execute_command_applies_workspace_layout_from_config_on_first_entry(tmp_path: Path) -> None:
-    project_root = tmp_path / "demo"
-    project_root.mkdir()
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
 
     # Shell window must be visible to sway by the end of the sweep — the
     # layout pass is gated on ``_focus_shell_if_present`` finding it.
@@ -461,14 +461,14 @@ def test_execute_command_applies_workspace_layout_from_config_on_first_entry(tmp
         popup=services.popup,
     )
 
-    assert execute_command(EnterSessionCommand(), cwd=project_root, services=real_services) == 0
+    assert execute_command(EnterSessionCommand(), cwd=session_root, services=real_services) == 0
 
     assert services.sway.layout_calls == [("p:demo", "tabbed")]
 
 
 def test_execute_command_skips_workspace_layout_on_re_entry(tmp_path: Path) -> None:
-    project_root = tmp_path / "demo"
-    project_root.mkdir()
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
 
     services = StubHopServices(
         sway=StubSwayAdapter(focused_workspace="p:other"),
@@ -483,7 +483,7 @@ def test_execute_command_skips_workspace_layout_on_re_entry(tmp_path: Path) -> N
     registry = SessionBackendRegistry(
         global_config_loader=lambda: HopConfig(workspace_layout="tabbed"),
         sessions_loader=lambda: {
-            "demo": SessionState(name="demo", project_root=project_root.resolve()),
+            "demo": SessionState(name="demo", session_root=session_root.resolve()),
         },
     )
     real_services = HopServices(
@@ -495,7 +495,7 @@ def test_execute_command_skips_workspace_layout_on_re_entry(tmp_path: Path) -> N
         popup=services.popup,
     )
 
-    assert execute_command(EnterSessionCommand(), cwd=project_root, services=real_services) == 0
+    assert execute_command(EnterSessionCommand(), cwd=session_root, services=real_services) == 0
 
     # Re-entry: layout is not re-applied, only the shell is ensured.
     assert services.sway.layout_calls == []
@@ -505,8 +505,8 @@ def test_execute_command_re_entry_does_not_resurrect_a_closed_editor(tmp_path: P
     """Kitty is alive → user is returning from another workspace.
     Don't second-guess a deliberately-closed editor; just switch workspace
     and ensure the shell."""
-    project_root = tmp_path / "demo"
-    project_root.mkdir()
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
 
     services = build_services(
         focused_workspace="p:other",
@@ -516,13 +516,13 @@ def test_execute_command_re_entry_does_not_resurrect_a_closed_editor(tmp_path: P
     assert (
         execute_command(
             EnterSessionCommand(),
-            cwd=project_root,
+            cwd=session_root,
             services=services.as_services(),
         )
         == 0
     )
     assert services.sway.switched_workspaces == ["p:demo"]
-    assert services.kitty.ensured_roles == [("demo", "shell", project_root.resolve())]
+    assert services.kitty.ensured_roles == [("demo", "shell", session_root.resolve())]
     assert services.neovim.ensured_sessions == []
 
 
@@ -533,8 +533,8 @@ def test_execute_command_runs_full_activation_when_state_is_stale_and_kitty_dead
     must not skip the activation sweep on the next bootstrap. The first-entry
     gate keys on `kitty.is_alive`, so persisted state with an unreachable
     kitty is treated as a fresh cold start: shell + editor both come up."""
-    project_root = tmp_path / "demo"
-    project_root.mkdir()
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
 
     services = build_services(
         focused_workspace="p:other",
@@ -545,13 +545,13 @@ def test_execute_command_runs_full_activation_when_state_is_stale_and_kitty_dead
     assert (
         execute_command(
             EnterSessionCommand(),
-            cwd=project_root,
+            cwd=session_root,
             services=services.as_services(),
         )
         == 0
     )
-    assert services.kitty.ensured_roles == [("demo", "shell", project_root.resolve())]
-    assert services.neovim.ensured_sessions == [("demo", project_root.resolve())]
+    assert services.kitty.ensured_roles == [("demo", "shell", session_root.resolve())]
+    assert services.neovim.ensured_sessions == [("demo", session_root.resolve())]
 
 
 def test_execute_command_switches_to_named_session() -> None:
@@ -605,13 +605,13 @@ def test_execute_command_lists_sorted_session_names() -> None:
     assert stdout.getvalue() == "alpha\nzeta\n"
 
 
-def test_execute_command_lists_sessions_as_json_with_project_roots(
+def test_execute_command_lists_sessions_as_json_with_session_roots(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("HOP_SESSIONS_DIR", str(tmp_path / "sessions"))
     sessions_dir = tmp_path / "sessions"
     sessions_dir.mkdir()
-    (sessions_dir / "alpha.json").write_text(json.dumps({"name": "alpha", "project_root": "/projects/alpha"}))
+    (sessions_dir / "alpha.json").write_text(json.dumps({"name": "alpha", "session_root": "/projects/alpha"}))
 
     services = build_services(workspaces=("p:zeta", "workspace", "p:alpha"))
     stdout = io.StringIO()
@@ -628,8 +628,8 @@ def test_execute_command_lists_sessions_as_json_with_project_roots(
 
     payload = json.loads(stdout.getvalue())
     assert payload == [
-        {"name": "alpha", "workspace": "p:alpha", "project_root": "/projects/alpha"},
-        {"name": "zeta", "workspace": "p:zeta", "project_root": None},
+        {"name": "alpha", "workspace": "p:alpha", "session_root": "/projects/alpha"},
+        {"name": "zeta", "workspace": "p:zeta", "session_root": None},
     ]
 
 
@@ -647,8 +647,8 @@ def test_execute_command_lists_windows_for_current_session(tmp_path: Path) -> No
     """`hop windows` prints the resolved windows for the session whose
     project root is the caller's cwd. Used by the vicinae launcher to
     enumerate options for the focused session workspace."""
-    project_root = tmp_path / "demo"
-    project_root.mkdir()
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
 
     services = StubHopServices(
         sway=StubSwayAdapter(),
@@ -685,7 +685,7 @@ def test_execute_command_lists_windows_for_current_session(tmp_path: Path) -> No
     stdout = io.StringIO()
 
     with redirect_stdout(stdout):
-        assert execute_command(ListWindowsCommand(), cwd=project_root, services=real_services) == 0
+        assert execute_command(ListWindowsCommand(), cwd=session_root, services=real_services) == 0
 
     # Shell first, editor second, then user-declared roles in declaration
     # order (layout's `server` then top-level `worker`); built-in browser
@@ -694,8 +694,8 @@ def test_execute_command_lists_windows_for_current_session(tmp_path: Path) -> No
 
 
 def test_execute_command_focuses_terminal_role_in_current_session(tmp_path: Path) -> None:
-    project_root = tmp_path / "demo"
-    nested_directory = project_root / "src"
+    session_root = tmp_path / "demo"
+    nested_directory = session_root / "src"
     nested_directory.mkdir(parents=True)
 
     services = build_services()
@@ -706,8 +706,8 @@ def test_execute_command_focuses_terminal_role_in_current_session(tmp_path: Path
 
 
 def test_execute_command_routes_run_commands_to_role_terminal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    project_root = tmp_path / "demo"
-    nested_directory = project_root / "src"
+    session_root = tmp_path / "demo"
+    nested_directory = session_root / "src"
     nested_directory.mkdir(parents=True)
     monkeypatch.setenv("HOP_RUNS_DIR", str(tmp_path / "runs"))
 
@@ -733,8 +733,8 @@ def test_execute_command_routes_run_commands_to_role_terminal(tmp_path: Path, mo
 def test_execute_command_run_with_focus_switches_to_session_workspace(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    project_root = tmp_path / "demo"
-    nested_directory = project_root / "src"
+    session_root = tmp_path / "demo"
+    nested_directory = session_root / "src"
     nested_directory.mkdir(parents=True)
     monkeypatch.setenv("HOP_RUNS_DIR", str(tmp_path / "runs"))
 
@@ -760,8 +760,8 @@ def test_execute_command_run_with_focus_switches_to_session_workspace(
 def test_execute_command_run_with_focus_skips_workspace_switch_when_already_there(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    project_root = tmp_path / "demo"
-    nested_directory = project_root / "src"
+    session_root = tmp_path / "demo"
+    nested_directory = session_root / "src"
     nested_directory.mkdir(parents=True)
     monkeypatch.setenv("HOP_RUNS_DIR", str(tmp_path / "runs"))
 
@@ -809,8 +809,8 @@ def test_execute_command_focuses_shared_editor_via_term_role_editor(tmp_path: Pa
     """`hop term --role editor` routes through the shared neovim adapter
     rather than the kitty role launch path. The editor adapter's `focus`
     handles launch-if-missing / focus-if-present / recreate-if-quit."""
-    project_root = tmp_path / "demo"
-    nested_directory = project_root / "src"
+    session_root = tmp_path / "demo"
+    nested_directory = session_root / "src"
     nested_directory.mkdir(parents=True)
 
     services = build_services()
@@ -834,8 +834,8 @@ def test_execute_command_focuses_shared_editor_via_term_role_editor(tmp_path: Pa
 
 
 def test_execute_command_routes_file_open_targets_to_shared_editor(tmp_path: Path) -> None:
-    project_root = tmp_path / "demo"
-    nested_directory = project_root / "src"
+    session_root = tmp_path / "demo"
+    nested_directory = session_root / "src"
     nested_directory.mkdir(parents=True)
 
     services = build_services()
@@ -855,8 +855,8 @@ def test_execute_command_routes_file_open_targets_to_shared_editor(tmp_path: Pat
 
 
 def test_execute_command_routes_url_open_targets_to_session_browser(tmp_path: Path) -> None:
-    project_root = tmp_path / "demo"
-    nested_directory = project_root / "src"
+    session_root = tmp_path / "demo"
+    nested_directory = session_root / "src"
     nested_directory.mkdir(parents=True)
 
     services = build_services()
@@ -874,8 +874,8 @@ def test_execute_command_routes_url_open_targets_to_session_browser(tmp_path: Pa
 
 
 def test_execute_command_uses_invocation_directory_for_browser_sessions(tmp_path: Path) -> None:
-    project_root = tmp_path / "demo"
-    nested_directory = project_root / "src"
+    session_root = tmp_path / "demo"
+    nested_directory = session_root / "src"
     nested_directory.mkdir(parents=True)
 
     services = build_services()
@@ -893,9 +893,9 @@ def test_execute_command_uses_invocation_directory_for_browser_sessions(tmp_path
 
 
 def test_execute_command_kills_every_window_on_session_workspace(tmp_path: Path) -> None:
-    project_root = tmp_path / "demo"
-    project_root.mkdir()
-    workspace_name = f"p:{project_root.name}"
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
+    workspace_name = f"p:{session_root.name}"
 
     session_window = SwayWindow(
         id=11,
@@ -915,7 +915,7 @@ def test_execute_command_kills_every_window_on_session_workspace(tmp_path: Path)
         sway_windows=(session_window, drifted_browser),
     )
 
-    assert execute_command(KillCommand(), cwd=project_root, services=services.as_services()) == 0
+    assert execute_command(KillCommand(), cwd=session_root, services=services.as_services()) == 0
     assert sorted(services.sway.closed_windows) == [11, 12]
 
 
@@ -923,10 +923,10 @@ def test_execute_command_kills_every_window_on_session_workspace(tmp_path: Path)
 
 
 def _devcontainer_session(tmp_path: Path) -> tuple[Path, BackendConfig]:
-    project_root = tmp_path / "demo"
-    project_root.mkdir()
-    (project_root / "docker-compose.dev.yml").write_text("")
-    return project_root, BackendConfig(
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
+    (session_root / "docker-compose.dev.yml").write_text("")
+    return session_root, BackendConfig(
         name="devcontainer",
         activate="test -f docker-compose.dev.yml",
         prepare=("compose up -d devcontainer",),
@@ -949,7 +949,7 @@ def _no_subprocess_runner(
 
 
 def test_create_headless_runs_prepare_in_popup_after_eager_workspace_switch(tmp_path: Path) -> None:
-    project_root, backend_config = _devcontainer_session(tmp_path)
+    session_root, backend_config = _devcontainer_session(tmp_path)
 
     from hop.app import SessionBackendRegistry
 
@@ -986,7 +986,7 @@ def test_create_headless_runs_prepare_in_popup_after_eager_workspace_switch(tmp_
         popup=popup,
     )
 
-    assert execute_command(EnterSessionCommand(), cwd=project_root, services=services) == 0
+    assert execute_command(EnterSessionCommand(), cwd=session_root, services=services) == 0
 
     # The popup ran prepare exactly once with the backend's prepare command.
     assert popup.prepare_calls == [("demo", ("compose up -d devcontainer",))]
@@ -997,11 +997,11 @@ def test_create_headless_runs_prepare_in_popup_after_eager_workspace_switch(tmp_
     # workspace_path probes ran.
     assert all("compose up -d devcontainer" not in " ".join(args) for args in runner_calls)
     # The shell role was bootstrapped after prepare succeeded.
-    assert kitty_stub.ensured_roles == [("demo", "shell", project_root.resolve())]
+    assert kitty_stub.ensured_roles == [("demo", "shell", session_root.resolve())]
 
 
 def test_create_headless_failure_aborts_bootstrap(tmp_path: Path) -> None:
-    project_root, backend_config = _devcontainer_session(tmp_path)
+    session_root, backend_config = _devcontainer_session(tmp_path)
 
     from hop.app import SessionBackendRegistry
 
@@ -1026,7 +1026,7 @@ def test_create_headless_failure_aborts_bootstrap(tmp_path: Path) -> None:
     )
 
     with pytest.raises(SessionBackendError) as excinfo:
-        execute_command(EnterSessionCommand(), cwd=project_root, services=services)
+        execute_command(EnterSessionCommand(), cwd=session_root, services=services)
 
     # The error carries the marker so cli.main won't pop a second error popup.
     assert excinfo.value.surfaced_by_popup is True
@@ -1039,7 +1039,7 @@ def test_create_headless_failure_aborts_bootstrap(tmp_path: Path) -> None:
 
 
 def test_create_interactive_runs_prepare_inline_not_in_popup(tmp_path: Path) -> None:
-    project_root, backend_config = _devcontainer_session(tmp_path)
+    session_root, backend_config = _devcontainer_session(tmp_path)
 
     from hop.app import SessionBackendRegistry
 
@@ -1064,7 +1064,7 @@ def test_create_interactive_runs_prepare_inline_not_in_popup(tmp_path: Path) -> 
         popup=popup,
     )
 
-    assert execute_command(EnterSessionCommand(), cwd=project_root, services=services) == 0
+    assert execute_command(EnterSessionCommand(), cwd=session_root, services=services) == 0
 
     # Popup was never asked to run prepare.
     assert popup.prepare_calls == []
@@ -1077,8 +1077,8 @@ def test_create_headless_without_prepare_command_still_bootstraps(tmp_path: Path
     """Headless first-entry against a backend that has no `prepare` command
     (e.g. host) still works: the popup adapter's `run_prepare` is a no-op
     when `prepare_command is None`, and bootstrap proceeds normally."""
-    project_root = tmp_path / "demo"
-    project_root.mkdir()
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
 
     services = build_services(
         focused_workspace="p:other",
@@ -1086,17 +1086,17 @@ def test_create_headless_without_prepare_command_still_bootstraps(tmp_path: Path
     )
     services.popup = StubHopPopup(is_interactive=False)
 
-    assert execute_command(EnterSessionCommand(), cwd=project_root, services=services.as_services()) == 0
+    assert execute_command(EnterSessionCommand(), cwd=session_root, services=services.as_services()) == 0
     # host backend has no prepare_command — stub still receives the call but
     # the test doesn't drill into what the real KittyHopPopup would do
     # (covered in test_popup.py).
     assert services.popup.prepare_calls == [("demo", None)]
-    assert services.kitty.ensured_roles == [("demo", "shell", project_root.resolve())]
+    assert services.kitty.ensured_roles == [("demo", "shell", session_root.resolve())]
 
 
 def test_create_headless_reentry_does_not_run_popup(tmp_path: Path) -> None:
-    project_root = tmp_path / "demo"
-    project_root.mkdir()
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
 
     services = build_services(
         focused_workspace="p:other",
@@ -1105,15 +1105,15 @@ def test_create_headless_reentry_does_not_run_popup(tmp_path: Path) -> None:
     )
     services.popup = StubHopPopup(is_interactive=False)
 
-    assert execute_command(EnterSessionCommand(), cwd=project_root, services=services.as_services()) == 0
+    assert execute_command(EnterSessionCommand(), cwd=session_root, services=services.as_services()) == 0
     # Re-entry: kitty is alive, prepare doesn't run inline OR in the popup.
     assert services.popup.prepare_calls == []
 
 
 def test_kill_headless_delegates_teardown_to_popup_after_window_close(tmp_path: Path) -> None:
-    project_root = tmp_path / "demo"
-    project_root.mkdir()
-    workspace_name = f"p:{project_root.name}"
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
+    workspace_name = f"p:{session_root.name}"
 
     session_window = SwayWindow(id=21, workspace_name=workspace_name, app_id="kitty", window_class=None)
 
@@ -1141,7 +1141,7 @@ def test_kill_headless_delegates_teardown_to_popup_after_window_close(tmp_path: 
         popup=popup,
     )
 
-    assert execute_command(KillCommand(), cwd=project_root, services=services.as_services()) == 0
+    assert execute_command(KillCommand(), cwd=session_root, services=services.as_services()) == 0
     # Window-close ordering preserved: close fires before teardown.
     assert events == ["close-21", "teardown-demo"]
     # The popup recorded the teardown call (host backend has no teardown_command).
@@ -1149,9 +1149,9 @@ def test_kill_headless_delegates_teardown_to_popup_after_window_close(tmp_path: 
 
 
 def test_kill_headless_teardown_failure_skips_forget(tmp_path: Path) -> None:
-    project_root = tmp_path / "demo"
-    project_root.mkdir()
-    workspace_name = f"p:{project_root.name}"
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
+    workspace_name = f"p:{session_root.name}"
     session_window = SwayWindow(id=21, workspace_name=workspace_name, app_id="kitty", window_class=None)
     sway = StubSwayAdapter(workspaces=(workspace_name,), windows=(session_window,))
 
@@ -1169,7 +1169,7 @@ def test_kill_headless_teardown_failure_skips_forget(tmp_path: Path) -> None:
     )
 
     with pytest.raises(SessionBackendError):
-        execute_command(KillCommand(), cwd=project_root, services=services.as_services())
+        execute_command(KillCommand(), cwd=session_root, services=services.as_services())
     # Windows were still closed (closing happens before teardown).
     assert sway.closed_windows == [21]
     # Teardown was attempted exactly once.
@@ -1177,13 +1177,13 @@ def test_kill_headless_teardown_failure_skips_forget(tmp_path: Path) -> None:
 
 
 def test_kill_interactive_does_not_invoke_popup(tmp_path: Path) -> None:
-    project_root = tmp_path / "demo"
-    project_root.mkdir()
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
 
     services = build_services()
     services.popup = StubHopPopup(is_interactive=True)
 
-    assert execute_command(KillCommand(), cwd=project_root, services=services.as_services()) == 0
+    assert execute_command(KillCommand(), cwd=session_root, services=services.as_services()) == 0
     assert services.popup.teardown_calls == []
 
 
@@ -1201,11 +1201,11 @@ def _devcontainer_config() -> BackendConfig:
     )
 
 
-def _make_session(project_root: Path) -> ProjectSession:
+def _make_session(session_root: Path) -> ProjectSession:
     return ProjectSession(
-        project_root=project_root,
-        session_name=project_root.name,
-        workspace_name=f"p:{project_root.name}",
+        session_root=session_root,
+        session_name=session_root.name,
+        workspace_name=f"p:{session_root.name}",
     )
 
 
@@ -1511,7 +1511,7 @@ def test_session_backend_registry_for_session_returns_persisted_command_backend(
     persisted = {
         tmp_path.name: SessionState(
             name=tmp_path.name,
-            project_root=tmp_path,
+            session_root=tmp_path,
             backend=CommandBackendRecord(
                 name="legacy",
                 interactive_prefix="legacy-prefix",
@@ -1544,7 +1544,7 @@ def test_session_backend_registry_for_session_returns_host_for_built_in_host_rec
     persisted = {
         tmp_path.name: SessionState(
             name=tmp_path.name,
-            project_root=tmp_path,
+            session_root=tmp_path,
             backend=CommandBackendRecord(name="host", interactive_prefix="", noninteractive_prefix=""),
         )
     }
@@ -1579,7 +1579,7 @@ def test_record_for_backend_round_trips_command_backend(tmp_path: Path) -> None:
         noninteractive_prefix="compose exec -T devcontainer",
     )
 
-    restored = backend_from_record(record, project_root=Path("/proj"))
+    restored = backend_from_record(record, session_root=Path("/proj"))
     assert isinstance(restored, CommandBackend)
     assert restored.interactive_prefix == "compose exec devcontainer"
     assert restored.noninteractive_prefix == "compose exec -T devcontainer"
@@ -1587,7 +1587,7 @@ def test_record_for_backend_round_trips_command_backend(tmp_path: Path) -> None:
     # Host round-trip: built-in backend ↔ built-in record.
     host_record = _record_for_backend(_host_backend())
     assert host_record == CommandBackendRecord(name="host", interactive_prefix="", noninteractive_prefix="")
-    assert _is_host_backend(backend_from_record(host_record, project_root=Path("/proj")))
+    assert _is_host_backend(backend_from_record(host_record, session_root=Path("/proj")))
 
 
 def test_persist_bootstrap_record_writes_session_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1595,7 +1595,7 @@ def test_persist_bootstrap_record_writes_session_state(tmp_path: Path, monkeypat
 
     monkeypatch.setenv("HOP_SESSIONS_DIR", str(tmp_path / "sessions"))
     session = ProjectSession(
-        project_root=tmp_path,
+        session_root=tmp_path,
         session_name="bootstrap",
         workspace_name="p:bootstrap",
     )
@@ -1651,7 +1651,7 @@ def test_session_base_registry_persisted_state_wins_over_autodetect(tmp_path: Pa
     persisted = {
         tmp_path.name: SessionState(
             name=tmp_path.name,
-            project_root=tmp_path,
+            session_root=tmp_path,
             backend=CommandBackendRecord(
                 name="legacy",
                 interactive_prefix="legacy-prefix",
@@ -1688,7 +1688,7 @@ def test_session_base_registry_re_resolves_when_kitty_dead(tmp_path: Path) -> No
     persisted = {
         tmp_path.name: SessionState(
             name=tmp_path.name,
-            project_root=tmp_path,
+            session_root=tmp_path,
             backend=CommandBackendRecord(
                 name="devcontainer",
                 interactive_prefix="compose exec devcontainer",

@@ -129,10 +129,10 @@ def _editor_window(session_name: str) -> SwayWindow:
     )
 
 
-def _record_demo_session(sessions_dir: Path, project_root: Path, name: str = "demo") -> ProjectSession:
+def _record_demo_session(sessions_dir: Path, session_root: Path, name: str = "demo") -> ProjectSession:
     sessions_dir.mkdir(parents=True, exist_ok=True)
     session = ProjectSession(
-        project_root=project_root.resolve(),
+        session_root=session_root.resolve(),
         session_name=name,
         workspace_name=f"p:{name}",
     )
@@ -240,7 +240,7 @@ def test_focused_role_terminal_on_session_workspace_resolves_session(tmp_path: P
     assert response.status == 200
     assert len(captured) == 1
     assert captured[0].session_name == "demo"
-    assert captured[0].project_root == expected.project_root
+    assert captured[0].session_root == expected.session_root
 
 
 def test_mark_points_to_unknown_session_returns_400(tmp_path: Path) -> None:
@@ -275,7 +275,7 @@ def test_dispatcher_receives_resolved_session(tmp_path: Path) -> None:
 
     assert len(captured) == 1
     session, argv = captured[0]
-    assert session.project_root == expected.project_root
+    assert session.session_root == expected.session_root
     assert session.session_name == "demo"
     assert argv == ["run", "--role", "test", "ls"]
 
@@ -379,7 +379,7 @@ def test_stateless_command_runs_without_a_focused_session(tmp_path: Path) -> Non
 
 def test_dispatch_via_subprocess_runs_real_hop(tmp_path: Path) -> None:
     session = ProjectSession(
-        project_root=tmp_path.resolve(),
+        session_root=tmp_path.resolve(),
         session_name="demo",
         workspace_name="p:demo",
     )
@@ -390,7 +390,7 @@ def test_dispatch_via_subprocess_runs_real_hop(tmp_path: Path) -> None:
 
 
 def test_dispatch_via_subprocess_remote_session_runs_from_home_with_env() -> None:
-    # A remote session's project_root only exists on the remote, so the dispatch
+    # A remote session's session_root only exists on the remote, so the dispatch
     # runs from the local home and passes identity via HOP_REMOTE_* — the command
     # paths rebuild the remote session from it (in-container `hop open`/`hop run`).
     captured: dict[str, object] = {}
@@ -401,7 +401,7 @@ def test_dispatch_via_subprocess_remote_session_runs_from_home_with_env() -> Non
         return CompletedProcess(args=[], returncode=0, stdout=b"", stderr=b"")
 
     remote = ProjectSession(
-        project_root=Path("/home/admin/projects/thonon-les-pains"),
+        session_root=Path("/home/admin/projects/thonon-les-pains"),
         session_name="thonon-les-pains",
         workspace_name="p:thonon-les-pains",
         host="devbox",

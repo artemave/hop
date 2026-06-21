@@ -2,9 +2,9 @@
 
 <img src="./hop/assets/hop-social-card.png" />
 
-hop is a project session manager. A project in this context is a collection of windows sharing a working directory.
+hop is a context switcher for terminal work. Each thing you're working on gets its own **hop session** — a dedicated Sway workspace identified by its working directory, holding the editor, terminals, and browser open for it — so moving between them is a single jump, not a teardown-and-rebuild.
 
-hop is conceptually similar to tmux sessions, except session/window management is delegated to an actual system window manager (and optionally app launcher). That means:
+A hop session is conceptually similar to a tmux session, except session/window management is delegated to an actual system window manager (and optionally an app launcher). That means:
 
 - **Single window manager** - sway's normal shortcuts apply directly, no second layered keymap, no prefix key.
 - **GUI apps are part of the session** - browser, etc., not just terminals.
@@ -14,7 +14,7 @@ hop is built on top of [Sway](https://swaywm.org/) window manager and [Kitty](ht
 
 ## Features
 
-- **Session terminals start in the project directory** - spawn a shell anywhere in a session and it's already `cd`-ed into the project root.
+- **Session terminals start in the session directory** - spawn a shell anywhere in a session and it's already `cd`-ed into the session root.
 - **Dedicated session browser** - to keep project specific pages close to home.
 - **Open from terminal output** - bundled Kitty kitten picks file paths and URLs from visible output and dispatches them to the session's editor or browser.
 - **Pluggable backends** - shells and editor can run on the host, inside a docker container, or anywhere describable as a chain of commands - without changing how you drive the session.
@@ -67,7 +67,7 @@ Day-to-day, [Vicinae](https://www.vicinae.com/) is the primary surface. What you
 
 - **On a hop session's workspace** (`p:<session>`): one entry per declared window — `Hop editor`, `Hop browser`, `Hop shell`, etc. Plus `Hop kill` for the focused session and `Hop switch to <other-session>` for every other live session.
 - **Off any hop workspace**: only `Hop switch to <session>` per live session — no `Hop kill`, no per-window entries to clutter unrelated workspaces.
-- **Always**: `Hop create session` — falls through to a second Vicinae search over directories under `$HOME` (skips dot-dirs and common build noise like `node_modules`, `target`, `dist`). Picking a directory creates a fresh session for it, or — if it's already a hop session's project root — switches to it.
+- **Always**: `Hop create session` — falls through to a second Vicinae search over directories under `$HOME` (skips dot-dirs and common build noise like `node_modules`, `target`, `dist`). Picking a directory creates a fresh session for it, or — if it's already the root of a hop session — switches to it.
 
 Two complementary surfaces are described in their own sections below:
 
@@ -128,7 +128,7 @@ Run any project's session on a remote machine with **`hop ssh <host>`**: it sets
 
 ### Auto-detection
 
-When you enter a session (bare `hop`), hop walks the configured backends in declaration order and runs each backend's `activate` probe in the project root. The first one that exits 0 wins. If none succeed, the session falls back to **host**. The chosen backend is persisted and reused for all subsequent commands against that session.
+When you enter a session (bare `hop`), hop walks the configured backends in declaration order and runs each backend's `activate` probe in the session root. The first one that exits 0 wins. If none succeed, the session falls back to **host**. The chosen backend is persisted and reused for all subsequent commands against that session.
 
 ### Backend example
 
@@ -144,7 +144,7 @@ prepare               = [
 teardown              = "podman-compose -f docker-compose.dev.yml down"
 port_translate        = """
   podman ps -q \\
-    --filter label=io.podman.compose.project=$(basename {project_root}) \\
+    --filter label=io.podman.compose.project=$(basename {session_root}) \\
     --filter label=io.podman.compose.service=devcontainer \\
     | head -1 \\
     | xargs -r -I@ podman port @ {port} \\
@@ -166,7 +166,7 @@ Backend fields:
 - `interactive_prefix` (required) - shell snippet prepended to every window command launched in this backend's environment. Empty for the implicit host backend.
 - `noninteractive_prefix` (required) - prefix hop uses for non-interactive backend operations like file-existence checks. Backends that allocate a TTY by default (podman-compose exec) must set the no-TTY variant (e.g. `... exec -T devcontainer`); backends that don't (ssh) pass the same string as `interactive_prefix`. The implicit `host` backend ships with both prefixes set to `""` (empty).
 
-Supported placeholders: `{project_root}` (anywhere), and `{port}` (in `port_translate` / `host_translate` only).
+Supported placeholders: `{session_root}` (anywhere), and `{port}` (in `port_translate` / `host_translate` only).
 
 The name `host` is reserved for the implicit fallback.
 
@@ -312,7 +312,7 @@ Prompt detection uses Kitty's shell integration (OSC 133), which is on by defaul
 - `hop open <target>` - route the target to the right place: a URL goes to the session browser (with the backend's localhost translation applied), a binary file (image, PDF, archive, ...) goes to the configured handler (defaults to `xdg-open`), a Rails `Controller#action` ref or `path[:line]` goes to the shared Neovim. See [Open handlers for binary files](#open-handlers-for-binary-files). The kitten under [Open visible-output targets from Kitty](#open-visible-output-targets-from-kitty) uses the same parser.
 - `hop term --role <name>` - focus or create the window for the given role. `hop term --role editor` focuses the session's shared Neovim — launching it on first use, focusing it when it's already running, recreating it after `:qa`.
 - `hop browser [<url>]` - reuse or create a session-owned browser window. If the window was moved to another workspace, it's moved back before being focused.
-- `hop kill` - close every Sway/Kitty window owned by the session, remove its workspace, and run the backend's `teardown`. Run from the project root.
+- `hop kill` - close every Sway/Kitty window owned by the session, remove its workspace, and run the backend's `teardown`. Run from the session root.
 
 ## Development
 

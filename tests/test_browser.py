@@ -78,9 +78,9 @@ class StubProcessRunner:
 
 
 def build_session() -> ProjectSession:
-    project_root = Path("/tmp/demo").resolve()
+    session_root = Path("/tmp/demo").resolve()
     return ProjectSession(
-        project_root=project_root,
+        session_root=session_root,
         session_name="demo",
         workspace_name="p:demo",
     )
@@ -166,7 +166,7 @@ def test_ensure_browser_opens_url_in_existing_session_window() -> None:
     adapter.ensure_browser(build_session(), url="https://example.com")
 
     assert sway.focused_window_ids == [23]
-    assert launcher.commands == [(("brave-browser", "https://example.com"), build_session().project_root)]
+    assert launcher.commands == [(("brave-browser", "https://example.com"), build_session().session_root)]
 
 
 def test_ensure_browser_launches_new_window_marks_it_and_focuses_it() -> None:
@@ -195,7 +195,7 @@ def test_ensure_browser_launches_new_window_marks_it_and_focuses_it() -> None:
     assert launcher.commands == [
         (
             ("brave-browser", "--new-window", "https://example.com"),
-            build_session().project_root,
+            build_session().session_root,
         )
     ]
     assert sway.moves == [(41, "p:demo")]
@@ -205,7 +205,7 @@ def test_ensure_browser_launches_new_window_marks_it_and_focuses_it() -> None:
 
 def test_ensure_browser_launches_from_home_for_a_remote_session() -> None:
     # The browser is a host GUI, but its launch cwd must be a real *local* dir.
-    # A remote session's project_root only exists on the remote, so launching
+    # A remote session's session_root only exists on the remote, so launching
     # there raises FileNotFoundError (the translated-URL bug); use the host home.
     sway = StubSwayAdapter([])
 
@@ -217,7 +217,7 @@ def test_ensure_browser_launches_from_home_for_a_remote_session() -> None:
     launcher = StubBrowserLauncher(on_launch=add_new_window)
     adapter = SessionBrowserAdapter(sway=sway, launcher=launcher, browser_spec=build_browser_spec())
     remote = ProjectSession(
-        project_root=Path("/home/admin/projects/thonon-les-pains"),
+        session_root=Path("/home/admin/projects/thonon-les-pains"),
         session_name="thonon-les-pains",
         workspace_name="p:thonon-les-pains",
         host="devbox",
@@ -287,5 +287,5 @@ def test_adapter_resolves_default_browser_desktop_entry(tmp_path: Path) -> None:
 
     assert process_runner.commands == [("xdg-settings", "get", "default-web-browser")]
     assert launcher.commands == [
-        (("/usr/bin/brave-browser-stable", "https://example.com"), build_session().project_root)
+        (("/usr/bin/brave-browser-stable", "https://example.com"), build_session().session_root)
     ]

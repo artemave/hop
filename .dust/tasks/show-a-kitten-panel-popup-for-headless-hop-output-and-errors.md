@@ -76,7 +76,7 @@ The production implementation, `KittyHopPopup`, lives in a new `hop/popup.py`:
    ```
    `kitten panel` opens a fresh kitty process whose surface is a `wlr-layer-shell` overlay (above all normal toplevels, not part of sway's tiling). The panel is a one-shot UI process; it is not the session's kitty. `--edge=center` + `--columns`/`--lines` size it; `--layer=overlay` puts it above normal windows; `--focus-policy=on-demand` lets the user click in to scroll / dismiss the held shell on failure without stealing focus while the command runs.
 4. **Wait for it.** `proc.wait()` blocks hop. Exit code 0 means the inner shell exited cleanly (command succeeded and the wrapper script returned). Anything else means either the user closed the panel (after reading the error, by Ctrl-D'ing the held shell — which triggers panel teardown) or `kitten panel` itself crashed — both treated as "command did not succeed", and `SessionBackendError` is raised with a kind-specific message ("session prepare did not succeed" / "session teardown did not succeed").
-5. **No working-directory flag.** `kitten panel` does not accept `--directory`; the lifecycle command's cwd is set inside the wrapper script via `cd <project_root>` before the `flock` invocation. Matches how `CommandBackend.prepare` / `teardown` already run (`runner(argv, cwd=session.project_root)`).
+5. **No working-directory flag.** `kitten panel` does not accept `--directory`; the lifecycle command's cwd is set inside the wrapper script via `cd <session_root>` before the `flock` invocation. Matches how `CommandBackend.prepare` / `teardown` already run (`runner(argv, cwd=session.session_root)`).
 6. **Same `app_id` across kinds.** Lifecycle popups (prepare, teardown) and error popups all carry `app_id="hop:popup"`. Lifecycle popups never overlap with each other (prepare at create, teardown at kill) and never overlap with their own error popup (the error is already surfaced inside the lifecycle panel — see "Avoiding double popups" below). A single app id keeps any user-side compositor rule (if they want one) trivial. The title (`Preparing <name>` / `Tearing down <name>` / `Hop: error`) is the only per-kind UI signal.
 7. **Error popup.** `show_error(error)` launches `kitten panel` with the same flags and a one-shot wrapper that prints the formatted error and execs `sh`:
    ```sh
@@ -93,7 +93,7 @@ The production implementation, `KittyHopPopup`, lives in a new `hop/popup.py`:
 
 ```sh
 set -u
-cd "<project_root>"
+cd "<session_root>"
 printf '%s %s\n' "<kind_verb>" "<session_name>"
 printf '$ %s\n\n' "<command_str>"
 flock -o "<lock_path>" sh -c "<substituted_command>"
@@ -106,8 +106,8 @@ exec sh
 ```
 
 - `<kind_verb>` is `Preparing` or `Tearing down`; `<kind_noun>` is `prepare` or `teardown`.
-- `<project_root>`, `<session_name>`, `<command_str>`, `<lock_path>`, `<substituted_command>` are inserted via `shlex.quote` to keep paths and metacharacters safe.
-- `<substituted_command>` is the lifecycle command string with `{project_root}` already substituted — same string `CommandBackend.prepare`/`teardown` would have passed to `flock -o ... sh -c`. The popup reproduces that path; it does NOT call `backend.prepare()` / `backend.teardown()` (which would re-capture stdio).
+- `<session_root>`, `<session_name>`, `<command_str>`, `<lock_path>`, `<substituted_command>` are inserted via `shlex.quote` to keep paths and metacharacters safe.
+- `<substituted_command>` is the lifecycle command string with `{session_root}` already substituted — same string `CommandBackend.prepare`/`teardown` would have passed to `flock -o ... sh -c`. The popup reproduces that path; it does NOT call `backend.prepare()` / `backend.teardown()` (which would re-capture stdio).
 - `exec sh` on failure replaces the wrapper with an interactive shell so the user can read the error, scroll back, and dismiss on their own. When the user Ctrl-Ds the shell (or closes the panel via the compositor's close binding), the layer-shell surface tears down and the `kitten panel` process exits; `proc.wait()` then surfaces a non-zero exit, which the adapter translates into `SessionBackendError`.
 
 ### Avoiding double popups
@@ -194,11 +194,11 @@ Real behavior, no mocks (per project convention).
 - `tests/test_popup.py` (new):
   - `KittyHopPopup.is_interactive` returns whatever the injected `stderr_isatty` callable returns. Default factory binds to `sys.stderr.isatty`.
   - `KittyHopPopup.run_prepare` with `backend.prepare_command is None` returns without invoking the launcher (no popup for backends without prepare). Symmetric case for `run_teardown` with `backend.teardown_command is None`.
-  - `run_prepare` invokes the launcher with argv whose first two elements are `["kitten", "panel"]`, whose flags include `--edge=center`, `--layer=overlay`, `--focus-policy=on-demand`, `--app-id=hop:popup`, and `--title Preparing <name>`, and whose trailing `sh -c <script>` contains a `cd <project_root>`, `flock -o <lock_path>`, and the substituted prepare command. Launcher fake records argv and returns a `Popen`-like stub whose `wait()` returns 0; the call returns normally.
+  - `run_prepare` invokes the launcher with argv whose first two elements are `["kitten", "panel"]`, whose flags include `--edge=center`, `--layer=overlay`, `--focus-policy=on-demand`, `--app-id=hop:popup`, and `--title Preparing <name>`, and whose trailing `sh -c <script>` contains a `cd <session_root>`, `flock -o <lock_path>`, and the substituted prepare command. Launcher fake records argv and returns a `Popen`-like stub whose `wait()` returns 0; the call returns normally.
   - `run_teardown` invokes the launcher with the symmetric argv (`--title Tearing down <name>`, the substituted teardown command).
   - Launcher fake's `wait()` non-zero → `run_prepare` raises `SessionBackendError(..., surfaced_by_popup=True)` referencing the session name and the word "prepare"; `run_teardown` raises with "teardown" in the message and the same flag.
   - `show_error(error)` invokes the launcher with `--app-id=hop:popup`, `--title Hop: error`, and a `sh -c` script that contains `hop: <type>: <message>`, `Press Ctrl-D to close`, and `exec sh`. The call blocks until `wait()` returns and returns regardless of exit code (no raise even on non-zero wait).
-  - `_lifecycle_script(kind="prepare")` output: `cd <project_root>`, `Preparing <name>`, `$ <command>`, `flock -o <lock_path> sh -c <substituted>`, `exit 0` on success, `prepare failed (exit <n>)` + `exec sh` on failure.
+  - `_lifecycle_script(kind="prepare")` output: `cd <session_root>`, `Preparing <name>`, `$ <command>`, `flock -o <lock_path> sh -c <substituted>`, `exit 0` on success, `prepare failed (exit <n>)` + `exec sh` on failure.
   - `_lifecycle_script(kind="teardown")` output: same shape, with `Tearing down <name>` / `teardown failed (exit <n>)` in the verbs.
   - `_lifecycle_script` survives commands containing single quotes / backslashes / `$(...)`: assert quoting via `shlex.quote` round-trips correctly.
   - `_error_script` survives error messages containing single quotes / backslashes / newlines: the message is `shlex.quote`d and renders verbatim.

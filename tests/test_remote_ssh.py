@@ -38,10 +38,10 @@ from hop.session import ProjectSession, remote_session_from_env
 from hop.state import CommandBackendRecord, SessionState, load_sessions, record_session, session_from_state
 
 
-def _remote_session(project_root: str = "/home/u/thonon-les-pains", host: str = "devbox") -> ProjectSession:
-    root = Path(project_root)
+def _remote_session(session_root: str = "/home/u/thonon-les-pains", host: str = "devbox") -> ProjectSession:
+    root = Path(session_root)
     return ProjectSession(
-        project_root=root,
+        session_root=root,
         session_name=root.name,
         workspace_name=f"p:{root.name}",
         host=host,
@@ -133,7 +133,7 @@ def test_remote_backend_runs_ssh_locally_from_home() -> None:
     # does. The local cwd must still be home — keyed off the backend, not the
     # session — or `subprocess.run(cwd=<remote path>)` raises FileNotFoundError.
     session = ProjectSession(
-        project_root=Path("/remote/proj"),
+        session_root=Path("/remote/proj"),
         session_name="proj",
         workspace_name="p:proj",
         host=None,
@@ -175,7 +175,7 @@ def test_host_placeholder_resolves_to_bare_hostname_remotely() -> None:
 
 
 def test_host_placeholder_resolves_to_localhost_locally() -> None:
-    session = ProjectSession(project_root=Path("/p"), session_name="p", workspace_name="p:p")
+    session = ProjectSession(session_root=Path("/p"), session_name="p", workspace_name="p:p")
 
     assert substitute("echo {host}", session=session) == "echo localhost"
 
@@ -217,7 +217,7 @@ def test_transport_host_round_trips_through_the_session_record(tmp_path: Path) -
 def test_session_from_state_carries_host_from_record() -> None:
     state = SessionState(
         name="thonon-les-pains",
-        project_root=Path("/home/admin/projects/thonon-les-pains"),
+        session_root=Path("/home/admin/projects/thonon-les-pains"),
         backend=CommandBackendRecord(
             name="dc",
             interactive_prefix="podman exec dc",
@@ -237,7 +237,7 @@ def test_session_from_state_carries_host_from_record() -> None:
 def test_session_from_state_local_record_has_no_host() -> None:
     state = SessionState(
         name="proj",
-        project_root=Path("/p"),
+        session_root=Path("/p"),
         backend=CommandBackendRecord(name="host", interactive_prefix="", noninteractive_prefix=""),
     )
 
@@ -255,7 +255,7 @@ def test_backend_from_record_rebuilds_ssh_transport() -> None:
         transport_host="devbox",
     )
 
-    backend = backend_from_record(record, project_root=Path("/remote/proj"))
+    backend = backend_from_record(record, session_root=Path("/remote/proj"))
 
     assert isinstance(backend, CommandBackend)
     assert backend.host == "devbox"
@@ -266,7 +266,7 @@ def test_backend_from_record_rebuilds_ssh_transport() -> None:
 def test_backend_from_record_local_record_stays_local() -> None:
     record = CommandBackendRecord(name="host", interactive_prefix="", noninteractive_prefix="")
 
-    backend = backend_from_record(record, project_root=Path("/p"))
+    backend = backend_from_record(record, session_root=Path("/p"))
 
     assert isinstance(backend, CommandBackend)
     assert backend.host is None
@@ -285,7 +285,7 @@ def test_remote_session_from_env_builds_remote_session(monkeypatch: pytest.Monke
     assert session.host == "devbox"
     assert session.session_name == "thonon-les-pains"
     assert session.workspace_name == "p:thonon-les-pains"
-    assert session.project_root == Path("/home/u/thonon-les-pains")
+    assert session.session_root == Path("/home/u/thonon-les-pains")
 
 
 def test_remote_session_from_env_is_none_without_both_vars(monkeypatch: pytest.MonkeyPatch) -> None:

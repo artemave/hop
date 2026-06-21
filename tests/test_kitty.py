@@ -81,11 +81,11 @@ class StubSwayAdapter:
 
 
 def build_session() -> ProjectSession:
-    project_root = Path("/tmp/demo").resolve()
+    session_root = Path("/tmp/demo").resolve()
     return ProjectSession(
-        project_root=project_root,
+        session_root=session_root,
         session_name="demo",
-        workspace_name=f"p:{project_root.name}",
+        workspace_name=f"p:{session_root.name}",
     )
 
 
@@ -107,7 +107,7 @@ def test_ensure_terminal_focuses_existing_role_window() -> None:
                                         "user_vars": {
                                             "hop_session": "demo",
                                             "hop_role": "test",
-                                            "hop_project_root": str(build_session().project_root),
+                                            "hop_session_root": str(build_session().session_root),
                                         },
                                     }
                                 ]
@@ -147,7 +147,7 @@ def test_ensure_terminal_launches_os_window_when_role_is_missing() -> None:
             "launch",
             {
                 "args": [],
-                "cwd": str(build_session().project_root),
+                "cwd": str(build_session().session_root),
                 "type": "os-window",
                 "keep_focus": False,
                 "allow_remote_control": True,
@@ -217,7 +217,7 @@ def test_ensure_terminal_bootstraps_session_kitty_when_socket_is_not_listening()
     assert args == (
         "kitty",
         "--directory",
-        str(session.project_root),
+        str(session.session_root),
         "--listen-on",
         SESSION_SOCKET,
         "--title",
@@ -341,7 +341,7 @@ def test_run_in_terminal_returns_window_id_for_existing_role_window() -> None:
                                         "user_vars": {
                                             "hop_session": "demo",
                                             "hop_role": "shell",
-                                            "hop_project_root": str(build_session().project_root),
+                                            "hop_session_root": str(build_session().session_root),
                                         },
                                     }
                                 ]
@@ -378,7 +378,7 @@ def test_run_in_terminal_with_focus_focuses_existing_role_window_after_send_text
                                 "user_vars": {
                                     "hop_session": "demo",
                                     "hop_role": "shell",
-                                    "hop_project_root": str(build_session().project_root),
+                                    "hop_session_root": str(build_session().session_root),
                                 },
                             }
                         ]
@@ -413,7 +413,7 @@ def test_run_in_terminal_without_focus_launches_missing_window_with_keep_focus_t
                                 "user_vars": {
                                     "hop_session": "demo",
                                     "hop_role": "server",
-                                    "hop_project_root": str(build_session().project_root),
+                                    "hop_session_root": str(build_session().session_root),
                                 },
                             }
                         ]
@@ -461,7 +461,7 @@ def test_run_in_terminal_with_focus_launches_missing_window_with_keep_focus_fals
                                 "user_vars": {
                                     "hop_session": "demo",
                                     "hop_role": "server",
-                                    "hop_project_root": str(build_session().project_root),
+                                    "hop_session_root": str(build_session().session_root),
                                 },
                             }
                         ]
@@ -961,9 +961,9 @@ def test_inspect_window_uses_env_driven_transport_for_kitten_callers() -> None:
                                         "user_vars": {
                                             "hop_session": "demo",
                                             "hop_role": "shell",
-                                            "hop_project_root": str(build_session().project_root),
+                                            "hop_session_root": str(build_session().session_root),
                                         },
-                                        "cwd": str(build_session().project_root),
+                                        "cwd": str(build_session().session_root),
                                     }
                                 ]
                             }
@@ -999,9 +999,9 @@ def test_inspect_window_forwards_explicit_listen_on_to_transport_factory() -> No
                                         "user_vars": {
                                             "hop_session": "demo",
                                             "hop_role": "shell",
-                                            "hop_project_root": str(build_session().project_root),
+                                            "hop_session_root": str(build_session().session_root),
                                         },
-                                        "cwd": str(build_session().project_root),
+                                        "cwd": str(build_session().session_root),
                                     }
                                 ]
                             }

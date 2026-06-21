@@ -169,7 +169,7 @@ class SessionBackendRegistry:
 
         persisted = self._sessions_loader().get(session.session_name)
         if persisted is not None:
-            return _backend_from_record(persisted.backend, project_root=persisted.project_root)
+            return _backend_from_record(persisted.backend, session_root=persisted.session_root)
 
         # No persisted state and no in-process override: a command running
         # against a session that hop never bootstrapped (e.g. someone calling
@@ -195,7 +195,7 @@ class SessionBackendRegistry:
         if kitty_alive:
             persisted = self._sessions_loader().get(session.session_name)
             if persisted is not None:
-                return _backend_from_record(persisted.backend, project_root=persisted.project_root)
+                return _backend_from_record(persisted.backend, session_root=persisted.session_root)
 
         configured = self._merged_config(session).backends
 
@@ -259,7 +259,7 @@ class SessionBackendRegistry:
             runner=runner,
             transport=noninteractive_transport,
             host=host if host is not None else "localhost",
-            cwd=runner_cwd(host, session.project_root),
+            cwd=runner_cwd(host, session.session_root),
         )
 
     def workspace_layout_for_entry(self, session: ProjectSession) -> str | None:
@@ -273,16 +273,16 @@ class SessionBackendRegistry:
     def _load_project_config(self, session: ProjectSession) -> HopConfig:
         host = session.host
         if host is None:
-            return load_project_config(session.project_root)
+            return load_project_config(session.session_root)
         # Remote session: there is no local `.hop.toml` — fetch it from the
         # remote over the transport and parse the bytes in memory.
         runner = self._runner if self._runner is not None else default_runner
-        transport = SshTransport(host, str(session.project_root), interactive=False)
+        transport = SshTransport(host, str(session.session_root), interactive=False)
         argv = transport(f"cat {PROJECT_CONFIG_FILE}")
         result = runner(argv, Path.home())
         if result.returncode != 0:
             return HopConfig()
-        source = Path(f"{host}:{session.project_root}") / PROJECT_CONFIG_FILE
+        source = Path(f"{host}:{session.session_root}") / PROJECT_CONFIG_FILE
         return parse_project_config_text(result.stdout, source=source)
 
     def open_handlers_for_session(self, session: ProjectSession) -> tuple[tuple[str, str], ...]:
@@ -315,19 +315,19 @@ def _transports(host: str | None, remote_cwd: str) -> tuple[Transport, Transport
 
 
 def _transports_for(session: ProjectSession) -> tuple[Transport, Transport, str | None]:
-    return _transports(session.host, str(session.project_root))
+    return _transports(session.host, str(session.session_root))
 
 
-def backend_from_record(record: BackendRecord, *, project_root: Path) -> SessionBackend:
+def backend_from_record(record: BackendRecord, *, session_root: Path) -> SessionBackend:
     """Reconstruct a ``SessionBackend`` from a persisted ``BackendRecord``.
 
     Public so the open-selection kitten (via ``hop.focused.paths_exist``)
     can rebuild the focused session's backend without re-running auto-detect.
-    ``project_root`` is the (possibly remote) path the rebuilt ``SshTransport``
+    ``session_root`` is the (possibly remote) path the rebuilt ``SshTransport``
     cd's into; for a local record it is unused beyond the local default.
     """
 
-    interactive_transport, noninteractive_transport, host = _transports(record.transport_host, str(project_root))
+    interactive_transport, noninteractive_transport, host = _transports(record.transport_host, str(session_root))
     return CommandBackend(
         name=record.name,
         interactive_prefix=record.interactive_prefix,
@@ -466,7 +466,7 @@ def execute_command(
                     {
                         "name": listing.name,
                         "workspace": listing.workspace,
-                        "project_root": str(listing.project_root) if listing.project_root else None,
+                        "session_root": str(listing.session_root) if listing.session_root else None,
                     }
                     for listing in listings
                 ]

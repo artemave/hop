@@ -15,7 +15,7 @@ from hop import debug
 from hop.config import (
     PLACEHOLDER_HOST,
     PLACEHOLDER_PORT,
-    PLACEHOLDER_PROJECT_ROOT,
+    PLACEHOLDER_SESSION_ROOT,
     BackendConfig,
 )
 from hop.errors import HopError
@@ -171,13 +171,13 @@ def _substitution_host(host: str | None) -> str:
     return host.rsplit("@", 1)[-1]
 
 
-def runner_cwd(host: str | None, project_root: Path) -> Path:
+def runner_cwd(host: str | None, session_root: Path) -> Path:
     """Local working directory for a backend subprocess.
 
     For a local backend (``host is None``) this is the project root — backend
     commands (e.g. ``podman-compose -f docker-compose.dev.yml …``) must run
     there. For a remote backend the transport carries its own ``cd <remote_cwd>``
-    and the ssh client ignores the local cwd, so use the host home: ``project_root``
+    and the ssh client ignores the local cwd, so use the host home: ``session_root``
     is a path on the *remote* and handing it to ``subprocess.run(cwd=…)`` would
     fail because it doesn't exist locally.
 
@@ -188,7 +188,7 @@ def runner_cwd(host: str | None, project_root: Path) -> Path:
 
     if host is not None:
         return Path.home()
-    return project_root
+    return session_root
 
 
 def default_ssh_options() -> tuple[str, ...]:
@@ -410,8 +410,8 @@ class CommandBackend:
         for index, step in enumerate(steps, start=1):
             substituted = _substitute_translate(step, session=session, port=port, host=self._host)
             argv = self.noninteractive_transport(substituted)
-            result = self.runner(argv, runner_cwd(self.host, session.project_root))
-            debug.log_command(argv, session.project_root, result)
+            result = self.runner(argv, runner_cwd(self.host, session.session_root))
+            debug.log_command(argv, session.session_root, result)
             if result.returncode != 0:
                 stderr = (result.stderr or result.stdout or "").strip()
                 label = f"{kind} step {index} ({step!r})" if multi_step else kind
@@ -459,8 +459,8 @@ class CommandBackend:
         multi_step = len(steps) > 1
         for index, step in enumerate(steps, start=1):
             argv = _flock_sh(step, session=session, transport=self.noninteractive_transport, host=self._host)
-            result = self.runner(argv, runner_cwd(self.host, session.project_root))
-            debug.log_command(argv, session.project_root, result)
+            result = self.runner(argv, runner_cwd(self.host, session.session_root))
+            debug.log_command(argv, session.session_root, result)
             if result.returncode != 0:
                 stderr = (result.stderr or result.stdout or "").strip()
                 label = f"{kind} step {index} ({step!r})" if multi_step else kind
@@ -486,8 +486,8 @@ class CommandBackend:
         substituted_prefix = substitute(self.noninteractive_prefix, session=session, host=self._host)
         composed = f"{substituted_prefix} pwd"
         argv = self.noninteractive_transport(composed)
-        result = self.runner(argv, runner_cwd(self.host, session.project_root))
-        debug.log_command(argv, session.project_root, result)
+        result = self.runner(argv, runner_cwd(self.host, session.session_root))
+        debug.log_command(argv, session.session_root, result)
         if result.returncode != 0:
             return None
         stdout = result.stdout.strip()
@@ -508,8 +508,8 @@ class CommandBackend:
         composed = f"{substituted_prefix} sh".lstrip()
         argv = self.noninteractive_transport(composed)
         script = "".join(f'test -e {shlex.quote(str(p))} && printf "%s\\n" {shlex.quote(str(p))}\n' for p in paths)
-        result = self.runner(argv, runner_cwd(self.host, session.project_root), stdin=f"{script}:\n")
-        debug.log_command(argv, session.project_root, result)
+        result = self.runner(argv, runner_cwd(self.host, session.session_root), stdin=f"{script}:\n")
+        debug.log_command(argv, session.session_root, result)
         if result.returncode != 0:
             stderr = (result.stderr or result.stdout or "").strip()
             msg = f"backend {self.name!r} paths_exist failed for {session.session_name!r}: {stderr}"
@@ -528,8 +528,8 @@ class CommandBackend:
         script = f"[ -f {quoted} ] || exit 42\ncat {quoted}\n"
         composed = f"{substituted_prefix} sh".lstrip()
         argv = self.noninteractive_transport(composed)
-        result = self.runner(argv, runner_cwd(self.host, session.project_root), stdin=script)
-        debug.log_command(argv, session.project_root, result)
+        result = self.runner(argv, runner_cwd(self.host, session.session_root), stdin=script)
+        debug.log_command(argv, session.session_root, result)
         if result.returncode == _READ_FILE_NOT_FOUND_EXIT:
             msg = f"backend {self.name!r}: {path} not found"
             raise BackendFileNotFoundError(msg)
@@ -580,8 +580,8 @@ def select_backend(
             continue
         substituted = substitute(candidate.activate, session=session, host=_substitution_host(host))
         argv = transport(substituted)
-        result = runner(argv, runner_cwd(host, session.project_root))
-        debug.log_command(argv, session.project_root, result)
+        result = runner(argv, runner_cwd(host, session.session_root))
+        debug.log_command(argv, session.session_root, result)
         if result.returncode == 0:
             return candidate
     msg = (
@@ -622,7 +622,7 @@ def backend_from_config(
 
 def substitute(template: str, *, session: ProjectSession, host: str = "localhost") -> str:
     replacements: dict[str, str] = {
-        PLACEHOLDER_PROJECT_ROOT: shlex.quote(str(session.project_root)),
+        PLACEHOLDER_SESSION_ROOT: shlex.quote(str(session.session_root)),
         PLACEHOLDER_HOST: shlex.quote(host),
     }
     return _apply(template, replacements)
@@ -636,7 +636,7 @@ def _substitute_translate(
     host: str = "localhost",
 ) -> str:
     replacements: dict[str, str] = {
-        PLACEHOLDER_PROJECT_ROOT: shlex.quote(str(session.project_root)),
+        PLACEHOLDER_SESSION_ROOT: shlex.quote(str(session.session_root)),
         PLACEHOLDER_PORT: "" if port is None else shlex.quote(str(port)),
         PLACEHOLDER_HOST: shlex.quote(host),
     }

@@ -17,7 +17,7 @@ hop run --role test "bun test smoke.test.ts"
 
 ## Contract
 
-- `hop` resolves the session from the caller's current working directory using the nearest project marker (`.git`, `.dust`, or `pyproject.toml`).
+- `hop` resolves the session from the caller's current working directory — the resolved directory is the session root and its basename is the session name. There is no marker-file or ancestor search.
 - `hop` switches to the session workspace `p:<session>`.
 - `hop` targets the Kitty terminal whose role is `test`.
 - If the `test` terminal does not exist yet, `hop` creates it as a session-scoped Kitty OS window and keeps the current focus while doing so.
@@ -26,7 +26,7 @@ hop run --role test "bun test smoke.test.ts"
 
 ## Caller requirements
 
-- Invoke `hop run --role test` from somewhere inside the target project tree.
+- Invoke `hop run --role test` from the session root itself (where `hop` was started), not a subdirectory — resolution is the exact working directory, so a nested path resolves to a different session.
 - Pass the full test runner command as one CLI argument. Shell callers must quote it.
 - Treat role selection as fixed: `vigun` should use the literal `test` role for test execution.
 - Read completion and failures from the terminal/session workflow, not from `hop`'s process exit code.

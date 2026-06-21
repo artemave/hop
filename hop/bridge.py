@@ -166,12 +166,12 @@ def resolve_session_from_focus(
         )
     # Construct directly from persisted state — re-deriving via
     # ``resolve_project_session`` would recompute ``session_name`` from
-    # ``project_root.name``, which doesn't match in tests and is redundant in
+    # ``session_root.name``, which doesn't match in tests and is redundant in
     # production (the persisted name is already the canonical value). ``host``
     # rides along so a remote session's dispatch runs over the transport rather
     # than locally against a path that only exists on the remote.
     return ProjectSession(
-        project_root=state.project_root,
+        session_root=state.session_root,
         session_name=state.name,
         workspace_name=f"{SESSION_WORKSPACE_PREFIX}{state.name}",
         host=state.backend.transport_host,
@@ -195,10 +195,10 @@ def dispatch_via_subprocess(
     """
 
     env = dict(os.environ)
-    cwd: Path = session.project_root
+    cwd: Path = session.session_root
     if session.host is not None:
         env["HOP_REMOTE_HOST"] = session.host
-        env["HOP_REMOTE_CWD"] = str(session.project_root)
+        env["HOP_REMOTE_CWD"] = str(session.session_root)
         cwd = Path.home()
     return runner(
         [sys.executable, "-m", "hop", *argv],

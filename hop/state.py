@@ -38,7 +38,7 @@ class CommandBackendRecord:
     # The ssh target when this session runs on a remote machine; ``None`` for a
     # local session. Round-trips so later commands (the open-selection kitten's
     # ``paths_exist``, ``hop run``, …) rebuild the same ``SshTransport`` instead
-    # of re-running ``hop ssh``. When set, ``SessionState.project_root`` is a
+    # of re-running ``hop ssh``. When set, ``SessionState.session_root`` is a
     # path on this remote host.
     transport_host: str | None = None
     type: str = "command"
@@ -83,13 +83,13 @@ _HOST_RECORD = CommandBackendRecord(
 @dataclass(frozen=True, slots=True)
 class SessionState:
     name: str
-    project_root: Path
+    session_root: Path
     backend: BackendRecord = field(default_factory=lambda: _HOST_RECORD)
 
     def to_json(self) -> dict[str, object]:
         return {
             "name": self.name,
-            "project_root": str(self.project_root),
+            "session_root": str(self.session_root),
             "backend": self.backend.to_json(),
         }
 
@@ -111,7 +111,7 @@ def record_session(
     target.mkdir(parents=True, exist_ok=True)
     state = SessionState(
         name=session.session_name,
-        project_root=session.project_root,
+        session_root=session.session_root,
         backend=backend if backend is not None else _HOST_RECORD,
     )
     (target / f"{session.session_name}.json").write_text(json.dumps(state.to_json()))
@@ -134,7 +134,7 @@ def session_from_state(state: SessionState) -> ProjectSession:
     commands against a path that only exists on the remote.
     """
 
-    return replace(resolve_project_session(state.project_root), host=state.backend.transport_host)
+    return replace(resolve_project_session(state.session_root), host=state.backend.transport_host)
 
 
 def load_sessions(*, sessions_dir: Path | None = None) -> dict[str, SessionState]:
@@ -147,13 +147,13 @@ def load_sessions(*, sessions_dir: Path | None = None) -> dict[str, SessionState
             continue
         payload = json.loads(path.read_text())
         name = payload.get("name")
-        project_root = payload.get("project_root")
-        if not isinstance(name, str) or not isinstance(project_root, str):
+        session_root = payload.get("session_root")
+        if not isinstance(name, str) or not isinstance(session_root, str):
             continue
         backend_record = _decode_backend_record(payload.get("backend"))
         sessions[name] = SessionState(
             name=name,
-            project_root=Path(project_root),
+            session_root=Path(session_root),
             backend=backend_record,
         )
     return sessions

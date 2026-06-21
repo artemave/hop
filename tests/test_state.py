@@ -19,10 +19,10 @@ def _host_record() -> CommandBackendRecord:
     return CommandBackendRecord(name="host", interactive_prefix="", noninteractive_prefix="")
 
 
-def make_session(*, name: str, project_root: Path) -> ProjectSession:
+def make_session(*, name: str, session_root: Path) -> ProjectSession:
     return ProjectSession(
         session_name=name,
-        project_root=project_root,
+        session_root=session_root,
         workspace_name=f"p:{name}",
     )
 
@@ -31,14 +31,14 @@ def test_record_session_writes_host_payload(tmp_path: Path) -> None:
     """``record_session`` with no backend uses hop's built-in host record:
     a regular command record with name=host and empty prefixes."""
     sessions_dir = tmp_path / "sessions"
-    session = make_session(name="demo", project_root=tmp_path / "demo")
+    session = make_session(name="demo", session_root=tmp_path / "demo")
 
     record_session(session, sessions_dir=sessions_dir)
 
     payload = json.loads((sessions_dir / "demo.json").read_text())
     assert payload == {
         "name": "demo",
-        "project_root": str(tmp_path / "demo"),
+        "session_root": str(tmp_path / "demo"),
         "backend": {
             "type": "command",
             "name": "host",
@@ -50,7 +50,7 @@ def test_record_session_writes_host_payload(tmp_path: Path) -> None:
 
 def test_record_session_persists_command_backend_record(tmp_path: Path) -> None:
     sessions_dir = tmp_path / "sessions"
-    session = make_session(name="demo", project_root=tmp_path / "demo")
+    session = make_session(name="demo", session_root=tmp_path / "demo")
 
     record_session(
         session,
@@ -78,7 +78,7 @@ def test_record_session_persists_command_backend_record(tmp_path: Path) -> None:
 def test_record_session_persists_list_form_lifecycle(tmp_path: Path) -> None:
     """Multi-step prepare and teardown round-trip as JSON arrays."""
     sessions_dir = tmp_path / "sessions"
-    session = make_session(name="demo", project_root=tmp_path / "demo")
+    session = make_session(name="demo", session_root=tmp_path / "demo")
 
     record_session(
         session,
@@ -105,7 +105,7 @@ def test_record_session_omits_optional_fields(tmp_path: Path) -> None:
     """Optional lifecycle / translate fields are dropped from the JSON when
     unset; required fields (name + both prefixes) always appear."""
     sessions_dir = tmp_path / "sessions"
-    session = make_session(name="demo", project_root=tmp_path / "demo")
+    session = make_session(name="demo", session_root=tmp_path / "demo")
 
     record_session(
         session,
@@ -124,7 +124,7 @@ def test_record_session_omits_optional_fields(tmp_path: Path) -> None:
 
 def test_record_session_persists_translate_commands(tmp_path: Path) -> None:
     sessions_dir = tmp_path / "sessions"
-    session = make_session(name="demo", project_root=tmp_path / "demo")
+    session = make_session(name="demo", session_root=tmp_path / "demo")
 
     record_session(
         session,
@@ -149,7 +149,7 @@ def test_record_session_round_trips_workspace_path(tmp_path: Path) -> None:
     open-selection kitten fall back to the backend's default cwd when the
     in-shell shell isn't emitting OSC 7."""
     sessions_dir = tmp_path / "sessions"
-    session = make_session(name="demo", project_root=tmp_path / "demo")
+    session = make_session(name="demo", session_root=tmp_path / "demo")
 
     record_session(
         session,
@@ -198,7 +198,7 @@ def test_load_sessions_decodes_command_backend_record(tmp_path: Path) -> None:
         json.dumps(
             {
                 "name": "alpha",
-                "project_root": "/projects/alpha",
+                "session_root": "/projects/alpha",
                 "backend": {
                     "type": "command",
                     "name": "devcontainer",
@@ -230,7 +230,7 @@ def test_load_sessions_accepts_list_form_lifecycle(tmp_path: Path) -> None:
         json.dumps(
             {
                 "name": "alpha",
-                "project_root": "/projects/alpha",
+                "session_root": "/projects/alpha",
                 "backend": {
                     "type": "command",
                     "name": "devcontainer",
@@ -260,7 +260,7 @@ def test_load_sessions_silently_drops_legacy_workspace_keys(tmp_path: Path) -> N
         json.dumps(
             {
                 "name": "alpha",
-                "project_root": "/projects/alpha",
+                "session_root": "/projects/alpha",
                 "backend": {
                     "type": "command",
                     "name": "devcontainer",
@@ -287,7 +287,7 @@ def test_load_sessions_falls_back_to_host_record_for_legacy_host_type(tmp_path: 
         json.dumps(
             {
                 "name": "alpha",
-                "project_root": "/projects/alpha",
+                "session_root": "/projects/alpha",
                 "backend": {"type": "host"},
             }
         )
@@ -301,16 +301,16 @@ def test_load_sessions_falls_back_to_host_record_for_legacy_host_type(tmp_path: 
 def test_load_sessions_skips_non_json_and_wrong_shape_files(tmp_path: Path) -> None:
     sessions_dir = tmp_path / "sessions"
     sessions_dir.mkdir()
-    (sessions_dir / "alpha.json").write_text(json.dumps({"name": "alpha", "project_root": "/projects/alpha"}))
+    (sessions_dir / "alpha.json").write_text(json.dumps({"name": "alpha", "session_root": "/projects/alpha"}))
     (sessions_dir / "beta.txt").write_text("not json")
-    (sessions_dir / "wrong-shape.json").write_text(json.dumps({"name": 1, "project_root": "/x"}))
+    (sessions_dir / "wrong-shape.json").write_text(json.dumps({"name": 1, "session_root": "/x"}))
 
     sessions = load_sessions(sessions_dir=sessions_dir)
 
     assert sessions == {
         "alpha": SessionState(
             name="alpha",
-            project_root=Path("/projects/alpha"),
+            session_root=Path("/projects/alpha"),
             backend=_host_record(),
         )
     }
@@ -337,7 +337,7 @@ def test_load_sessions_drops_optional_command_fields_when_undecodable(tmp_path: 
         json.dumps(
             {
                 "name": "alpha",
-                "project_root": "/projects/alpha",
+                "session_root": "/projects/alpha",
                 "backend": {
                     "type": "command",
                     "name": "devcontainer",
@@ -375,7 +375,7 @@ def test_load_sessions_falls_back_to_host_for_legacy_windows_array(tmp_path: Pat
         json.dumps(
             {
                 "name": "alpha",
-                "project_root": "/projects/alpha",
+                "session_root": "/projects/alpha",
                 "backend": {
                     "type": "command",
                     "name": "devcontainer",
@@ -402,7 +402,7 @@ def test_load_sessions_falls_back_to_host_for_command_record_without_string_name
         json.dumps(
             {
                 "name": "alpha",
-                "project_root": "/projects/alpha",
+                "session_root": "/projects/alpha",
                 "backend": {
                     "type": "command",
                     # name is missing entirely.
@@ -427,7 +427,7 @@ def test_load_sessions_falls_back_to_host_for_legacy_flat_record(tmp_path: Path)
         json.dumps(
             {
                 "name": "alpha",
-                "project_root": "/projects/alpha",
+                "session_root": "/projects/alpha",
                 "backend": {
                     "type": "command",
                     "name": "devcontainer",

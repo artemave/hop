@@ -10,11 +10,11 @@ Build a CLI tool `hop` that replaces tmux as the development workflow manager by
 
 The system must preserve and improve the current tmux-based workflow, including:
 
-- project-based sessions
+- directory-based sessions
 - fast switching
 - opening file references from terminal output into Neovim
 - sending commands (e.g. tests) from Neovim to specific terminal windows
-- multiple dedicated terminals per project
+- multiple dedicated terminals per session
 
 ---
 
@@ -93,13 +93,13 @@ The four lifecycle and translate fields (`prepare`, `teardown`, `port_translate`
 
 `interactive_prefix` and `noninteractive_prefix` remain string-only — they are wraps, not sequences. Use a triple-quoted string for multi-line pipelines.
 
-All commands are run through a **transport** that turns the substituted command string into argv. For a local session the transport is `sh -c <substituted-string>`, so pipes, redirects, and `$(...)` are part of the contract. For a remote session (see *Remote sessions*) the same string is wrapped to run on the remote host over ssh — the recipe is identical either way; the ssh is hop's, never in `.hop.toml`. Substitution placeholders supported inside any command: `{project_root}` and `{host}` (the session's externally-reachable host — the ssh target remotely, `localhost` locally). `{port}` is additionally available inside `port_translate` and `host_translate` (the URL's original port, or empty string when absent). Substituted values are shell-quoted before insertion so paths with spaces or shell metacharacters round-trip safely.
+All commands are run through a **transport** that turns the substituted command string into argv. For a local session the transport is `sh -c <substituted-string>`, so pipes, redirects, and `$(...)` are part of the contract. For a remote session (see *Remote sessions*) the same string is wrapped to run on the remote host over ssh — the recipe is identical either way; the ssh is hop's, never in `.hop.toml`. Substitution placeholders supported inside any command: `{session_root}` and `{host}` (the session's externally-reachable host — the ssh target remotely, `localhost` locally). `{port}` is additionally available inside `port_translate` and `host_translate` (the URL's original port, or empty string when absent). Substituted values are shell-quoted before insertion so paths with spaces or shell metacharacters round-trip safely.
 
 ### Remote sessions
 
 A session can run on a remote machine reached over ssh. The same project `.hop.toml` drives it — there is **no second config and no ssh in the recipe**. The prefixes (`podman-compose … exec devcontainer`, etc.) are byte-identical to the local case; hop wraps every composed command (window launches and the runner-mediated `prepare`/`teardown`/`paths_exist`/`read_file`/translate/`activate` calls) in an outer `ssh <host> '<cmd>'` keyed off the session's host. The ssh layer is intrinsic: a kitty window is a host GUI surface, so a remote shell inside it requires an ssh client as the window's child — hop builds that, the user never writes it.
 
-A remote session needs **no local directory and no local `.hop.toml`**. It is a session record carrying `(name, host, remote_cwd)`: the name and `p:<name>` workspace come from the remote directory's basename, the `.hop.toml` is fetched from the remote on demand (not read locally), and kitty windows open in the user's home (their child immediately `ssh`'s out). `{project_root}` and the transport's `cd` use the remote path string, which is never touched as a local filesystem path.
+A remote session needs **no local directory and no local `.hop.toml`**. It is a session record carrying `(name, host, remote_cwd)`: the name and `p:<name>` workspace come from the remote directory's basename, the `.hop.toml` is fetched from the remote on demand (not read locally), and kitty windows open in the user's home (their child immediately `ssh`'s out). `{session_root}` and the transport's `cd` use the remote path string, which is never touched as a local filesystem path.
 
 The transport reuses one ssh ControlMaster per host (`ControlMaster=auto` + `ControlPersist`), so a session survives a laptop-sleep / connection drop and redials lazily on the next command. The composed command is base64-encoded behind a fixed decode wrapper so ssh's argv-flattening can't corrupt it and stdin stays free for piped data (the `paths_exist`/`read_file` script-over-stdin path); the decoded command runs under a remote login shell so the remote user's normal PATH resolves with no extra config. See *Remote session setup (`hop ssh`)* for how a session is created.
 
@@ -115,7 +115,7 @@ workspace_layout = "tabbed"
 
 Per-role launch commands live outside the backend, in two top-level config sections:
 
-- `[layouts.<name>]` — a named layout with one required `activate` shell-snippet probe and a list of `[layouts.<name>.windows.<role>]` declarations. When the probe exits 0 in the project root, all of the layout's windows are queued for activation. Multiple layouts can match in the same session; their windows compose.
+- `[layouts.<name>]` — a named layout with one required `activate` shell-snippet probe and a list of `[layouts.<name>.windows.<role>]` declarations. When the probe exits 0 in the session root, all of the layout's windows are queued for activation. Multiple layouts can match in the same session; their windows compose.
 - `[windows.<role>]` — top-level windows, outside any layout. Always active unless individually opted out via `activate = "false"`.
 
 Each window declaration carries:
@@ -149,10 +149,10 @@ Backend selection (below) is independent of layouts: any session's backend wraps
 Backend selection at session creation:
 
 1. `hop --backend <name>` on the bare `hop` entry pins the named backend (or `"host"` to opt out). Pinning a name that isn't configured (and isn't `"host"`) raises `UnknownBackendError`.
-2. Otherwise auto-detect walks `[backends.<name>]` tables in global-config declaration order, running each backend's `activate` command in the project root; the first that exits 0 wins. Backends without an `activate` command are skipped during auto-detect.
+2. Otherwise auto-detect walks `[backends.<name>]` tables in global-config declaration order, running each backend's `activate` command in the session root; the first that exits 0 wins. Backends without an `activate` command are skipped during auto-detect.
 3. Fall back to **host** when nothing matches.
 
-Project config at `<project_root>/.hop.toml` uses the **same `[backends.<name>]` schema** as the global file. Hop merges both files when resolving the session backend: project entries come first in auto-detect order; same-named entries are field-merged with project fields winning; the merged entry takes the project's slot in the order. A backend whose merged fields lack `shell` or `editor` is unusable and dropped silently. The reserved name `"host"` cannot be defined in either file.
+Project config at `<session_root>/.hop.toml` uses the **same `[backends.<name>]` schema** as the global file. Hop merges both files when resolving the session backend: project entries come first in auto-detect order; same-named entries are field-merged with project fields winning; the merged entry takes the project's slot in the order. A backend whose merged fields lack `shell` or `editor` is unusable and dropped silently. The reserved name `"host"` cannot be defined in either file.
 
 Overriding `activate` in a project file changes which backend wins auto-detect: a `"true"` override forces this backend to match; a `"false"` override skips it. There is no separate "pin a backend" knob in the project file — `activate` overrides cover both selection and exclusion.
 
@@ -202,7 +202,7 @@ When the focused Sway workspace already matches the cwd-derived session's worksp
 - pick the next free role of the form `shell-<N>` (starting from `shell-2`) so the new window is distinct from the canonical `shell` and from any other ad-hoc shells already open
 - create a new Kitty role terminal with that role
 
-This makes "give me another shell in this session" a single keystroke (`hop`) from any session terminal. The signal is the focused workspace, not env vars — so the same behavior is available to a Sway keybinding that runs `cd <project_root> && hop term`.
+This makes "give me another shell in this session" a single keystroke (`hop`) from any session terminal. The signal is the focused workspace, not env vars — so the same behavior is available to a Sway keybinding that runs `cd <session_root> && hop term`.
 
 When `hop` is invoked without a controlling TTY (e.g. from vicinae's detached `setsid -f hop`, a sway keybinding, or a launcher script), the first-entry path shows a `kitten panel` overlay (`app_id="hop:popup"`) streaming the backend's `prepare` output while the session is being created. Sway is switched to `p:<session>` *before* the popup runs so the user lands on the session-to-be while prepare streams. On prepare failure the panel stays open at a held shell so the user can read the error; on success it closes and the normal kitty / editor bootstrap proceeds. From an interactive terminal, prepare output streams to that terminal as today.
 
@@ -220,7 +220,7 @@ Consequences:
 
 ## Window tagging
 
-Hop tags one piece of metadata on each Kitty role window: the **role**, stored as the `hop_role` user var. Kitty OS window names are session-agnostic (`hop:<role>`, e.g. `hop:shell`, `hop:editor`) — they do not include the session name, so external tools that read Sway's `app_id` only see the role. Per-session identification of hop-managed Sway windows (browser, editor) happens through Sway marks of the form `_hop_<role>:<session>` (leading underscore so Sway hides them from window titles). No `HOP_*` environment variables are exported into role terminals — external tools should consume `hop list --json` to recover session-name → project-root mapping rather than reading shell env. Kitty session and project-root identity live entirely in (a) the per-session Kitty socket address, and (b) the per-session state files.
+Hop tags one piece of metadata on each Kitty role window: the **role**, stored as the `hop_role` user var. Kitty OS window names are session-agnostic (`hop:<role>`, e.g. `hop:shell`, `hop:editor`) — they do not include the session name, so external tools that read Sway's `app_id` only see the role. Per-session identification of hop-managed Sway windows (browser, editor) happens through Sway marks of the form `_hop_<role>:<session>` (leading underscore so Sway hides them from window titles). No `HOP_*` environment variables are exported into role terminals — external tools should consume `hop list --json` to recover session-name → session-root mapping rather than reading shell env. Kitty session and session-root identity live entirely in (a) the per-session Kitty socket address, and (b) the per-session state files.
 
 ---
 
@@ -262,7 +262,7 @@ Behavior:
 
 - discover live Sway workspaces whose names start with `p:`
 - without `--json`: print session names without the `p:` prefix, one per line, alphabetical
-- with `--json`: print a JSON array of records `{name, workspace, project_root}`. `project_root` comes from per-session state files written at bootstrap (`${XDG_RUNTIME_DIR}/hop/sessions/<name>.json`) and is `null` when no record exists (e.g. for workspaces created outside hop). This is the stable machine-readable API external tools should consume — not the kitty user_vars or shell env vars.
+- with `--json`: print a JSON array of records `{name, workspace, session_root}`. `session_root` comes from per-session state files written at bootstrap (`${XDG_RUNTIME_DIR}/hop/sessions/<name>.json`) and is `null` when no record exists (e.g. for workspaces created outside hop). This is the stable machine-readable API external tools should consume — not the kitty user_vars or shell env vars.
 
 ---
 
@@ -275,7 +275,7 @@ hop windows
 Behavior:
 
 - resolve the session from the caller's current working directory
-- run the same window resolver that bootstrap uses (built-in defaults + active layouts + top-level windows), evaluating layout `activate` probes against the project root
+- run the same window resolver that bootstrap uses (built-in defaults + active layouts + top-level windows), evaluating layout `activate` probes against the session root
 - print each resolved role on its own line, in resolution order (built-ins, then active-layout windows, then top-level windows)
 
 Intended for launchers (rofi, fuzzel) to enumerate the focusable / launchable windows for the focused session workspace and dispatch to `hop browser` (browser) or `hop term --role <name>` (every role including `editor`). The vicinae integration consumes the same resolver via the `hopd` daemon (see "Vicinae integration daemon" below) — it does not invoke `hop windows` directly because it has the resolver in-process.
@@ -467,7 +467,7 @@ The acceptor dispatches by request shape:
   1. If the focused window carries an `_hop_editor:<session>` mark (set by the editor adapter at launch), the suffix is the session name. This path also works when the editor window has drifted off its session workspace.
   2. Otherwise, if the focused window's workspace name matches `p:<session>`, the suffix is the session name. This covers kitty role terminals (test/server/console/…) and any other window inside a session workspace — they carry no per-window session identity in Sway, but the workspace tag is hop's canonical session-to-window mapping.
 
-  The session record is then looked up in `$XDG_RUNTIME_DIR/hop/sessions/<name>.json`; the `hop` subprocess is spawned with `cwd` set to that session's `project_root`. Bridge calls from windows that are neither a hop editor nor on a `p:<session>` workspace are rejected with `400`.
+  The session record is then looked up in `$XDG_RUNTIME_DIR/hop/sessions/<name>.json`; the `hop` subprocess is spawned with `cwd` set to that session's `session_root`. Bridge calls from windows that are neither a hop editor nor on a `p:<session>` workspace are rejected with `400`.
 
 Dispatch is via subprocess (`python -m hop <argv>`) per request. Output is buffered before the response is written; streaming is out of scope. The protocol is curl-compatible — `curl --unix-socket $XDG_RUNTIME_DIR/hop/api.sock --data-binary @- http://_/call < argv.nul` is sufficient to drive it from the host, which is also how the host-side test suite exercises it.
 
@@ -621,7 +621,7 @@ hop term --role editor
 
 Each window must be identifiable by:
 
-- session (project)
+- session (the directory `hop` was invoked in)
 - role (for terminals)
 
 For Kitty terminals this identity must be encoded as stable metadata on the window itself, so repeated `hop term` and `hop run` calls can rediscover the same role window exactly.
@@ -646,7 +646,7 @@ This enables:
 
 ## Final summary
 
-`hop` is a session-oriented CLI tool where each project maps to a Sway workspace containing:
+`hop` is a session-oriented CLI tool where each session maps to a Sway workspace containing:
 
 - one shared Neovim instance
 - multiple named terminal windows

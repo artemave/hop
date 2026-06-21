@@ -85,9 +85,9 @@ def compute_target_scripts(
 
     focused_session = _focused_session(focused_workspace, sessions)
 
-    if focused_session is not None and focused_session.project_root is not None:
+    if focused_session is not None and focused_session.session_root is not None:
         project_session = ProjectSession(
-            project_root=focused_session.project_root,
+            session_root=focused_session.session_root,
             session_name=focused_session.name,
             workspace_name=focused_session.workspace,
             host=focused_session.host,
@@ -195,7 +195,7 @@ def _window_script(
         # That gives kill / window entries a "which session?" answer at
         # a glance — vital for `Hop kill`, useful for everything else.
         package_name=session.session_name,
-        project_root=session.project_root,
+        session_root=session.session_root,
         host=session.host,
         body=body,
     )
@@ -210,7 +210,7 @@ def _kill_script(session: ProjectSession, *, hop_bin: str, used: set[str]) -> Ge
         title=title,
         description=description,
         package_name=session.session_name,
-        project_root=session.project_root,
+        session_root=session.session_root,
         host=session.host,
         hop_bin=hop_bin,
     )
@@ -338,7 +338,7 @@ def _switch_script(session: SessionListing, *, hop_bin: str, used: set[str]) -> 
     return GeneratedScript(filename=filename, content=content)
 
 
-def _session_setup(project_root: Path, host: str | None, *, indent: str = "") -> str:
+def _session_setup(session_root: Path, host: str | None, *, indent: str = "") -> str:
     """The line that tells the dispatched ``hop`` which session to act on.
 
     Local: ``cd`` into the project dir (hop derives identity from cwd). Remote:
@@ -348,11 +348,11 @@ def _session_setup(project_root: Path, host: str | None, *, indent: str = "") ->
     """
 
     if host is None:
-        return f"{indent}cd {shlex.quote(str(project_root))}\n"
-    return f"{indent}export HOP_REMOTE_HOST={shlex.quote(host)} HOP_REMOTE_CWD={shlex.quote(str(project_root))}\n"
+        return f"{indent}cd {shlex.quote(str(session_root))}\n"
+    return f"{indent}export HOP_REMOTE_HOST={shlex.quote(host)} HOP_REMOTE_CWD={shlex.quote(str(session_root))}\n"
 
 
-def _render(*, title: str, description: str, package_name: str, project_root: Path, host: str | None, body: str) -> str:
+def _render(*, title: str, description: str, package_name: str, session_root: Path, host: str | None, body: str) -> str:
     return (
         "#!/usr/bin/env bash\n"
         "# @vicinae.schemaVersion 1\n"
@@ -363,7 +363,7 @@ def _render(*, title: str, description: str, package_name: str, project_root: Pa
         "# @vicinae.mode silent\n"
         "\n"
         "set -euo pipefail\n"
-        f"{_session_setup(project_root, host)}"
+        f"{_session_setup(session_root, host)}"
         f"{body}"
     )
 
@@ -384,7 +384,7 @@ def _render_no_cd(*, title: str, description: str, package_name: str, body: str)
 
 
 def _render_kill(
-    *, title: str, description: str, package_name: str, project_root: Path, host: str | None, hop_bin: str
+    *, title: str, description: str, package_name: str, session_root: Path, host: str | None, hop_bin: str
 ) -> str:
     # `hop kill` from inside a vicinae action gets SIGTERMed when vicinae
     # closes the UI before teardown completes (devcontainer left in
@@ -406,7 +406,7 @@ def _render_kill(
         "exec setsid -f bash -c '\n"
         "    set -e\n"
         "    vicinae close || true\n"
-        f"{_session_setup(project_root, host, indent='    ')}"
+        f"{_session_setup(session_root, host, indent='    ')}"
         f"    exec {shlex.quote(hop_bin)} kill\n"
         "'\n"
     )

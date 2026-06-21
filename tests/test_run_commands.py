@@ -20,13 +20,13 @@ class StubKittyAdapter:
         command: str,
         focus: bool = False,
     ) -> int:
-        self.runs.append((session.session_name, role, command, session.project_root, focus))
+        self.runs.append((session.session_name, role, command, session.session_root, focus))
         return self._window_id
 
 
 def test_run_command_routes_to_role_terminal(tmp_path: Path) -> None:
-    project_root = tmp_path / "demo"
-    nested_directory = project_root / "src"
+    session_root = tmp_path / "demo"
+    nested_directory = session_root / "src"
     nested_directory.mkdir(parents=True)
 
     kitty = StubKittyAdapter(window_id=42)
@@ -52,8 +52,8 @@ def test_run_command_routes_to_role_terminal(tmp_path: Path) -> None:
 
 
 def test_run_command_defaults_to_shell_role(tmp_path: Path) -> None:
-    project_root = tmp_path / "demo"
-    nested_directory = project_root / "src"
+    session_root = tmp_path / "demo"
+    nested_directory = session_root / "src"
     nested_directory.mkdir(parents=True)
 
     kitty = StubKittyAdapter()
@@ -71,8 +71,8 @@ def test_run_command_defaults_to_shell_role(tmp_path: Path) -> None:
 
 
 def test_run_command_forwards_focus_to_kitty(tmp_path: Path) -> None:
-    project_root = tmp_path / "demo"
-    nested_directory = project_root / "src"
+    session_root = tmp_path / "demo"
+    nested_directory = session_root / "src"
     nested_directory.mkdir(parents=True)
 
     kitty = StubKittyAdapter()
@@ -89,8 +89,8 @@ def test_run_command_forwards_focus_to_kitty(tmp_path: Path) -> None:
 
 
 def test_run_command_emits_unique_run_ids(tmp_path: Path) -> None:
-    project_root = tmp_path / "demo"
-    nested_directory = project_root / "src"
+    session_root = tmp_path / "demo"
+    nested_directory = session_root / "src"
     nested_directory.mkdir(parents=True)
 
     kitty = StubKittyAdapter()

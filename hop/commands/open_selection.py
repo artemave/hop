@@ -61,7 +61,7 @@ def open_selection_in_window(
     elif source_cwd is not None:
         base_cwd = Path(source_cwd)
     else:
-        base_cwd = state.project_root
+        base_cwd = state.session_root
 
     syntactic = parse_visible_output_target(selection)
     if syntactic is None:

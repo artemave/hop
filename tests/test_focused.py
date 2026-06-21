@@ -81,16 +81,16 @@ class _FakeBackend:
         del session
 
 
-def _state(name: str, project_root: Path) -> SessionState:
-    return SessionState(name=name, project_root=project_root, backend=_HOST_RECORD)
+def _state(name: str, session_root: Path) -> SessionState:
+    return SessionState(name=name, session_root=session_root, backend=_HOST_RECORD)
 
 
 def test_paths_exist_resolves_relative_candidates_against_focused_cwd(tmp_path: Path) -> None:
     """Relative candidates from terminal output are resolved against the
     focused window's in-shell cwd before being checked. The injected
     ``cwd_loader`` simulates kitty's OSC 7 reply."""
-    project_root = tmp_path / "demo"
-    shell_cwd = project_root / "src"
+    session_root = tmp_path / "demo"
+    shell_cwd = session_root / "src"
     shell_cwd.mkdir(parents=True)
     expected_path = shell_cwd / "app/foo.rb"
     fake_backend = _FakeBackend(existing={expected_path.resolve()})
@@ -98,7 +98,7 @@ def test_paths_exist_resolves_relative_candidates_against_focused_cwd(tmp_path: 
     result = paths_exist(
         ["app/foo.rb", "missing.rb"],
         focused_workspace=lambda: "p:demo",
-        sessions_loader=lambda: {"demo": _state("demo", project_root.resolve())},
+        sessions_loader=lambda: {"demo": _state("demo", session_root.resolve())},
         cwd_loader=lambda _name: shell_cwd.resolve(),
         backend_loader=lambda _state: fake_backend,
     )
@@ -113,8 +113,8 @@ def test_paths_exist_returns_input_strings_not_resolved_paths(tmp_path: Path) ->
     """Callers (the kitten) match by string identity. Verify the returned
     set contains the original input strings even when resolution rewrites
     the path (e.g. via ``..``)."""
-    project_root = tmp_path / "demo"
-    shell_cwd = project_root / "src"
+    session_root = tmp_path / "demo"
+    shell_cwd = session_root / "src"
     shell_cwd.mkdir(parents=True)
     expected_path = (shell_cwd / "../app/foo.rb").resolve()
     fake_backend = _FakeBackend(existing={expected_path})
@@ -122,7 +122,7 @@ def test_paths_exist_returns_input_strings_not_resolved_paths(tmp_path: Path) ->
     result = paths_exist(
         ["../app/foo.rb"],
         focused_workspace=lambda: "p:demo",
-        sessions_loader=lambda: {"demo": _state("demo", project_root.resolve())},
+        sessions_loader=lambda: {"demo": _state("demo", session_root.resolve())},
         cwd_loader=lambda _name: shell_cwd.resolve(),
         backend_loader=lambda _state: fake_backend,
     )
@@ -249,20 +249,20 @@ def test_paths_exist_empty_input_returns_empty(tmp_path: Path) -> None:
     assert result == set()
 
 
-def test_paths_exist_falls_back_to_state_project_root_when_kitty_socket_dead(tmp_path: Path) -> None:
+def test_paths_exist_falls_back_to_state_session_root_when_kitty_socket_dead(tmp_path: Path) -> None:
     """When the kitty per-session socket isn't reachable, ``cwd_loader``
     returns ``None`` and the function uses the persisted session project
     root as the relative-path base."""
-    project_root = tmp_path / "demo"
-    project_root.mkdir()
-    expected_path = project_root / "foo.rb"
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
+    expected_path = session_root / "foo.rb"
     expected_path.write_text("")
     fake_backend = _FakeBackend(existing={expected_path.resolve()})
 
     result = paths_exist(
         ["foo.rb"],
         focused_workspace=lambda: "p:demo",
-        sessions_loader=lambda: {"demo": _state("demo", project_root.resolve())},
+        sessions_loader=lambda: {"demo": _state("demo", session_root.resolve())},
         cwd_loader=lambda _name: None,
         backend_loader=lambda _state: fake_backend,
     )
@@ -275,7 +275,7 @@ def test_paths_exist_uses_backend_workspace_path_when_kitty_cwd_unavailable(tmp_
     resolve against the backend's cached ``workspace_path`` — the in-backend
     default cwd captured at bootstrap. That's the at-default-cwd fallback
     for container/ssh shells that don't emit OSC 7."""
-    project_root = tmp_path / "demo"  # host-side path; should NOT be used here
+    session_root = tmp_path / "demo"  # host-side path; should NOT be used here
     workspace_path = tmp_path / "workspace"  # what the backend sees as its cwd
     workspace_path.mkdir()
     expected_path = workspace_path / "foo.rb"
@@ -283,7 +283,7 @@ def test_paths_exist_uses_backend_workspace_path_when_kitty_cwd_unavailable(tmp_
     fake_backend = _FakeBackend(existing={expected_path.resolve()})
     state = SessionState(
         name="demo",
-        project_root=project_root.resolve(),
+        session_root=session_root.resolve(),
         backend=CommandBackendRecord(
             name="devcontainer",
             interactive_prefix="compose exec devcontainer",
@@ -307,8 +307,8 @@ def test_paths_exist_translates_rails_references_via_target_resolver(tmp_path: P
     """``Processing UsersController#index`` resolves to a controller path
     against the focused cwd; the backend's ``read_file`` then proves that
     ``def index`` is defined in the file before the candidate is marked."""
-    project_root = tmp_path / "demo"
-    shell_cwd = project_root
+    session_root = tmp_path / "demo"
+    shell_cwd = session_root
     shell_cwd.mkdir(parents=True)
     expected_path = (shell_cwd / "app/controllers/users_controller.rb").resolve()
     fake_backend = _FakeBackend(
@@ -320,7 +320,7 @@ def test_paths_exist_translates_rails_references_via_target_resolver(tmp_path: P
     result = paths_exist(
         ["Processing UsersController#index"],
         focused_workspace=lambda: "p:demo",
-        sessions_loader=lambda: {"demo": _state("demo", project_root.resolve())},
+        sessions_loader=lambda: {"demo": _state("demo", session_root.resolve())},
         cwd_loader=lambda _name: shell_cwd.resolve(),
         backend_loader=lambda _state: fake_backend,
     )
@@ -333,8 +333,8 @@ def test_paths_exist_drops_rails_reference_when_def_not_defined(tmp_path: Path) 
     """Controller file exists but the action isn't there — the candidate
     no longer survives the existence check (fixes the old "any action on
     an existing controller highlights" bug)."""
-    project_root = tmp_path / "demo"
-    shell_cwd = project_root
+    session_root = tmp_path / "demo"
+    shell_cwd = session_root
     shell_cwd.mkdir(parents=True)
     controller_path = (shell_cwd / "app/controllers/users_controller.rb").resolve()
     fake_backend = _FakeBackend(
@@ -346,7 +346,7 @@ def test_paths_exist_drops_rails_reference_when_def_not_defined(tmp_path: Path) 
     result = paths_exist(
         ["Processing UsersController#index"],
         focused_workspace=lambda: "p:demo",
-        sessions_loader=lambda: {"demo": _state("demo", project_root.resolve())},
+        sessions_loader=lambda: {"demo": _state("demo", session_root.resolve())},
         cwd_loader=lambda _name: shell_cwd.resolve(),
         backend_loader=lambda _state: fake_backend,
     )
@@ -361,8 +361,8 @@ def test_paths_exist_falls_back_when_backend_loader_returns_none(tmp_path: Path)
     existing_file.write_text("")
     import os
 
-    project_root = tmp_path / "demo"
-    project_root.mkdir()
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
 
     cwd = os.getcwd()
     try:
@@ -370,8 +370,8 @@ def test_paths_exist_falls_back_when_backend_loader_returns_none(tmp_path: Path)
         result = paths_exist(
             ["exists.txt"],
             focused_workspace=lambda: "p:demo",
-            sessions_loader=lambda: {"demo": _state("demo", project_root.resolve())},
-            cwd_loader=lambda _name: project_root.resolve(),
+            sessions_loader=lambda: {"demo": _state("demo", session_root.resolve())},
+            cwd_loader=lambda _name: session_root.resolve(),
             backend_loader=lambda _state: None,
         )
     finally:
@@ -383,15 +383,15 @@ def test_paths_exist_falls_back_when_backend_loader_returns_none(tmp_path: Path)
 def test_paths_exist_returns_empty_set_when_no_candidate_resolves_to_file(tmp_path: Path) -> None:
     """URL candidates (and any non-file resolutions) drop out of the result.
     A URL-only batch should return an empty set without calling the backend."""
-    project_root = tmp_path / "demo"
-    project_root.mkdir()
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
     fake_backend = _FakeBackend(existing=set())
 
     result = paths_exist(
         ["https://example.com"],
         focused_workspace=lambda: "p:demo",
-        sessions_loader=lambda: {"demo": _state("demo", project_root.resolve())},
-        cwd_loader=lambda _name: project_root.resolve(),
+        sessions_loader=lambda: {"demo": _state("demo", session_root.resolve())},
+        cwd_loader=lambda _name: session_root.resolve(),
         backend_loader=lambda _state: fake_backend,
     )
 
@@ -405,19 +405,19 @@ def test_paths_exist_round_trips_through_command_backend_record(tmp_path: Path) 
     ``hop.app.backend_from_record``) reconstructs a usable backend from a
     persisted record. For the built-in ``host`` record (empty prefixes), the
     synthesized command is ``sh -c '<loop>'`` running locally."""
-    project_root = tmp_path / "demo"
-    project_root.mkdir(parents=True)
-    existing_file = project_root / "foo.rb"
+    session_root = tmp_path / "demo"
+    session_root.mkdir(parents=True)
+    existing_file = session_root / "foo.rb"
     existing_file.write_text("")
 
     record = CommandBackendRecord(name="host", interactive_prefix="", noninteractive_prefix="")
-    state = SessionState(name="demo", project_root=project_root.resolve(), backend=record)
+    state = SessionState(name="demo", session_root=session_root.resolve(), backend=record)
 
     result = paths_exist(
         ["foo.rb"],
         focused_workspace=lambda: "p:demo",
         sessions_loader=lambda: {"demo": state},
-        cwd_loader=lambda _name: project_root.resolve(),
+        cwd_loader=lambda _name: session_root.resolve(),
     )
 
     assert result == {"foo.rb"}

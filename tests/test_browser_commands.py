@@ -9,12 +9,12 @@ class StubBrowserAdapter:
         self.calls: list[tuple[str, str | None, Path]] = []
 
     def ensure_browser(self, session: ProjectSession, *, url: str | None) -> None:
-        self.calls.append((session.session_name, url, session.project_root))
+        self.calls.append((session.session_name, url, session.session_root))
 
 
 def test_focus_browser_routes_url_to_session_browser(tmp_path: Path) -> None:
-    project_root = tmp_path / "demo"
-    nested_directory = project_root / "src"
+    session_root = tmp_path / "demo"
+    nested_directory = session_root / "src"
     nested_directory.mkdir(parents=True)
 
     browser = StubBrowserAdapter()

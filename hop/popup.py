@@ -233,7 +233,7 @@ def _lifecycle_script(
         "set -u",
         f"mkdir -p {shlex.quote(str(log_path.parent))}",
         f"exec > >(tee {shlex.quote(str(log_path))}) 2>&1",
-        f"cd {shlex.quote(str(runner_cwd(session.host, session.project_root)))}",
+        f"cd {shlex.quote(str(runner_cwd(session.host, session.session_root)))}",
         f"printf '%s\\n' {shlex.quote(f'{verb} {session.session_name}')}",
     ]
     for index, step in enumerate(steps):

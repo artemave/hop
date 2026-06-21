@@ -26,7 +26,7 @@ All command lists live in `~/.config/hop/config.toml` under `[backends.<name>]`.
 Hop runs the project's compose file **standalone** — there is no overlay flag in hop. If your dev container is composed of a project-specific layer plus a personal/dotfiles overlay, the recommended pattern is to have the project file `include:` the overlay:
 
 ```yaml
-# <project_root>/docker-compose.dev.yml
+# <session_root>/docker-compose.dev.yml
 include:
   - ${HOME}/projects/dotfiles/devcontainer/docker-compose.yml
 services:
@@ -72,7 +72,7 @@ prepare               = "podman-compose -f docker-compose.dev.yml up -d devconta
 teardown              = "podman-compose -f docker-compose.dev.yml down"
 port_translate        = """
   podman ps -q \\
-    --filter label=io.podman.compose.project=$(basename {project_root}) \\
+    --filter label=io.podman.compose.project=$(basename {session_root}) \\
     --filter label=io.podman.compose.service=devcontainer \\
     | head -1 \\
     | xargs -r -I@ podman port @ {port} \\
@@ -86,7 +86,7 @@ noninteractive_prefix = "podman-compose -f docker-compose.dev.yml exec -T devcon
 
 `noninteractive_prefix` is the prefix hop uses internally for non-interactive backend operations — currently the file-existence check that drives the open-selection kitten's highlight filter. It's required for every backend; for podman-compose the no-TTY variant is necessary (`exec -T <service>`) because the default `exec` allocates a TTY and eats hop's stdin pipe to the loop, causing the kitten to report nothing as existing.
 
-Each command is a single string. Hop runs it through `sh -c` after substituting placeholders, so pipes, redirects, and `$(...)` work — write the value the way you'd type it at a terminal. Triple-quoted strings (`"""…"""`) let you spread a longer pipeline across lines for readability. Placeholder values (`{project_root}`, `{port}`) are shell-quoted before insertion, so paths with spaces substitute safely.
+Each command is a single string. Hop runs it through `sh -c` after substituting placeholders, so pipes, redirects, and `$(...)` work — write the value the way you'd type it at a terminal. Triple-quoted strings (`"""…"""`) let you spread a longer pipeline across lines for readability. Placeholder values (`{session_root}`, `{port}`) are shell-quoted before insertion, so paths with spaces substitute safely.
 
 `port_translate` is invoked lazily when the kitten dispatch encounters a URL like `http://localhost:3000` printed inside the container — the recipe above resolves the running container by compose label (so it works whether the container was brought up by `podman-compose up` or by `podman-compose run …` with their different naming conventions) and asks `podman port` for the host-side port the container's port is published on. Stripped stdout (e.g. `35231`) replaces the URL's port; the host (`localhost`) is left untouched. The companion `host_translate` field exists for backends that swap the hostname instead — not needed for a same-host devcontainer.
 
@@ -128,11 +128,11 @@ prepare = "podman-compose -f docker-compose.dev.yml up -d --wait devcontainer &&
 
 `--wait` blocks until the healthcheck passes, so the entrypoint's setup is guaranteed to be complete before hop launches the editor or installs the bridge shim. Same shape applies to `docker compose up -d --wait`.
 
-`activate` is the auto-detect probe — hop runs it in the project root and picks this backend if it exits 0. Any command works; `test -f <marker>` is the simplest. Backends without `activate` aren't eligible for auto-detect; they can only be picked by name with `hop --backend <name>` or `[backend].name = "<name>"` in `.hop.toml`.
+`activate` is the auto-detect probe — hop runs it in the session root and picks this backend if it exits 0. Any command works; `test -f <marker>` is the simplest. Backends without `activate` aren't eligible for auto-detect; they can only be picked by name with `hop --backend <name>` or `[backend].name = "<name>"` in `.hop.toml`.
 
 ### 3. Verify
 
-From a project root that has `docker-compose.dev.yml`:
+From a session root that has `docker-compose.dev.yml`:
 
 ```bash
 hop
@@ -147,7 +147,7 @@ You should see:
 You can verify the persisted state:
 
 ```bash
-cat $XDG_RUNTIME_DIR/hop/sessions/<project_name>.json
+cat $XDG_RUNTIME_DIR/hop/sessions/<session_name>.json
 ```
 
 The `backend.interactive_prefix` and `backend.noninteractive_prefix` fields are what hop wraps around every kitty launch and every non-interactive backend call (like the kitten's path-existence check).
@@ -222,7 +222,7 @@ The bridge currently requires you to be focused on the session's **editor** wind
 
 ## Project config
 
-`<project_root>/.hop.toml` uses **the same schema** as the global file — backends, layouts, and top-level windows are all parseable in either place. Drop in whatever subset of sections you want. Hop merges the two files when resolving:
+`<session_root>/.hop.toml` uses **the same schema** as the global file — backends, layouts, and top-level windows are all parseable in either place. Drop in whatever subset of sections you want. Hop merges the two files when resolving:
 
 - Project entries come first in auto-detect / declaration order.
 - Same-named entries are field-merged with project fields winning. The merged entry takes the project's slot.
@@ -389,7 +389,7 @@ Hop drives the in-container nvim by writing keystrokes (`<C-\><C-n>:exec 'drop '
 
 ### `hop kill` left the container running
 
-`hop kill` closes kitty windows first (sending SIGHUP to in-backend shells), then runs `teardown`. If a `teardown` failure aborts halfway, the resource it manages survives. Re-run `hop kill` from the same project root, or run the `teardown` command directly.
+`hop kill` closes kitty windows first (sending SIGHUP to in-backend shells), then runs `teardown`. If a `teardown` failure aborts halfway, the resource it manages survives. Re-run `hop kill` from the same session root, or run the `teardown` command directly.
 
 ### Open-selection kitten can't open files from terminal output
 

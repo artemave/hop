@@ -134,7 +134,7 @@ def open_target_in_session(
     backend = session_backend_for(session)
     # terminal_cwd=None preserves plain-file paths as typed; the editor (nvim
     # in the session's backend) resolves them against its own cwd. Absolutizing
-    # against the host's project_root would hand the editor a host path it
+    # against the host's session_root would hand the editor a host path it
     # can't see when the backend is a devcontainer / ssh host.
     resolved = resolve_target(syntactic, session=session, backend=backend, terminal_cwd=None)
     if resolved is None:

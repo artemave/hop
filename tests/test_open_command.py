@@ -39,13 +39,13 @@ class StubBackend:
 
 
 def test_file_target_dispatches_to_shared_editor(tmp_path: Path) -> None:
-    project_root = tmp_path / "demo"
-    project_root.mkdir()
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
 
     neovim = StubNeovimAdapter()
 
     session = open_target_in_session(
-        project_root,
+        session_root,
         target="app/models/user.rb",
         neovim=neovim,
         browser=StubBrowserAdapter(),
@@ -58,13 +58,13 @@ def test_file_target_dispatches_to_shared_editor(tmp_path: Path) -> None:
 
 
 def test_file_with_line_target_keeps_line_suffix(tmp_path: Path) -> None:
-    project_root = tmp_path / "demo"
-    project_root.mkdir()
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
 
     neovim = StubNeovimAdapter()
 
     open_target_in_session(
-        project_root,
+        session_root,
         target="app/models/user.rb:42",
         neovim=neovim,
         browser=StubBrowserAdapter(),
@@ -77,16 +77,16 @@ def test_rails_controller_action_target_translates_to_path_with_def_line(tmp_pat
     """``hop open UsersController#index`` derives the controller path AND
     looks up the line where ``def index`` is defined via the session
     backend's ``read_file``, so the editor jumps straight to the action."""
-    project_root = tmp_path / "demo"
-    (project_root / "app/controllers").mkdir(parents=True)
-    (project_root / "app/controllers/users_controller.rb").write_text(
+    session_root = tmp_path / "demo"
+    (session_root / "app/controllers").mkdir(parents=True)
+    (session_root / "app/controllers/users_controller.rb").write_text(
         "class UsersController < ApplicationController\n  def index\n  end\nend\n"
     )
 
     neovim = StubNeovimAdapter()
 
     open_target_in_session(
-        project_root,
+        session_root,
         target="UsersController#index",
         neovim=neovim,
         browser=StubBrowserAdapter(),
@@ -102,15 +102,15 @@ def test_rails_controller_action_target_raises_when_def_not_in_file(tmp_path: Pa
     """If the action isn't defined in the controller, the CLI surfaces a
     clear ``HopError`` rather than silently opening the file at line 1
     (or some unrelated location)."""
-    project_root = tmp_path / "demo"
-    (project_root / "app/controllers").mkdir(parents=True)
-    (project_root / "app/controllers/users_controller.rb").write_text(
+    session_root = tmp_path / "demo"
+    (session_root / "app/controllers").mkdir(parents=True)
+    (session_root / "app/controllers/users_controller.rb").write_text(
         "class UsersController < ApplicationController\n  def show\n  end\nend\n"
     )
 
     with pytest.raises(HopError, match="could not resolve target"):
         open_target_in_session(
-            project_root,
+            session_root,
             target="UsersController#index",
             neovim=StubNeovimAdapter(),
             browser=StubBrowserAdapter(),
@@ -118,12 +118,12 @@ def test_rails_controller_action_target_raises_when_def_not_in_file(tmp_path: Pa
 
 
 def test_rails_controller_action_target_raises_when_controller_file_missing(tmp_path: Path) -> None:
-    project_root = tmp_path / "demo"
-    project_root.mkdir()
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
 
     with pytest.raises(HopError, match="could not resolve target"):
         open_target_in_session(
-            project_root,
+            session_root,
             target="UsersController#index",
             neovim=StubNeovimAdapter(),
             browser=StubBrowserAdapter(),
@@ -131,13 +131,13 @@ def test_rails_controller_action_target_raises_when_controller_file_missing(tmp_
 
 
 def test_url_target_dispatches_to_session_browser(tmp_path: Path) -> None:
-    project_root = tmp_path / "demo"
-    project_root.mkdir()
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
 
     browser = StubBrowserAdapter()
 
     open_target_in_session(
-        project_root,
+        session_root,
         target="https://example.com/path",
         neovim=StubNeovimAdapter(),
         browser=browser,
@@ -151,14 +151,14 @@ def test_url_target_is_translated_through_backend(tmp_path: Path) -> None:
     `port_translate` rewriting before it reaches the host browser. The CLI
     routes URLs through the same `backend.translate_localhost_url` the kitten
     uses, so `hop open http://localhost:3000` opens the translated URL."""
-    project_root = tmp_path / "demo"
-    project_root.mkdir()
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
 
     browser = StubBrowserAdapter()
     backend = StubBackend(url_translation={"http://localhost:3000/": "http://localhost:35231/"})
 
     open_target_in_session(
-        project_root,
+        session_root,
         target="http://localhost:3000/",
         neovim=StubNeovimAdapter(),
         browser=browser,
@@ -170,12 +170,12 @@ def test_url_target_is_translated_through_backend(tmp_path: Path) -> None:
 
 
 def test_unparseable_target_raises_hop_error(tmp_path: Path) -> None:
-    project_root = tmp_path / "demo"
-    project_root.mkdir()
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
 
     with pytest.raises(HopError, match="could not parse"):
         open_target_in_session(
-            project_root,
+            session_root,
             target="   ",
             neovim=StubNeovimAdapter(),
             browser=StubBrowserAdapter(),
@@ -183,13 +183,13 @@ def test_unparseable_target_raises_hop_error(tmp_path: Path) -> None:
 
 
 def test_nested_directories_are_distinct_sessions(tmp_path: Path) -> None:
-    project_root = tmp_path / "demo"
-    nested_directory = project_root / "src"
+    session_root = tmp_path / "demo"
+    nested_directory = session_root / "src"
     nested_directory.mkdir(parents=True)
 
     neovim = StubNeovimAdapter()
 
-    open_target_in_session(project_root, target="lib/a.rb", neovim=neovim, browser=StubBrowserAdapter())
+    open_target_in_session(session_root, target="lib/a.rb", neovim=neovim, browser=StubBrowserAdapter())
     open_target_in_session(nested_directory, target="lib/b.rb", neovim=neovim, browser=StubBrowserAdapter())
 
     assert neovim.opened_targets == [("demo", "lib/a.rb"), ("src", "lib/b.rb")]
@@ -235,14 +235,14 @@ def test_text_and_source_files_dispatch_to_nvim(tmp_path: Path, filename: str) -
     YAML, TOML, Markdown, SVG, source code, and files without an
     extension all fall through to the editor — this is the guarantee
     users rely on for normal editing flow."""
-    project_root = tmp_path / "demo"
-    project_root.mkdir()
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
 
     neovim = StubNeovimAdapter()
     runner = RecordingHandlerRunner()
 
     open_target_in_session(
-        project_root,
+        session_root,
         target=filename,
         neovim=neovim,
         browser=StubBrowserAdapter(),
@@ -255,14 +255,14 @@ def test_text_and_source_files_dispatch_to_nvim(tmp_path: Path, filename: str) -
 
 
 def test_png_file_dispatches_to_open_handler(tmp_path: Path) -> None:
-    project_root = tmp_path / "demo"
-    project_root.mkdir()
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
 
     neovim = StubNeovimAdapter()
     runner = RecordingHandlerRunner()
 
     open_target_in_session(
-        project_root,
+        session_root,
         target="public/email-logo.png",
         neovim=neovim,
         browser=StubBrowserAdapter(),
@@ -275,12 +275,12 @@ def test_png_file_dispatches_to_open_handler(tmp_path: Path) -> None:
 
 
 def test_compound_extension_archive_matches(tmp_path: Path) -> None:
-    project_root = tmp_path / "demo"
-    project_root.mkdir()
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
 
     runner = RecordingHandlerRunner()
     open_target_in_session(
-        project_root,
+        session_root,
         target="dist/release.tar.gz",
         neovim=StubNeovimAdapter(),
         browser=StubBrowserAdapter(),
@@ -292,14 +292,14 @@ def test_compound_extension_archive_matches(tmp_path: Path) -> None:
 
 
 def test_user_can_override_default_handler(tmp_path: Path) -> None:
-    project_root = tmp_path / "demo"
-    project_root.mkdir()
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
 
     overridden = (("*.png", "feh {path}"),)
     runner = RecordingHandlerRunner()
 
     open_target_in_session(
-        project_root,
+        session_root,
         target="logo.png",
         neovim=StubNeovimAdapter(),
         browser=StubBrowserAdapter(),
@@ -314,15 +314,15 @@ def test_empty_template_opts_a_default_back_to_nvim(tmp_path: Path) -> None:
     """``*.png = ""`` removes png from the handler set. Useful when a user
     actively wants to edit pixel data in nvim (rare) or to disable the
     default for a project that ships a different viewer."""
-    project_root = tmp_path / "demo"
-    project_root.mkdir()
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
 
     opt_out = (("*.png", ""),)
     neovim = StubNeovimAdapter()
     runner = RecordingHandlerRunner()
 
     open_target_in_session(
-        project_root,
+        session_root,
         target="logo.png",
         neovim=neovim,
         browser=StubBrowserAdapter(),
@@ -337,12 +337,12 @@ def test_empty_template_opts_a_default_back_to_nvim(tmp_path: Path) -> None:
 def test_handler_command_shell_quotes_path(tmp_path: Path) -> None:
     """Paths with spaces or shell metacharacters must be shell-quoted into
     the template, otherwise the launched viewer sees garbage arguments."""
-    project_root = tmp_path / "demo"
-    project_root.mkdir()
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
 
     runner = RecordingHandlerRunner()
     open_target_in_session(
-        project_root,
+        session_root,
         target="assets/weird name.png",
         neovim=StubNeovimAdapter(),
         browser=StubBrowserAdapter(),
@@ -364,8 +364,8 @@ def test_subprocess_runner_wraps_command_through_backend_inline(tmp_path: Path) 
     from hop.commands.open import SubprocessOpenHandlerRunner
     from hop.session import resolve_project_session
 
-    project_root = tmp_path / "demo"
-    project_root.mkdir()
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
     marker = tmp_path / "marker"
     # interactive_prefix wraps each command — we want the inline-wrapped
     # form to write a marker that includes the prefix's effect, proving the
@@ -377,7 +377,7 @@ def test_subprocess_runner_wraps_command_through_backend_inline(tmp_path: Path) 
         interactive_prefix="env HOP_OPEN_HANDLER_TEST=ran",
         noninteractive_prefix="env HOP_OPEN_HANDLER_TEST=ran",
     )
-    session = resolve_project_session(project_root)
+    session = resolve_project_session(session_root)
 
     runner = SubprocessOpenHandlerRunner()
     runner.run(session, backend, command=f"sh -c 'printf %s \"$HOP_OPEN_HANDLER_TEST\" > {marker}'")

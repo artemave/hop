@@ -87,13 +87,13 @@ def resolve_windows(
     (where empty is a meaningful sentinel).
 
     Probes run through ``transport`` (``sh -c`` locally, ``ssh`` for a remote
-    session) with ``{host}``/``{project_root}`` substituted, in ``cwd`` (the
+    session) with ``{host}``/``{session_root}`` substituted, in ``cwd`` (the
     local runner cwd — the project root locally, the host home for a remote
     session whose project root only exists on the remote; the remote cd rides
     inside the transport).
     """
 
-    probe_cwd = cwd if cwd is not None else session.project_root
+    probe_cwd = cwd if cwd is not None else session.session_root
 
     def probe(command: str) -> bool:
         substituted = substitute(command, session=session, host=host)

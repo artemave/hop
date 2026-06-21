@@ -24,11 +24,11 @@ def host_backend() -> CommandBackend:
     return CommandBackend(name="host", interactive_prefix="", noninteractive_prefix="")
 
 
-def build_session(project_root: Path) -> ProjectSession:
+def build_session(session_root: Path) -> ProjectSession:
     return ProjectSession(
-        project_root=project_root,
-        session_name=project_root.name,
-        workspace_name=f"p:{project_root.name}",
+        session_root=session_root,
+        session_name=session_root.name,
+        workspace_name=f"p:{session_root.name}",
     )
 
 
@@ -82,7 +82,7 @@ def test_host_backend_wrap_empty_returns_empty_argv(tmp_path: Path) -> None:
 
 
 def test_host_backend_wrap_substitutes_command(tmp_path: Path) -> None:
-    args = host_backend().wrap("cd {project_root} && pwd", build_session(tmp_path))
+    args = host_backend().wrap("cd {session_root} && pwd", build_session(tmp_path))
     assert args == ("sh", "-c", f"cd {shlex.quote(str(tmp_path))} && pwd")
 
 
@@ -139,8 +139,8 @@ def test_command_backend_wrap_prepends_prefix_to_command(tmp_path: Path) -> None
     assert args == ("sh", "-c", "compose exec devcontainer bin/dev")
 
 
-def test_command_backend_wrap_substitutes_project_root(tmp_path: Path) -> None:
-    backend = backend_from_config(make_backend(interactive_prefix="ssh host cd {project_root} &&"))
+def test_command_backend_wrap_substitutes_session_root(tmp_path: Path) -> None:
+    backend = backend_from_config(make_backend(interactive_prefix="ssh host cd {session_root} &&"))
 
     args = backend.wrap("exec zsh", build_session(tmp_path))
 
@@ -193,7 +193,7 @@ def test_command_backend_substitutes_path_with_spaces_safely(tmp_path: Path) -> 
     weird.mkdir()
     backend = backend_from_config(make_backend(interactive_prefix="", noninteractive_prefix=""))
 
-    args = backend.wrap("cd {project_root} && pwd", build_session(weird))
+    args = backend.wrap("cd {session_root} && pwd", build_session(weird))
 
     completed = subprocess.run(args, capture_output=True, text=True, check=True)
     assert completed.stdout.strip() == str(weird)

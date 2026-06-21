@@ -32,11 +32,11 @@ def make_backend(**kwargs: object) -> BackendConfig:
     return BackendConfig(**defaults)  # type: ignore[arg-type]
 
 
-def build_session(project_root: Path) -> ProjectSession:
+def build_session(session_root: Path) -> ProjectSession:
     return ProjectSession(
-        project_root=project_root,
-        session_name=project_root.name,
-        workspace_name=f"p:{project_root.name}",
+        session_root=session_root,
+        session_name=session_root.name,
+        workspace_name=f"p:{session_root.name}",
     )
 
 

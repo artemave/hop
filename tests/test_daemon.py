@@ -389,8 +389,8 @@ def test_sweep_stale_persisted_sessions_forgets_sessions_with_no_live_workspace(
 
     forgotten: list[str] = []
     sessions = {
-        "live": SessionState(name="live", project_root=tmp_path, backend=host_record),
-        "stale": SessionState(name="stale", project_root=tmp_path, backend=host_record),
+        "live": SessionState(name="live", session_root=tmp_path, backend=host_record),
+        "stale": SessionState(name="stale", session_root=tmp_path, backend=host_record),
     }
 
     sweep_stale_persisted_sessions(

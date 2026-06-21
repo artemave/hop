@@ -126,7 +126,7 @@ class SessionBrowserAdapter:
         if url is not None:
             self._launcher.launch(
                 _build_browser_command(self._browser_spec_for_session(session), url=url),
-                cwd=runner_cwd(session.host, session.project_root),
+                cwd=runner_cwd(session.host, session.session_root),
             )
 
     def _launch_session_browser(
@@ -139,7 +139,7 @@ class SessionBrowserAdapter:
         known_window_ids = {window.id for window in self._sway.list_windows()}
         self._launcher.launch(
             _build_browser_command(browser_spec, url=url, new_window=True),
-            cwd=runner_cwd(session.host, session.project_root),
+            cwd=runner_cwd(session.host, session.session_root),
         )
         window = self._wait_for_new_window(known_window_ids=known_window_ids)
         if window.workspace_name != session.workspace_name:

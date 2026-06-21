@@ -58,8 +58,8 @@ def _targets(
 
 def test_focused_session_emits_window_kill_and_other_session_switch_scripts() -> None:
     sessions = (
-        SessionListing(name="rails", workspace="p:rails", project_root=Path("/projects/rails")),
-        SessionListing(name="other", workspace="p:other", project_root=Path("/projects/other")),
+        SessionListing(name="rails", workspace="p:rails", session_root=Path("/projects/rails")),
+        SessionListing(name="other", workspace="p:other", session_root=Path("/projects/other")),
     )
 
     scripts = _targets(
@@ -81,7 +81,7 @@ def test_focused_session_emits_window_kill_and_other_session_switch_scripts() ->
 
 
 def test_custom_layout_roles_get_their_own_window_scripts() -> None:
-    sessions = (SessionListing(name="rails", workspace="p:rails", project_root=Path("/projects/rails")),)
+    sessions = (SessionListing(name="rails", workspace="p:rails", session_root=Path("/projects/rails")),)
 
     scripts = _targets(
         "p:rails",
@@ -97,7 +97,7 @@ def test_custom_layout_roles_get_their_own_window_scripts() -> None:
 
 
 def test_dispatched_command_per_role() -> None:
-    sessions = (SessionListing(name="rails", workspace="p:rails", project_root=Path("/projects/rails")),)
+    sessions = (SessionListing(name="rails", workspace="p:rails", session_root=Path("/projects/rails")),)
 
     scripts = _targets(
         "p:rails",
@@ -117,9 +117,9 @@ def test_dispatched_command_per_role() -> None:
 
 def test_off_session_workspace_emits_only_session_switch_scripts() -> None:
     sessions = (
-        SessionListing(name="rails", workspace="p:rails", project_root=Path("/projects/rails")),
-        SessionListing(name="other", workspace="p:other", project_root=Path("/projects/other")),
-        SessionListing(name="third", workspace="p:third", project_root=Path("/projects/third")),
+        SessionListing(name="rails", workspace="p:rails", session_root=Path("/projects/rails")),
+        SessionListing(name="other", workspace="p:other", session_root=Path("/projects/other")),
+        SessionListing(name="third", workspace="p:third", session_root=Path("/projects/third")),
     )
 
     scripts = _targets(
@@ -178,7 +178,7 @@ def test_create_script_dispatches_to_vicinae_dmenu_over_home_directories() -> No
 
 
 def test_focused_workspace_with_unregistered_session_falls_back_to_off_session_set() -> None:
-    sessions = (SessionListing(name="other", workspace="p:other", project_root=Path("/projects/other")),)
+    sessions = (SessionListing(name="other", workspace="p:other", session_root=Path("/projects/other")),)
 
     scripts = _targets(
         "p:not-a-real-session",
@@ -189,10 +189,10 @@ def test_focused_workspace_with_unregistered_session_falls_back_to_off_session_s
     assert [s.filename for s in scripts] == ["hop-switch-other", "hop-create", "hop-move"]
 
 
-def test_session_without_project_root_does_not_emit_window_scripts() -> None:
+def test_session_without_session_root_does_not_emit_window_scripts() -> None:
     sessions = (
-        SessionListing(name="lost", workspace="p:lost", project_root=None),
-        SessionListing(name="other", workspace="p:other", project_root=Path("/projects/other")),
+        SessionListing(name="lost", workspace="p:lost", session_root=None),
+        SessionListing(name="other", workspace="p:other", session_root=Path("/projects/other")),
     )
 
     scripts = _targets(
@@ -205,7 +205,7 @@ def test_session_without_project_root_does_not_emit_window_scripts() -> None:
 
 
 def test_role_filename_sanitization_replaces_disallowed_characters() -> None:
-    sessions = (SessionListing(name="rails", workspace="p:rails", project_root=Path("/projects/rails")),)
+    sessions = (SessionListing(name="rails", workspace="p:rails", session_root=Path("/projects/rails")),)
 
     scripts = _targets(
         "p:rails",
@@ -219,7 +219,7 @@ def test_role_filename_sanitization_replaces_disallowed_characters() -> None:
 
 
 def test_filename_collisions_are_resolved_with_numeric_suffixes() -> None:
-    sessions = (SessionListing(name="rails", workspace="p:rails", project_root=Path("/projects/rails")),)
+    sessions = (SessionListing(name="rails", workspace="p:rails", session_root=Path("/projects/rails")),)
 
     scripts = _targets(
         "p:rails",
@@ -240,7 +240,7 @@ def test_filename_collisions_are_resolved_with_numeric_suffixes() -> None:
 
 
 def test_filename_collisions_skip_taken_suffixes() -> None:
-    sessions = (SessionListing(name="rails", workspace="p:rails", project_root=Path("/projects/rails")),)
+    sessions = (SessionListing(name="rails", workspace="p:rails", session_root=Path("/projects/rails")),)
 
     # Three colliding sanitized roles force the dedupe loop to increment past
     # `-2` to find an available suffix.
@@ -256,8 +256,8 @@ def test_filename_collisions_skip_taken_suffixes() -> None:
 
 def test_every_generated_script_advertises_the_hop_icon_with_a_resolvable_path() -> None:
     sessions = (
-        SessionListing(name="rails", workspace="p:rails", project_root=Path("/tmp/rails")),
-        SessionListing(name="other", workspace="p:other", project_root=Path("/tmp/other")),
+        SessionListing(name="rails", workspace="p:rails", session_root=Path("/tmp/rails")),
+        SessionListing(name="other", workspace="p:other", session_root=Path("/tmp/other")),
     )
 
     scripts = _targets(
@@ -276,7 +276,7 @@ def test_every_generated_script_advertises_the_hop_icon_with_a_resolvable_path()
 
 
 def test_generated_script_has_directive_header_and_atomic_chmod_markers() -> None:
-    sessions = (SessionListing(name="rails", workspace="p:rails", project_root=Path("/tmp/rails")),)
+    sessions = (SessionListing(name="rails", workspace="p:rails", session_root=Path("/tmp/rails")),)
 
     scripts = _targets(
         "p:rails",
@@ -294,7 +294,7 @@ def test_generated_script_has_directive_header_and_atomic_chmod_markers() -> Non
 
 
 def test_window_script_packagename_is_session_name_for_subtitle_context() -> None:
-    sessions = (SessionListing(name="rails-app", workspace="p:rails-app", project_root=Path("/tmp/rails")),)
+    sessions = (SessionListing(name="rails-app", workspace="p:rails-app", session_root=Path("/tmp/rails")),)
 
     scripts = _targets(
         "p:rails-app",
@@ -312,8 +312,8 @@ def test_window_script_packagename_is_session_name_for_subtitle_context() -> Non
 
 def test_switch_script_has_empty_packagename_to_suppress_default_subtitle() -> None:
     sessions = (
-        SessionListing(name="rails", workspace="p:rails", project_root=Path("/tmp/rails")),
-        SessionListing(name="other", workspace="p:other", project_root=Path("/tmp/other")),
+        SessionListing(name="rails", workspace="p:rails", session_root=Path("/tmp/rails")),
+        SessionListing(name="other", workspace="p:other", session_root=Path("/tmp/other")),
     )
 
     scripts = _targets("p:rails", sessions, windows_for=lambda _: ())
@@ -326,7 +326,7 @@ def test_switch_script_has_empty_packagename_to_suppress_default_subtitle() -> N
 
 
 def test_kill_script_uses_setsid_detach_and_vicinae_close_guard() -> None:
-    sessions = (SessionListing(name="rails", workspace="p:rails", project_root=Path("/tmp/rails")),)
+    sessions = (SessionListing(name="rails", workspace="p:rails", session_root=Path("/tmp/rails")),)
 
     scripts = _targets(
         "p:rails",
@@ -348,7 +348,7 @@ def test_remote_session_scripts_use_hop_remote_env_not_cd() -> None:
         SessionListing(
             name="thonon-les-pains",
             workspace="p:thonon-les-pains",
-            project_root=Path("/home/admin/projects/thonon-les-pains"),
+            session_root=Path("/home/admin/projects/thonon-les-pains"),
             host="devbox.local",
         ),
     )
@@ -368,8 +368,8 @@ def test_remote_session_scripts_use_hop_remote_env_not_cd() -> None:
 
 def test_switch_script_dispatches_hop_switch_with_quoted_session_name() -> None:
     sessions = (
-        SessionListing(name="rails", workspace="p:rails", project_root=Path("/tmp/rails")),
-        SessionListing(name="weird name", workspace="p:weird name", project_root=Path("/tmp/weird")),
+        SessionListing(name="rails", workspace="p:rails", session_root=Path("/tmp/rails")),
+        SessionListing(name="weird name", workspace="p:weird name", session_root=Path("/tmp/weird")),
     )
 
     scripts = _targets(
@@ -443,7 +443,7 @@ def test_reconcile_overwrites_changed_content_atomically(tmp_path: Path) -> None
 
 def test_regenerate_wires_focused_workspace_sessions_and_windows_resolver(tmp_path: Path) -> None:
     sway = StubSway(focused_workspace="p:rails")
-    sessions = (SessionListing(name="rails", workspace="p:rails", project_root=Path("/tmp/rails")),)
+    sessions = (SessionListing(name="rails", workspace="p:rails", session_root=Path("/tmp/rails")),)
     windows = _windows(("shell", ""), ("editor", "nvim"))
 
     regenerate(
@@ -473,7 +473,7 @@ def test_default_scripts_dir_falls_back_to_local_share(monkeypatch: pytest.Monke
 def test_script_filename_prefix_is_reserved_namespace() -> None:
     # Sanity check that the prefix used for reconciliation matches the
     # prefix every generated filename starts with.
-    sessions = (SessionListing(name="rails", workspace="p:rails", project_root=Path("/tmp/rails")),)
+    sessions = (SessionListing(name="rails", workspace="p:rails", session_root=Path("/tmp/rails")),)
 
     scripts = _targets(
         "p:rails",
@@ -491,8 +491,8 @@ def test_every_script_invokes_hop_by_absolute_shell_quoted_path() -> None:
     hop binary by absolute path — and a path with shell-special characters
     (here, a space) must be quoted, never left to word-split."""
     sessions = (
-        SessionListing(name="rails", workspace="p:rails", project_root=Path("/tmp/rails")),
-        SessionListing(name="other", workspace="p:other", project_root=Path("/tmp/other")),
+        SessionListing(name="rails", workspace="p:rails", session_root=Path("/tmp/rails")),
+        SessionListing(name="other", workspace="p:other", session_root=Path("/tmp/other")),
     )
     hop_bin = "/opt/my hop/bin/hop"
     quoted = shlex.quote(hop_bin)
