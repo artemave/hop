@@ -219,6 +219,15 @@ command = ""  # inherits the shell role's kitten wrap
 
 Multiple matching layouts compose: a Rails project that also has `vite.config.ts` activates both layouts and gets their windows.
 
+A window `command` is an ordinary shell string, so make a long-running role idempotent — survive a window close and reopen — by freeing its resource before it starts:
+
+```toml
+[layouts.rails.windows.server]
+command = "fuser -k 3000/tcp 2>/dev/null; bin/dev"
+```
+
+The cleanup runs through the active backend, in the same namespace as the server — inside the container for a devcontainer backend, on the remote over ssh — so it clears an instance that outlived the previous window (common when the window's child was a `podman exec` / `ssh` transport that didn't propagate the hangup) before `bin/dev` rebinds the port. Use whatever the image has: `pkill -f bin/dev`, `lsof -ti:3000 | xargs -r kill`, etc.
+
 ### Editor keystroke templates
 
 `hop open <file>[:<line>]` and the `kitten/hints` dispatch path drive the editor by writing raw bytes into its kitty window. Two `[windows.editor]` fields let you swap the byte sequence for any TUI editor:
