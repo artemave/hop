@@ -112,7 +112,7 @@ A hop config has three named sections plus one scalar setting, all optional:
 - `[layouts.<name>]` - a named layout with one required `activate` shell-snippet probe and a list of windows that come up together when the probe matches.
 - `[windows.<role>]` - top-level windows (always active unless `activate = "false"`).
 - `workspace_layout = "<mode>"` - sway workspace layout applied at first session entry. One of `splith`, `splitv`, `stacking`, `tabbed`.
-- `debug_log = true` - append a diagnostic log of backend command runs (`prepare` / `teardown` / translate / auto-detect probes) and kitty bootstrap stdio to `$XDG_RUNTIME_DIR/hop/debug.log`. Set to a string to use a custom path. First place to look when `hop` fails silently - especially when launched from Vicinae, where stderr is not visible.
+- `debug_log = true` - opt-in diagnostic log; see [Troubleshooting](#troubleshooting).
 
 Configs live in `~/.config/hop/config.toml` or a project's `.hop.toml`.
 
@@ -285,8 +285,6 @@ hop --backend <name>
 
 Forces a backend at session creation regardless of auto-detect. Use `hop --backend host` to keep the host backend in a project that would otherwise auto-activate something else. The choice is persisted for the session's lifetime.
 
-For step-by-step devcontainer setup and troubleshooting, see [`docs/devcontainer.md`](docs/devcontainer.md). For running a session on a **remote** machine, see [`docs/hop-ssh.md`](docs/hop-ssh.md) - [`docs/ssh.md`](docs/ssh.md) and [`docs/ssh-devcontainer.md`](docs/ssh-devcontainer.md) document the hand-wired recipes it supersedes.
-
 ## Automation
 
 The `hop` CLI runs on the host. In a devcontainer session it's not available inside the container - scripts that drive a session run on the host side. The commands below are the integration surface for external tools.
@@ -322,6 +320,22 @@ Prompt detection uses Kitty's shell integration (OSC 133), which is on by defaul
 - `hop term --role <name>` - focus or create the window for the given role. `hop term --role editor` focuses the session's shared Neovim - launching it on first use, focusing it when it's already running, recreating it after `:qa`.
 - `hop browser [<url>]` - reuse or create a session-owned browser window. If the window was moved to another workspace, it's moved back before being focused.
 - `hop kill` - close every Sway/Kitty window owned by the session, remove its workspace, and run the backend's `teardown`. Run from the session root.
+
+## Troubleshooting
+
+Two log files help when something goes wrong:
+
+- **`debug_log`** (opt-in) - set `debug_log = true` in the config to append a diagnostic log of backend command runs (`prepare` / `teardown` / translate / auto-detect probes) and kitty bootstrap stdio to `$XDG_RUNTIME_DIR/hop/debug.log`. Set to a string to use a custom path. First place to look when `hop` fails silently - especially when launched from Vicinae, where stderr is not visible.
+- **Lifecycle popup logs** (always on) - every `prepare` / `teardown` popup streams its terminal output to `$XDG_RUNTIME_DIR/hop/popup-<session>-<kind>.log` (one file per session and kind, overwritten each run). `cat $XDG_RUNTIME_DIR/hop/popup-myproj-prepare.log` shows exactly what the last prepare run printed - the place to look when a `prepare` script misbehaves and the popup closed before you could read it.
+
+## Further reading
+
+In-depth guides live under [`docs/`](docs/):
+
+- [`docs/devcontainer.md`](docs/devcontainer.md) - step-by-step devcontainer backend setup and troubleshooting.
+- [`docs/hop-ssh.md`](docs/hop-ssh.md) - running a session on a remote machine with `hop ssh`.
+- [`docs/vigun.md`](docs/vigun.md) - the `hop run` / `hop tail` contract behind the vigun editor integration.
+- [`docs/ssh.md`](docs/ssh.md) and [`docs/ssh-devcontainer.md`](docs/ssh-devcontainer.md) - the hand-wired ssh recipes that `hop ssh` supersedes.
 
 ## Development
 
