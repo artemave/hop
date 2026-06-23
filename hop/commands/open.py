@@ -94,6 +94,16 @@ def dispatch_resolved_target(
     template = match_handler(resolved.path, handlers)
     if template is not None:
         runner = handler_runner if handler_runner is not None else SubprocessOpenHandlerRunner()
+        if session.host is not None:
+            # Remote session: the GUI viewer runs on the host, which can't see
+            # the remote path. Pull the file off the remote (or its container)
+            # to a host temp file and open that copy directly on the host —
+            # the backend's interactive prefix would launch the viewer on the
+            # remote, which has no display.
+            local_path = backend.fetch_to_host(session, resolved.path)
+            command = template.format(path=shlex.quote(str(local_path)))
+            runner.run(session, _BUILTIN_HOST_BACKEND, command=command)
+            return resolved
         command = template.format(path=shlex.quote(str(resolved.path)))
         runner.run(session, backend, command=command)
         return resolved

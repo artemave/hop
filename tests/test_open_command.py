@@ -387,3 +387,80 @@ def test_subprocess_runner_wraps_command_through_backend_inline(tmp_path: Path) 
     while time.monotonic() < deadline and not marker.exists():
         time.sleep(0.02)
     assert marker.read_text() == "ran"
+
+
+# ─── open_handlers on a remote session: download to host, open the copy ───────
+
+
+def test_remote_handler_downloads_to_host_and_opens_local_copy(tmp_path: Path) -> None:
+    """On a remote session a GUI viewer runs on the host, which can't see the
+    remote path. The dispatch must pull the file off the remote into a host
+    temp file and hand the handler *that* local path, not the remote one."""
+    import base64
+    import shlex
+    import subprocess
+    from typing import Sequence
+
+    from hop.backends import CommandBackend
+    from hop.commands.open import dispatch_resolved_target
+    from hop.targets import ResolvedFileTarget
+
+    payload = b"\x89PNG\r\n\x1a\nfake-pixels"
+    captured_stdin: list[str | None] = []
+
+    def fake_runner(
+        args: Sequence[str],
+        cwd: Path,
+        *,
+        stdin: str | None = None,
+    ) -> "subprocess.CompletedProcess[str]":
+        del args, cwd
+        # The backend pipes the `base64 <path>` script over stdin; record it so
+        # we can prove the *remote* path was the one read, then answer with the
+        # encoded bytes the real `base64` would emit.
+        captured_stdin.append(stdin)
+        return subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=base64.b64encode(payload).decode("ascii"),
+            stderr="",
+        )
+
+    backend = CommandBackend(
+        name="ssh",
+        interactive_prefix="",
+        noninteractive_prefix="",
+        runner=fake_runner,
+        host="devbox",
+    )
+    session = ProjectSession(
+        session_root=Path("/remote/proj"),
+        session_name="proj",
+        workspace_name="p:proj",
+        host="devbox",
+    )
+    runner = RecordingHandlerRunner()
+
+    dispatch_resolved_target(
+        ResolvedFileTarget(path=Path("public/logo.png")),
+        session=session,
+        backend=backend,
+        neovim=StubNeovimAdapter(),
+        browser=StubBrowserAdapter(),
+        handlers=_DEFAULT_HANDLERS,
+        handler_runner=runner,
+    )
+
+    # The remote path was the one fetched.
+    assert captured_stdin and "public/logo.png" in (captured_stdin[0] or "")
+
+    # Exactly one handler launch, against a *local* temp copy, not the remote path.
+    assert len(runner.calls) == 1
+    session_name, command = runner.calls[0]
+    assert session_name == "proj"
+    program, local_path = shlex.split(command)
+    assert program == "xdg-open"
+    local = Path(local_path)
+    assert local != Path("public/logo.png")
+    assert local.name == "logo.png"
+    assert local.read_bytes() == payload

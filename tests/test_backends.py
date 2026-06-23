@@ -521,6 +521,58 @@ def test_command_backend_read_file_raises_session_backend_error_on_other_failure
         backend.read_file(build_session(tmp_path), Path("/app/foo.rb"))
 
 
+# --- fetch_to_host: pull a backend file onto the host --------------------
+
+
+def test_command_backend_fetch_to_host_decodes_base64_into_local_copy(tmp_path: Path) -> None:
+    import base64
+
+    payload = b"\x89PNG\r\n\x1a\nfake-pixels"
+    runner = RecordingRunner(stdout=base64.b64encode(payload).decode("ascii"))
+    backend = backend_from_config(
+        make_backend(noninteractive_prefix="compose exec -T devcontainer"),
+        runner=runner,
+    )
+
+    local = backend.fetch_to_host(build_session(tmp_path), Path("/app/public/logo.png"))
+
+    # The host copy keeps the basename and holds the decoded bytes verbatim.
+    assert local.name == "logo.png"
+    assert local.read_bytes() == payload
+    # One subprocess call: prefix + bare `sh`, with the `base64 <path>` script
+    # (exit 42 sentinel) delivered over stdin so it survives an ssh prefix.
+    assert len(runner.calls) == 1
+    argv, _cwd, stdin = runner.calls[0]
+    assert argv == ("sh", "-c", "compose exec -T devcontainer sh")
+    assert stdin is not None
+    assert "exit 42" in stdin
+    assert "base64 /app/public/logo.png" in stdin
+
+
+def test_command_backend_fetch_to_host_raises_backend_file_not_found_on_sentinel_exit(tmp_path: Path) -> None:
+    from hop.backends import BackendFileNotFoundError
+
+    runner = RecordingRunner(returncode=42)
+    backend = backend_from_config(
+        make_backend(noninteractive_prefix="compose exec -T devcontainer"),
+        runner=runner,
+    )
+
+    with pytest.raises(BackendFileNotFoundError, match="not found"):
+        backend.fetch_to_host(build_session(tmp_path), Path("/missing.png"))
+
+
+def test_command_backend_fetch_to_host_raises_session_backend_error_on_other_failures(tmp_path: Path) -> None:
+    runner = RecordingRunner(returncode=1, stderr="container is gone")
+    backend = backend_from_config(
+        make_backend(noninteractive_prefix="compose exec -T devcontainer"),
+        runner=runner,
+    )
+
+    with pytest.raises(SessionBackendError, match="fetch_to_host failed"):
+        backend.fetch_to_host(build_session(tmp_path), Path("/app/foo.png"))
+
+
 # --- localhost URL translation -------------------------------------------
 
 

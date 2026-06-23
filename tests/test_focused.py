@@ -77,6 +77,10 @@ class _FakeBackend:
             raise BackendFileNotFoundError(f"fake: {path} not found")
         return content
 
+    def fetch_to_host(self, session: ProjectSession, path: Path) -> Path:
+        del session
+        return path
+
     def teardown(self, session: ProjectSession) -> None:
         del session
 

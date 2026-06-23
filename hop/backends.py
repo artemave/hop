@@ -7,7 +7,7 @@ import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from tempfile import gettempdir
+from tempfile import gettempdir, mkdtemp
 from typing import Protocol, Sequence
 from urllib.parse import urlsplit, urlunsplit
 
@@ -82,6 +82,8 @@ class SessionBackend(Protocol):
     def paths_exist(self, session: ProjectSession, paths: Sequence[Path]) -> set[Path]: ...
 
     def read_file(self, session: ProjectSession, path: Path) -> str: ...
+
+    def fetch_to_host(self, session: ProjectSession, path: Path) -> Path: ...
 
     def lifecycle_argv(self, step: str, session: ProjectSession) -> tuple[str, ...]: ...
 
@@ -538,6 +540,40 @@ class CommandBackend:
             msg = f"backend {self.name!r} read_file failed for {path}: {stderr}"
             raise SessionBackendError(msg)
         return result.stdout
+
+    def fetch_to_host(self, session: ProjectSession, path: Path) -> Path:
+        """Copy ``path`` from this backend's filesystem to a host temp file.
+
+        The open-handler dispatch uses this for remote sessions: a GUI viewer
+        like ``xdg-open`` runs on the host, so a file that lives on the remote
+        (or inside a remote container) must be materialized locally first. The
+        bytes ride a ``base64`` pipe through the same ``noninteractive_prefix`` +
+        transport as ``read_file``, so it works uniformly whether the file is on
+        a plain ssh host or behind a container ``exec``. The host copy keeps the
+        original basename so the viewer infers the right type from the
+        extension; it lands in a fresh temp dir the OS reaps on its own schedule.
+        """
+
+        substituted_prefix = substitute(self.noninteractive_prefix, session=session, host=self._host)
+        quoted = shlex.quote(str(path))
+        # Delivered over stdin to a bare `sh` (not `sh -c '<script>'`) so it
+        # survives argv-flattening prefixes like `ssh host …` — see read_file.
+        # exit 42 keeps "file missing" distinct from other base64/cat failures.
+        script = f"[ -f {quoted} ] || exit 42\nbase64 {quoted}\n"
+        composed = f"{substituted_prefix} sh".lstrip()
+        argv = self.noninteractive_transport(composed)
+        result = self.runner(argv, runner_cwd(self.host, session.session_root), stdin=script)
+        debug.log_command(argv, session.session_root, result)
+        if result.returncode == _READ_FILE_NOT_FOUND_EXIT:
+            msg = f"backend {self.name!r}: {path} not found"
+            raise BackendFileNotFoundError(msg)
+        if result.returncode != 0:
+            stderr = (result.stderr or result.stdout or "").strip()
+            msg = f"backend {self.name!r} fetch_to_host failed for {path}: {stderr}"
+            raise SessionBackendError(msg)
+        dest = Path(mkdtemp(prefix="hop-open-")) / path.name
+        dest.write_bytes(base64.b64decode(result.stdout))
+        return dest
 
 
 class UnknownBackendError(HopError):
