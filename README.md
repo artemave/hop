@@ -1,5 +1,3 @@
-# hop
-
 <img src="./hop/assets/hop-social-card.png" />
 
 hop is a context switcher for terminal work. hop facilitates working on multiple things at the same time.
