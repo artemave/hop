@@ -327,5 +327,5 @@ In-depth guides live under [`docs/`](docs/):
 
 ```bash
 uv sync
-uv run pytest -q
+make # to run tests and lints
 ```
