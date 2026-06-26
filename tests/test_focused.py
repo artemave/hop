@@ -77,7 +77,11 @@ class _FakeBackend:
             raise BackendFileNotFoundError(f"fake: {path} not found")
         return content
 
-    def fetch_to_host(self, session: ProjectSession, path: Path) -> Path:
+    def is_binary_file(self, session: ProjectSession, path: Path) -> bool:
+        del session, path
+        return False
+
+    def materialize_on_host(self, session: ProjectSession, path: Path) -> Path:
         del session
         return path
 

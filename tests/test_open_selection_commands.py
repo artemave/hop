@@ -301,6 +301,9 @@ def test_open_selection_in_window_dispatches_path_unchanged_to_nvim(tmp_path: Pa
         def translate_localhost_url(self, _session: ProjectSession, url: str) -> str:
             return url
 
+        def is_binary_file(self, _session: ProjectSession, _path: Path) -> bool:
+            return False
+
     session = open_selection_in_window(
         "app/models/user.rb",
         source_cwd=terminal_cwd.resolve(),

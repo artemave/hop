@@ -83,7 +83,9 @@ class SessionBackend(Protocol):
 
     def read_file(self, session: ProjectSession, path: Path) -> str: ...
 
-    def fetch_to_host(self, session: ProjectSession, path: Path) -> Path: ...
+    def is_binary_file(self, session: ProjectSession, path: Path) -> bool: ...
+
+    def materialize_on_host(self, session: ProjectSession, path: Path) -> Path: ...
 
     def lifecycle_argv(self, step: str, session: ProjectSession) -> tuple[str, ...]: ...
 
@@ -541,18 +543,63 @@ class CommandBackend:
             raise SessionBackendError(msg)
         return result.stdout
 
-    def fetch_to_host(self, session: ProjectSession, path: Path) -> Path:
-        """Copy ``path`` from this backend's filesystem to a host temp file.
+    def is_binary_file(self, session: ProjectSession, path: Path) -> bool:
+        """Classify ``path`` as binary (a host viewer) vs text (the editor).
 
-        The open-handler dispatch uses this for remote sessions: a GUI viewer
-        like ``xdg-open`` runs on the host, so a file that lives on the remote
-        (or inside a remote container) must be materialized locally first. The
-        bytes ride a ``base64`` pipe through the same ``noninteractive_prefix`` +
-        transport as ``read_file``, so it works uniformly whether the file is on
-        a plain ssh host or behind a container ``exec``. The host copy keeps the
-        original basename so the viewer infers the right type from the
-        extension; it lands in a fresh temp dir the OS reaps on its own schedule.
+        The file lives in this backend's filesystem namespace, so the probe
+        rides the same ``noninteractive_prefix`` + transport as ``read_file``
+        (over stdin to a bare ``sh`` so it survives argv-flattening prefixes
+        like ``ssh host …``). ``file --mime-encoding`` reports ``binary`` for
+        non-text and an encoding name (``utf-8`` / ``us-ascii``) for text — so
+        an SVG, which is ASCII text, correctly classifies as text. A missing or
+        empty file classifies as text too: missing keeps ``hop open
+        not-yet-created.rb`` landing in ``:enew``, and an empty file is
+        something you edit, not view. ``file`` itself exits 0 even for a missing
+        path, so existence and emptiness are tested explicitly.
         """
+
+        substituted_prefix = substitute(self.noninteractive_prefix, session=session, host=self._host)
+        quoted = shlex.quote(str(path))
+        script = (
+            f"p={quoted}\n"
+            'test -e "$p" || { printf text; exit 0; }\n'
+            'test -s "$p" || { printf text; exit 0; }\n'
+            "command -v file >/dev/null 2>&1 || { printf nofile; exit 0; }\n"
+            'case "$(file -b --mime-encoding "$p")" in\n'
+            "binary) printf binary ;;\n"
+            "*) printf text ;;\n"
+            "esac\n"
+        )
+        composed = f"{substituted_prefix} sh".lstrip()
+        argv = self.noninteractive_transport(composed)
+        result = self.runner(argv, runner_cwd(self.host, session.session_root), stdin=script)
+        debug.log_command(argv, session.session_root, result)
+        if result.returncode != 0:
+            stderr = (result.stderr or result.stdout or "").strip()
+            msg = f"backend {self.name!r} is_binary_file failed for {path}: {stderr}"
+            raise SessionBackendError(msg)
+        verdict = result.stdout.strip()
+        if verdict == "nofile":
+            msg = f"backend {self.name!r}: the 'file' command is required to open {path} but was not found"
+            raise SessionBackendError(msg)
+        return verdict == "binary"
+
+    def materialize_on_host(self, session: ProjectSession, path: Path) -> Path:
+        """Return a host-visible path for ``path``, copying it across if needed.
+
+        The host's ``xdg-open`` can only address files in the host filesystem.
+        For the in-place ``host`` backend the file already lives there, so the
+        path is returned unchanged — no point base64-copying a local file. Any
+        other backend (a local container or a remote ssh host) has its own
+        filesystem namespace, so the bytes ride a ``base64`` pipe through the
+        same ``noninteractive_prefix`` + transport as ``read_file`` into a host
+        temp file, returned in its place. The copy keeps the original basename
+        so the viewer infers the right type from the extension; it lands in a
+        fresh temp dir the OS reaps on its own schedule.
+        """
+
+        if self.host is None and not self.noninteractive_prefix:
+            return path
 
         substituted_prefix = substitute(self.noninteractive_prefix, session=session, host=self._host)
         quoted = shlex.quote(str(path))
@@ -569,7 +616,7 @@ class CommandBackend:
             raise BackendFileNotFoundError(msg)
         if result.returncode != 0:
             stderr = (result.stderr or result.stdout or "").strip()
-            msg = f"backend {self.name!r} fetch_to_host failed for {path}: {stderr}"
+            msg = f"backend {self.name!r} materialize_on_host failed for {path}: {stderr}"
             raise SessionBackendError(msg)
         dest = Path(mkdtemp(prefix="hop-open-")) / path.name
         dest.write_bytes(base64.b64decode(result.stdout))

@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Callable
 
 from hop.backends import CommandBackend, SessionBackend
-from hop.commands.open import OpenBrowserAdapter, OpenHandlerRunner, OpenNeovimAdapter, dispatch_resolved_target
+from hop.commands.open import HostOpener, OpenBrowserAdapter, OpenNeovimAdapter, dispatch_resolved_target
 from hop.kitty import session_name_from_listen_on
 from hop.session import ProjectSession
 from hop.state import SessionState, load_sessions, session_from_state
@@ -31,8 +31,7 @@ def open_selection_in_window(
     browser: OpenBrowserAdapter,
     sessions_loader: Callable[[], dict[str, SessionState]] = load_sessions,
     session_backend_for: Callable[[ProjectSession], SessionBackend] = lambda _session: _BUILTIN_HOST_BACKEND,
-    handlers_for_session: Callable[[ProjectSession], Sequence[tuple[str, str]]] = lambda _session: (),
-    handler_runner: OpenHandlerRunner | None = None,
+    opener: HostOpener | None = None,
 ) -> ProjectSession | None:
     session_name = session_name_from_listen_on(listen_on) if listen_on else None
     if session_name is None:
@@ -100,8 +99,7 @@ def open_selection_in_window(
         backend=backend,
         neovim=neovim,
         browser=browser,
-        handlers=handlers_for_session(session),
-        handler_runner=handler_runner,
+        opener=opener,
     )
     if isinstance(dispatched, ResolvedUrlTarget):
         logger.info("dispatching url %r to session %r", dispatched.url, session_name)

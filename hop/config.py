@@ -138,10 +138,6 @@ class HopConfig:
     windows: tuple[WindowConfig, ...] = ()
     workspace_layout: str | None = None
     debug_log: bool | str | None = None
-    # `[open_handlers]` table: each entry is (glob_pattern, command_template).
-    # Tuple-of-pairs (rather than dict) preserves user declaration order.
-    # Set the template to "" to disable a default and fall through to nvim.
-    open_handlers: tuple[tuple[str, str], ...] = ()
 
 
 # Hop's built-in ``host`` backend — the implicit auto-detect fallback. Lives
@@ -157,61 +153,10 @@ _BUILTIN_HOST_BACKEND = BackendConfig(
 )
 
 
-# Built-in ``[open_handlers]`` defaults. Deliberately a small allowlist of
-# known-binary extensions only — text formats (.json, .yaml, .toml, .md,
-# source code, .svg) are NOT here so they keep falling through to nvim.
-# Users override per pattern; set a template to "" to remove a default.
-_BUILTIN_OPEN_HANDLERS: tuple[tuple[str, str], ...] = (
-    # Images
-    ("*.png", "xdg-open {path}"),
-    ("*.jpg", "xdg-open {path}"),
-    ("*.jpeg", "xdg-open {path}"),
-    ("*.gif", "xdg-open {path}"),
-    ("*.webp", "xdg-open {path}"),
-    ("*.bmp", "xdg-open {path}"),
-    ("*.tiff", "xdg-open {path}"),
-    ("*.ico", "xdg-open {path}"),
-    # Audio
-    ("*.mp3", "xdg-open {path}"),
-    ("*.wav", "xdg-open {path}"),
-    ("*.ogg", "xdg-open {path}"),
-    ("*.flac", "xdg-open {path}"),
-    ("*.opus", "xdg-open {path}"),
-    ("*.m4a", "xdg-open {path}"),
-    # Video
-    ("*.mp4", "xdg-open {path}"),
-    ("*.mov", "xdg-open {path}"),
-    ("*.mkv", "xdg-open {path}"),
-    ("*.webm", "xdg-open {path}"),
-    ("*.avi", "xdg-open {path}"),
-    # Documents
-    ("*.pdf", "xdg-open {path}"),
-    ("*.docx", "xdg-open {path}"),
-    ("*.xlsx", "xdg-open {path}"),
-    ("*.pptx", "xdg-open {path}"),
-    ("*.odt", "xdg-open {path}"),
-    ("*.ods", "xdg-open {path}"),
-    ("*.odp", "xdg-open {path}"),
-    # Archives
-    ("*.zip", "xdg-open {path}"),
-    ("*.tar", "xdg-open {path}"),
-    ("*.tar.gz", "xdg-open {path}"),
-    ("*.tgz", "xdg-open {path}"),
-    ("*.tar.bz2", "xdg-open {path}"),
-    ("*.7z", "xdg-open {path}"),
-    ("*.rar", "xdg-open {path}"),
-    # Native binaries
-    ("*.exe", "xdg-open {path}"),
-    ("*.dll", "xdg-open {path}"),
-    ("*.so", "xdg-open {path}"),
-    ("*.dylib", "xdg-open {path}"),
-)
-
-
 def builtin_config() -> "HopConfig":
     """Hop-shipped defaults layered under user config at merge time."""
 
-    return HopConfig(backends=(_BUILTIN_HOST_BACKEND,), open_handlers=_BUILTIN_OPEN_HANDLERS)
+    return HopConfig(backends=(_BUILTIN_HOST_BACKEND,))
 
 
 def default_global_config_path() -> Path:
@@ -247,7 +192,6 @@ def merge_configs(project: HopConfig, global_: HopConfig) -> HopConfig:
             project.workspace_layout if project.workspace_layout is not None else global_with_builtin.workspace_layout
         ),
         debug_log=(project.debug_log if project.debug_log is not None else global_with_builtin.debug_log),
-        open_handlers=merge_open_handlers(project, global_with_builtin),
     )
 
 
@@ -272,18 +216,12 @@ def _layer_builtin_backends(global_: HopConfig) -> HopConfig:
         if entry.name in seen:
             continue
         merged.append(entry)
-    builtin_handlers = builtin.open_handlers
-    user_patterns = {pattern for pattern, _ in global_.open_handlers}
-    layered_handlers = tuple(global_.open_handlers) + tuple(
-        (pattern, template) for pattern, template in builtin_handlers if pattern not in user_patterns
-    )
     return HopConfig(
         backends=tuple(merged),
         layouts=global_.layouts,
         windows=global_.windows,
         workspace_layout=global_.workspace_layout,
         debug_log=global_.debug_log,
-        open_handlers=layered_handlers,
     )
 
 
@@ -327,30 +265,6 @@ def merge_layouts(project: HopConfig, global_: HopConfig) -> tuple[LayoutConfig,
         if g.name in seen:
             continue
         merged.append(g)
-    return tuple(merged)
-
-
-def merge_open_handlers(project: HopConfig, global_: HopConfig) -> tuple[tuple[str, str], ...]:
-    """Merge open_handlers by pattern, project-wins.
-
-    Project entries come first in declaration order; same-pattern entries
-    in the global+builtin set are dropped (the project replaces them).
-    Remaining global+builtin entries are appended in their declaration
-    order. Empty templates ("") survive the merge — `match_handler` treats
-    them as "no handler, fall through to nvim", which is how users opt out
-    of a built-in default for a specific extension.
-    """
-
-    seen: set[str] = set()
-    merged: list[tuple[str, str]] = []
-    for pattern, template in project.open_handlers:
-        seen.add(pattern)
-        merged.append((pattern, template))
-    for pattern, template in global_.open_handlers:
-        if pattern in seen:
-            continue
-        seen.add(pattern)
-        merged.append((pattern, template))
     return tuple(merged)
 
 
@@ -443,7 +357,7 @@ _EDITOR_ONLY_WINDOW_FIELDS = ("open_keys", "open_keys_with_line")
 _LEGACY_FLAT_BACKEND_FIELDS = ("shell", "editor")
 _LEGACY_BACKEND_WINDOWS_FIELD = "windows"
 _LEGACY_WORKSPACE_FIELD = "workspace"
-_TOP_LEVEL_KEYS = ("backends", "layouts", "windows", "workspace_layout", "debug_log", "open_handlers")
+_TOP_LEVEL_KEYS = ("backends", "layouts", "windows", "workspace_layout", "debug_log")
 
 
 def _load_config_file(path: Path) -> HopConfig:
@@ -478,33 +392,13 @@ def _parse_top_level(data: dict[str, Any], *, source: Path) -> HopConfig:
     windows = _parse_top_level_windows(data.get("windows"), source=source)
     workspace_layout = _parse_workspace_layout(data.get("workspace_layout"), source=source)
     debug_log = _parse_debug_log(data.get("debug_log"), source=source)
-    open_handlers = _parse_open_handlers(data.get("open_handlers"), source=source)
     return HopConfig(
         backends=backends,
         layouts=layouts,
         windows=windows,
         workspace_layout=workspace_layout,
         debug_log=debug_log,
-        open_handlers=open_handlers,
     )
-
-
-def _parse_open_handlers(raw: object, *, source: Path) -> tuple[tuple[str, str], ...]:
-    if raw is None:
-        return ()
-    if not isinstance(raw, dict):
-        msg = f"{source}: top-level 'open_handlers' must be a table, got {type(raw).__name__}"
-        raise HopConfigError(msg)
-    parsed: list[tuple[str, str]] = []
-    for pattern, template in cast(dict[str, Any], raw).items():
-        if not isinstance(template, str):
-            msg = (
-                f"{source}: open_handlers entry {pattern!r} must be a string command template, "
-                f"got {type(template).__name__}"
-            )
-            raise HopConfigError(msg)
-        parsed.append((pattern, template))
-    return tuple(parsed)
 
 
 def _parse_debug_log(raw: object, *, source: Path) -> bool | str | None:

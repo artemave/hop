@@ -25,8 +25,14 @@ class StubBrowserAdapter:
 
 
 class StubBackend:
-    def __init__(self, *, url_translation: dict[str, str] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        url_translation: dict[str, str] | None = None,
+        binary_names: frozenset[str] = frozenset(),
+    ) -> None:
         self._url_translation = url_translation or {}
+        self._binary_names = binary_names
         self.translate_calls: list[str] = []
 
     def translate_localhost_url(self, _session: ProjectSession, url: str) -> str:
@@ -36,6 +42,13 @@ class StubBackend:
     def paths_exist(self, _session: ProjectSession, paths: Sequence[Path]) -> set[Path]:
         # CLI path doesn't call this — included so the stub fits the SessionBackend Protocol.
         return set()
+
+    def is_binary_file(self, _session: ProjectSession, path: Path) -> bool:
+        return path.name in self._binary_names
+
+    def materialize_on_host(self, _session: ProjectSession, path: Path) -> Path:
+        # The local-host stub leaves the path where it is — no copy needed.
+        return path
 
 
 def test_file_target_dispatches_to_shared_editor(tmp_path: Path) -> None:
@@ -195,23 +208,15 @@ def test_nested_directories_are_distinct_sessions(tmp_path: Path) -> None:
     assert neovim.opened_targets == [("demo", "lib/a.rb"), ("src", "lib/b.rb")]
 
 
-# ─── open_handlers: binary files route through the system handler ─────────────
+# ─── binary files open on the host; text files go to the editor ──────────────
 
 
-class RecordingHandlerRunner:
+class RecordingOpener:
     def __init__(self) -> None:
-        self.calls: list[tuple[str, str]] = []
+        self.paths: list[Path] = []
 
-    def run(self, session: ProjectSession, backend: object, *, command: str) -> None:
-        del backend
-        self.calls.append((session.session_name, command))
-
-
-_DEFAULT_HANDLERS: tuple[tuple[str, str], ...] = (
-    ("*.png", "xdg-open {path}"),
-    ("*.pdf", "xdg-open {path}"),
-    ("*.tar.gz", "xdg-open {path}"),
-)
+    def open(self, path: Path) -> None:
+        self.paths.append(path)
 
 
 @pytest.mark.parametrize(
@@ -231,173 +236,137 @@ _DEFAULT_HANDLERS: tuple[tuple[str, str], ...] = (
     ],
 )
 def test_text_and_source_files_dispatch_to_nvim(tmp_path: Path, filename: str) -> None:
-    """The classifier is an allowlist of known-binary extensions. JSON,
-    YAML, TOML, Markdown, SVG, source code, and files without an
-    extension all fall through to the editor — this is the guarantee
-    users rely on for normal editing flow."""
+    """Anything the backend classifies as text — JSON, YAML, TOML, Markdown,
+    SVG, source code, files without an extension — falls through to the editor.
+    This is the guarantee users rely on for normal editing flow. (Real
+    ``file``-based classification is covered in ``test_backends``; here the
+    backend reports no binaries so we exercise the dispatch wiring.)"""
     session_root = tmp_path / "demo"
     session_root.mkdir()
 
     neovim = StubNeovimAdapter()
-    runner = RecordingHandlerRunner()
+    opener = RecordingOpener()
 
     open_target_in_session(
         session_root,
         target=filename,
         neovim=neovim,
         browser=StubBrowserAdapter(),
-        handlers_for_session=lambda _session: _DEFAULT_HANDLERS,
-        handler_runner=runner,
+        session_backend_for=lambda _session: StubBackend(),  # type: ignore[arg-type]
+        opener=opener,
     )
 
     assert neovim.opened_targets == [("demo", filename)]
-    assert runner.calls == []
+    assert opener.paths == []
 
 
-def test_png_file_dispatches_to_open_handler(tmp_path: Path) -> None:
+def test_binary_file_opens_on_host(tmp_path: Path) -> None:
+    """A file the backend classifies as binary skips the editor and is handed
+    to the host opener — the path the opener sees comes from
+    ``materialize_on_host`` (here a no-op for the local stub)."""
     session_root = tmp_path / "demo"
     session_root.mkdir()
 
     neovim = StubNeovimAdapter()
-    runner = RecordingHandlerRunner()
+    opener = RecordingOpener()
+    backend = StubBackend(binary_names=frozenset({"email-logo.png"}))
 
     open_target_in_session(
         session_root,
         target="public/email-logo.png",
         neovim=neovim,
         browser=StubBrowserAdapter(),
-        handlers_for_session=lambda _session: _DEFAULT_HANDLERS,
-        handler_runner=runner,
+        session_backend_for=lambda _session: backend,  # type: ignore[arg-type]
+        opener=opener,
     )
 
     assert neovim.opened_targets == []
-    assert runner.calls == [("demo", "xdg-open public/email-logo.png")]
+    assert opener.paths == [Path("public/email-logo.png")]
 
 
-def test_compound_extension_archive_matches(tmp_path: Path) -> None:
+def test_real_host_backend_classifies_png_as_binary_and_opens(tmp_path: Path) -> None:
+    """End to end through the default host backend: a real PNG on disk is
+    classified binary by ``file`` and routed to the host opener with its
+    actual (host-visible) path — no copy, since it already lives on the host."""
     session_root = tmp_path / "demo"
-    session_root.mkdir()
+    (session_root / "public").mkdir(parents=True)
+    png = session_root / "public" / "logo.png"
+    png.write_bytes(b"\x89PNG\r\n\x1a\nfake-pixels")
 
-    runner = RecordingHandlerRunner()
-    open_target_in_session(
-        session_root,
-        target="dist/release.tar.gz",
-        neovim=StubNeovimAdapter(),
-        browser=StubBrowserAdapter(),
-        handlers_for_session=lambda _session: _DEFAULT_HANDLERS,
-        handler_runner=runner,
-    )
-
-    assert runner.calls == [("demo", "xdg-open dist/release.tar.gz")]
-
-
-def test_user_can_override_default_handler(tmp_path: Path) -> None:
-    session_root = tmp_path / "demo"
-    session_root.mkdir()
-
-    overridden = (("*.png", "feh {path}"),)
-    runner = RecordingHandlerRunner()
-
-    open_target_in_session(
-        session_root,
-        target="logo.png",
-        neovim=StubNeovimAdapter(),
-        browser=StubBrowserAdapter(),
-        handlers_for_session=lambda _session: overridden,
-        handler_runner=runner,
-    )
-
-    assert runner.calls == [("demo", "feh logo.png")]
-
-
-def test_empty_template_opts_a_default_back_to_nvim(tmp_path: Path) -> None:
-    """``*.png = ""`` removes png from the handler set. Useful when a user
-    actively wants to edit pixel data in nvim (rare) or to disable the
-    default for a project that ships a different viewer."""
-    session_root = tmp_path / "demo"
-    session_root.mkdir()
-
-    opt_out = (("*.png", ""),)
     neovim = StubNeovimAdapter()
-    runner = RecordingHandlerRunner()
+    opener = RecordingOpener()
 
     open_target_in_session(
         session_root,
-        target="logo.png",
+        target="public/logo.png",
         neovim=neovim,
         browser=StubBrowserAdapter(),
-        handlers_for_session=lambda _session: opt_out,
-        handler_runner=runner,
+        opener=opener,
     )
 
-    assert neovim.opened_targets == [("demo", "logo.png")]
-    assert runner.calls == []
+    assert neovim.opened_targets == []
+    # The host backend resolves the relative path against the session root; the
+    # opener receives it unchanged (no materialize copy for a local file).
+    assert opener.paths == [Path("public/logo.png")]
 
 
-def test_handler_command_shell_quotes_path(tmp_path: Path) -> None:
-    """Paths with spaces or shell metacharacters must be shell-quoted into
-    the template, otherwise the launched viewer sees garbage arguments."""
+def test_real_host_backend_classifies_source_as_text(tmp_path: Path) -> None:
+    """The mirror of the PNG case: a real source file is classified text by
+    ``file`` and dispatched to the editor, not the host opener."""
     session_root = tmp_path / "demo"
     session_root.mkdir()
+    (session_root / "main.rs").write_text("fn main() {}\n")
 
-    runner = RecordingHandlerRunner()
+    neovim = StubNeovimAdapter()
+    opener = RecordingOpener()
+
     open_target_in_session(
         session_root,
-        target="assets/weird name.png",
-        neovim=StubNeovimAdapter(),
+        target="main.rs",
+        neovim=neovim,
         browser=StubBrowserAdapter(),
-        handlers_for_session=lambda _session: _DEFAULT_HANDLERS,
-        handler_runner=runner,
+        opener=opener,
     )
 
-    assert runner.calls == [("demo", "xdg-open 'assets/weird name.png'")]
+    assert neovim.opened_targets == [("demo", "main.rs")]
+    assert opener.paths == []
 
 
-def test_subprocess_runner_wraps_command_through_backend_inline(tmp_path: Path) -> None:
-    """The default runner sends the handler through ``backend.inline``, so
-    a non-host backend (devcontainer / ssh) executes the viewer inside the
-    backend's exec context rather than on the host. Exercise the real
-    Popen path with a command whose side effect we can observe."""
+def test_subprocess_host_opener_invokes_xdg_open(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The default opener execs the host's ``xdg-open`` with the file path.
+    A fake ``xdg-open`` on PATH records the argument, exercising the real
+    fire-and-forget Popen path without launching a GUI viewer."""
+    import os
     import time
 
-    from hop.backends import CommandBackend
-    from hop.commands.open import SubprocessOpenHandlerRunner
-    from hop.session import resolve_project_session
+    from hop.commands.open import SubprocessHostOpener
 
-    session_root = tmp_path / "demo"
-    session_root.mkdir()
-    marker = tmp_path / "marker"
-    # interactive_prefix wraps each command — we want the inline-wrapped
-    # form to write a marker that includes the prefix's effect, proving the
-    # prefix actually ran. `env FOO=bar` prepended in front means the
-    # command that runs is `env FOO=bar sh -c '... write marker ...'`,
-    # and the marker captures `$FOO` so we know the prefix took effect.
-    backend = CommandBackend(
-        name="prefixed",
-        interactive_prefix="env HOP_OPEN_HANDLER_TEST=ran",
-        noninteractive_prefix="env HOP_OPEN_HANDLER_TEST=ran",
-    )
-    session = resolve_project_session(session_root)
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    marker = tmp_path / "opened"
+    fake = bindir / "xdg-open"
+    fake.write_text(f'#!/bin/sh\nprintf %s "$1" > {marker}\n')
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
 
-    runner = SubprocessOpenHandlerRunner()
-    runner.run(session, backend, command=f"sh -c 'printf %s \"$HOP_OPEN_HANDLER_TEST\" > {marker}'")
+    target = tmp_path / "weird name.png"
+    SubprocessHostOpener().open(target)
 
     # Popen is fire-and-forget; give the child a moment to actually write.
     deadline = time.monotonic() + 2.0
     while time.monotonic() < deadline and not marker.exists():
         time.sleep(0.02)
-    assert marker.read_text() == "ran"
+    assert marker.read_text() == str(target)
 
 
-# ─── open_handlers on a remote session: download to host, open the copy ───────
+# ─── a binary on a remote session: copy to host, open the local copy ─────────
 
 
-def test_remote_handler_downloads_to_host_and_opens_local_copy(tmp_path: Path) -> None:
+def test_remote_binary_downloads_to_host_and_opens_local_copy(tmp_path: Path) -> None:
     """On a remote session a GUI viewer runs on the host, which can't see the
     remote path. The dispatch must pull the file off the remote into a host
-    temp file and hand the handler *that* local path, not the remote one."""
+    temp file and hand the opener *that* local path, not the remote one."""
     import base64
-    import shlex
     import subprocess
     from typing import Sequence
 
@@ -406,7 +375,7 @@ def test_remote_handler_downloads_to_host_and_opens_local_copy(tmp_path: Path) -
     from hop.targets import ResolvedFileTarget
 
     payload = b"\x89PNG\r\n\x1a\nfake-pixels"
-    captured_stdin: list[str | None] = []
+    captured_stdin: list[str] = []
 
     def fake_runner(
         args: Sequence[str],
@@ -415,16 +384,12 @@ def test_remote_handler_downloads_to_host_and_opens_local_copy(tmp_path: Path) -
         stdin: str | None = None,
     ) -> "subprocess.CompletedProcess[str]":
         del args, cwd
-        # The backend pipes the `base64 <path>` script over stdin; record it so
-        # we can prove the *remote* path was the one read, then answer with the
-        # encoded bytes the real `base64` would emit.
-        captured_stdin.append(stdin)
-        return subprocess.CompletedProcess(
-            args=[],
-            returncode=0,
-            stdout=base64.b64encode(payload).decode("ascii"),
-            stderr="",
-        )
+        # Two backend calls ride stdin: first the `file` classify probe, then
+        # the `base64 <path>` fetch. Answer each by what its script contains,
+        # recording both so we can prove the *remote* path was the one read.
+        captured_stdin.append(stdin or "")
+        stdout = "binary" if "file -b --mime-encoding" in (stdin or "") else base64.b64encode(payload).decode("ascii")
+        return subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr="")
 
     backend = CommandBackend(
         name="ssh",
@@ -439,7 +404,7 @@ def test_remote_handler_downloads_to_host_and_opens_local_copy(tmp_path: Path) -
         workspace_name="p:proj",
         host="devbox",
     )
-    runner = RecordingHandlerRunner()
+    opener = RecordingOpener()
 
     dispatch_resolved_target(
         ResolvedFileTarget(path=Path("public/logo.png")),
@@ -447,20 +412,15 @@ def test_remote_handler_downloads_to_host_and_opens_local_copy(tmp_path: Path) -
         backend=backend,
         neovim=StubNeovimAdapter(),
         browser=StubBrowserAdapter(),
-        handlers=_DEFAULT_HANDLERS,
-        handler_runner=runner,
+        opener=opener,
     )
 
-    # The remote path was the one fetched.
-    assert captured_stdin and "public/logo.png" in (captured_stdin[0] or "")
+    # The remote path was the one classified and fetched.
+    assert any("public/logo.png" in script for script in captured_stdin)
 
-    # Exactly one handler launch, against a *local* temp copy, not the remote path.
-    assert len(runner.calls) == 1
-    session_name, command = runner.calls[0]
-    assert session_name == "proj"
-    program, local_path = shlex.split(command)
-    assert program == "xdg-open"
-    local = Path(local_path)
+    # Exactly one opener launch, against a *local* temp copy, not the remote path.
+    assert len(opener.paths) == 1
+    local = opener.paths[0]
     assert local != Path("public/logo.png")
     assert local.name == "logo.png"
     assert local.read_bytes() == payload

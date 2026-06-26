@@ -521,10 +521,98 @@ def test_command_backend_read_file_raises_session_backend_error_on_other_failure
         backend.read_file(build_session(tmp_path), Path("/app/foo.rb"))
 
 
-# --- fetch_to_host: pull a backend file onto the host --------------------
+# --- is_binary_file: classify text (editor) vs binary (host viewer) ------
 
 
-def test_command_backend_fetch_to_host_decodes_base64_into_local_copy(tmp_path: Path) -> None:
+def test_command_backend_is_binary_file_classifies_real_binary(tmp_path: Path) -> None:
+    """The host backend runs the real ``file`` against a real file on disk."""
+    png = tmp_path / "logo.png"
+    png.write_bytes(b"\x89PNG\r\n\x1a\nfake-pixels\x00\x01\x02")
+
+    assert host_backend().is_binary_file(build_session(tmp_path), png) is True
+
+
+def test_command_backend_is_binary_file_classifies_text_and_svg(tmp_path: Path) -> None:
+    source = tmp_path / "main.rs"
+    source.write_text("fn main() {}\n")
+    svg = tmp_path / "icon.svg"
+    svg.write_text('<svg xmlns="http://www.w3.org/2000/svg"></svg>\n')
+
+    session = build_session(tmp_path)
+    assert host_backend().is_binary_file(session, source) is False
+    # SVG is ASCII text, so it stays in the editor rather than a viewer.
+    assert host_backend().is_binary_file(session, svg) is False
+
+
+def test_command_backend_is_binary_file_treats_missing_and_empty_as_text(tmp_path: Path) -> None:
+    """Missing keeps ``hop open not-yet-created.rb`` landing in ``:enew``;
+    an empty file is something you edit, not view (``file`` would otherwise
+    call an empty file ``binary``)."""
+    empty = tmp_path / "blank"
+    empty.touch()
+
+    session = build_session(tmp_path)
+    assert host_backend().is_binary_file(session, tmp_path / "does-not-exist") is False
+    assert host_backend().is_binary_file(session, empty) is False
+
+
+def test_command_backend_is_binary_file_pipes_probe_through_prefix(tmp_path: Path) -> None:
+    """A container backend wraps the probe in its no-TTY prefix and pipes the
+    classification script over stdin so it survives an argv-flattening prefix."""
+    runner = RecordingRunner(stdout="binary")
+    backend = backend_from_config(
+        make_backend(noninteractive_prefix="compose exec -T devcontainer"),
+        runner=runner,
+    )
+
+    assert backend.is_binary_file(build_session(tmp_path), Path("/app/logo.png")) is True
+
+    assert len(runner.calls) == 1
+    argv, _cwd, stdin = runner.calls[0]
+    assert argv == ("sh", "-c", "compose exec -T devcontainer sh")
+    assert stdin is not None
+    assert "file -b --mime-encoding" in stdin
+    assert "/app/logo.png" in stdin
+
+
+def test_command_backend_is_binary_file_raises_when_file_command_missing(tmp_path: Path) -> None:
+    runner = RecordingRunner(stdout="nofile")
+    backend = backend_from_config(
+        make_backend(noninteractive_prefix="compose exec -T devcontainer"),
+        runner=runner,
+    )
+
+    with pytest.raises(SessionBackendError, match="'file' command is required"):
+        backend.is_binary_file(build_session(tmp_path), Path("/app/logo.png"))
+
+
+def test_command_backend_is_binary_file_raises_on_probe_failure(tmp_path: Path) -> None:
+    runner = RecordingRunner(returncode=1, stderr="container is gone")
+    backend = backend_from_config(
+        make_backend(noninteractive_prefix="compose exec -T devcontainer"),
+        runner=runner,
+    )
+
+    with pytest.raises(SessionBackendError, match="is_binary_file failed"):
+        backend.is_binary_file(build_session(tmp_path), Path("/app/logo.png"))
+
+
+# --- materialize_on_host: give the host a path it can open ----------------
+
+
+def test_command_backend_materialize_on_host_returns_path_unchanged_for_host_backend(tmp_path: Path) -> None:
+    """The in-place host backend's files already live on the host — no copy,
+    no subprocess: the path is returned as-is."""
+    runner = RecordingRunner()
+    backend = CommandBackend(name="host", interactive_prefix="", noninteractive_prefix="", runner=runner)
+
+    result = backend.materialize_on_host(build_session(tmp_path), Path("/home/me/logo.png"))
+
+    assert result == Path("/home/me/logo.png")
+    assert runner.calls == []
+
+
+def test_command_backend_materialize_on_host_decodes_base64_into_local_copy(tmp_path: Path) -> None:
     import base64
 
     payload = b"\x89PNG\r\n\x1a\nfake-pixels"
@@ -534,7 +622,7 @@ def test_command_backend_fetch_to_host_decodes_base64_into_local_copy(tmp_path: 
         runner=runner,
     )
 
-    local = backend.fetch_to_host(build_session(tmp_path), Path("/app/public/logo.png"))
+    local = backend.materialize_on_host(build_session(tmp_path), Path("/app/public/logo.png"))
 
     # The host copy keeps the basename and holds the decoded bytes verbatim.
     assert local.name == "logo.png"
@@ -549,7 +637,7 @@ def test_command_backend_fetch_to_host_decodes_base64_into_local_copy(tmp_path: 
     assert "base64 /app/public/logo.png" in stdin
 
 
-def test_command_backend_fetch_to_host_raises_backend_file_not_found_on_sentinel_exit(tmp_path: Path) -> None:
+def test_command_backend_materialize_on_host_raises_backend_file_not_found_on_sentinel_exit(tmp_path: Path) -> None:
     from hop.backends import BackendFileNotFoundError
 
     runner = RecordingRunner(returncode=42)
@@ -559,18 +647,18 @@ def test_command_backend_fetch_to_host_raises_backend_file_not_found_on_sentinel
     )
 
     with pytest.raises(BackendFileNotFoundError, match="not found"):
-        backend.fetch_to_host(build_session(tmp_path), Path("/missing.png"))
+        backend.materialize_on_host(build_session(tmp_path), Path("/missing.png"))
 
 
-def test_command_backend_fetch_to_host_raises_session_backend_error_on_other_failures(tmp_path: Path) -> None:
+def test_command_backend_materialize_on_host_raises_session_backend_error_on_other_failures(tmp_path: Path) -> None:
     runner = RecordingRunner(returncode=1, stderr="container is gone")
     backend = backend_from_config(
         make_backend(noninteractive_prefix="compose exec -T devcontainer"),
         runner=runner,
     )
 
-    with pytest.raises(SessionBackendError, match="fetch_to_host failed"):
-        backend.fetch_to_host(build_session(tmp_path), Path("/app/foo.png"))
+    with pytest.raises(SessionBackendError, match="materialize_on_host failed"):
+        backend.materialize_on_host(build_session(tmp_path), Path("/app/foo.png"))
 
 
 # --- localhost URL translation -------------------------------------------

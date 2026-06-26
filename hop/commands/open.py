@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import fnmatch
-import shlex
 import subprocess
 from pathlib import Path
-from typing import Callable, Protocol, Sequence
+from typing import Callable, Protocol
 
 from hop.backends import CommandBackend, SessionBackend
 from hop.errors import HopError
@@ -27,43 +25,25 @@ class OpenBrowserAdapter(Protocol):
     def ensure_browser(self, session: ProjectSession, *, url: str | None) -> None: ...
 
 
-class OpenHandlerRunner(Protocol):
-    def run(self, session: ProjectSession, backend: SessionBackend, *, command: str) -> None: ...
+class HostOpener(Protocol):
+    def open(self, path: Path) -> None: ...
 
 
-class SubprocessOpenHandlerRunner:
-    """Default runner: wrap the command in the session backend's interactive
-    prefix and fire it via ``subprocess.Popen`` with ``start_new_session=True``
-    so the GUI viewer survives hop's exit. Stdout/stderr go to ``/dev/null`` —
-    these are fire-and-forget launches; the viewer process is not awaited."""
+class SubprocessHostOpener:
+    """Default opener: hand the host's ``xdg-open`` a host-visible path and
+    fire it via ``subprocess.Popen`` with ``start_new_session=True`` so the GUI
+    viewer survives hop's exit. Stdout/stderr go to ``/dev/null`` — these are
+    fire-and-forget launches; the viewer process is not awaited. The viewer is
+    always the user's own host tool, already configured to their preference."""
 
-    def run(self, session: ProjectSession, backend: SessionBackend, *, command: str) -> None:
-        wrapped = backend.inline(command, session)
+    def open(self, path: Path) -> None:
         subprocess.Popen(  # noqa: S603
-            ["sh", "-c", wrapped],
+            ["xdg-open", str(path)],  # noqa: S607
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL,
             start_new_session=True,
         )
-
-
-def match_handler(path: Path, handlers: Sequence[tuple[str, str]]) -> str | None:
-    """Pick a handler template for ``path``.
-
-    Iterates patterns in declaration order; first match wins. An empty
-    template means "no handler — fall through to nvim", letting users opt
-    out of a built-in default via ``"*.png" = ""``. Matching uses
-    ``fnmatch`` against the file *name*, not the full path or the typed
-    token, so Rails-resolved ``app/controllers/...rb`` paths and
-    ``path:42`` line suffixes don't interact with extension patterns.
-    """
-
-    name = path.name
-    for pattern, template in handlers:
-        if fnmatch.fnmatch(name, pattern):
-            return template or None
-    return None
 
 
 def dispatch_resolved_target(
@@ -73,8 +53,7 @@ def dispatch_resolved_target(
     backend: SessionBackend,
     neovim: OpenNeovimAdapter,
     browser: OpenBrowserAdapter,
-    handlers: Sequence[tuple[str, str]] = (),
-    handler_runner: OpenHandlerRunner | None = None,
+    opener: HostOpener | None = None,
 ) -> ResolvedTarget:
     """Hand a parsed target to the right adapter.
 
@@ -82,8 +61,10 @@ def dispatch_resolved_target(
     one, so callers logging the dispatch see the URL the browser actually got.
 
     Dispatch order for non-URL targets:
-    1. If the resolved file name matches an ``open_handlers`` pattern with a
-       non-empty template, run that command through the session backend.
+    1. If the backend classifies the file as binary, materialize it on the host
+       and open it with the host's ``xdg-open``. A file living in a container or
+       on a remote is copied across first, so the viewer always runs on the host
+       against a path it can see.
     2. Otherwise hand the target to the shared Neovim.
     """
 
@@ -91,21 +72,10 @@ def dispatch_resolved_target(
         translated_url = backend.translate_localhost_url(session, resolved.url)
         browser.ensure_browser(session, url=translated_url)
         return ResolvedUrlTarget(url=translated_url)
-    template = match_handler(resolved.path, handlers)
-    if template is not None:
-        runner = handler_runner if handler_runner is not None else SubprocessOpenHandlerRunner()
-        if session.host is not None:
-            # Remote session: the GUI viewer runs on the host, which can't see
-            # the remote path. Pull the file off the remote (or its container)
-            # to a host temp file and open that copy directly on the host —
-            # the backend's interactive prefix would launch the viewer on the
-            # remote, which has no display.
-            local_path = backend.fetch_to_host(session, resolved.path)
-            command = template.format(path=shlex.quote(str(local_path)))
-            runner.run(session, _BUILTIN_HOST_BACKEND, command=command)
-            return resolved
-        command = template.format(path=shlex.quote(str(resolved.path)))
-        runner.run(session, backend, command=command)
+    if backend.is_binary_file(session, resolved.path):
+        host_path = backend.materialize_on_host(session, resolved.path)
+        host_opener = opener if opener is not None else SubprocessHostOpener()
+        host_opener.open(host_path)
         return resolved
     neovim.open_target(session, target=resolved.editor_target)
     return resolved
@@ -118,8 +88,7 @@ def open_target_in_session(
     neovim: OpenNeovimAdapter,
     browser: OpenBrowserAdapter,
     session_backend_for: Callable[[ProjectSession], SessionBackend] = lambda _session: _BUILTIN_HOST_BACKEND,
-    handlers_for_session: Callable[[ProjectSession], Sequence[tuple[str, str]]] = lambda _session: (),
-    handler_runner: OpenHandlerRunner | None = None,
+    opener: HostOpener | None = None,
 ) -> ProjectSession:
     """Resolve and dispatch a single target for the cwd-derived session.
 
@@ -157,7 +126,6 @@ def open_target_in_session(
         backend=backend,
         neovim=neovim,
         browser=browser,
-        handlers=handlers_for_session(session),
-        handler_runner=handler_runner,
+        opener=opener,
     )
     return session

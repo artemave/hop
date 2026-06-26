@@ -146,7 +146,6 @@ def dispatch_selected_match(
             neovim=services.neovim,
             browser=services.browser,
             session_backend_for=services.session_backends.for_session,
-            handlers_for_session=services.session_backends.open_handlers_for_session,
         )
     except Exception:
         log.error("dispatch raised for selection=%r:\n%s", selection, traceback.format_exc())

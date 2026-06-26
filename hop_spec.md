@@ -300,10 +300,10 @@ hop open https://example.com/foo
 Behavior — the target is parsed by the same resolver the open-selection kitten uses, so URLs, Rails `Controller#action` refs, and `path[:line]` shapes all dispatch the same way from CLI as from a kitten hint:
 
 - URL → routed to the session browser (with the backend's localhost translation applied)
-- binary file (extension matches a configured `[open_handlers]` entry; defaults include image / audio / video / archive / PDF / office / native-binary extensions) → routed to that handler command (default `xdg-open {path}`), executed through the active backend's `interactive_prefix`. For a remote session the viewer is a host GUI surface, so the file is first copied off the remote (riding the same base64-over-transport path as `read_file`, so a file inside a remote container comes across too) to a host temp file, and the handler runs on the host against that local copy
+- binary file → opened on the host with `xdg-open`. Classification is by content, not extension: the backend runs `file --mime-encoding` against the file and anything that is not a text encoding is binary. The viewer always runs on the host, so when the file lives in a different filesystem namespace than the host — a local container or a remote ssh host — it is first copied to a host temp file (riding the same base64-over-transport path as `read_file`, so a file inside a container or on a remote comes across too) and `xdg-open` runs against that local copy. A file already on the host (the in-place `host` backend) is opened in place, no copy
 - file or Rails ref → ensure Neovim exists, focus the shared session editor window, open the file (jumping to `:line` when present)
 
-The `[open_handlers]` table is an allowlist of known-binary extensions — text formats (`.json`, `.yaml`, `.toml`, `.md`, `.svg`, source code, no-extension files) deliberately have no default handler and continue to dispatch to the editor.
+Text classifies to the editor — JSON, YAML, TOML, Markdown, SVG (ASCII text), source code, no-extension files. A missing file (so `hop open not-yet-created.rb` lands in an empty buffer) and an empty file also route to the editor. The backend must have the `file` command available for the probe.
 
 ---
 
