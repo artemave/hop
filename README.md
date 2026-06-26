@@ -41,15 +41,15 @@ Optionally:
 uv tool install git+https://github.com/artemave/hop
 ```
 
-Or with pip:
+Or with pipx:
 
 ```bash
-python3 -m pip install git+https://github.com/artemave/hop
+pipx install git+https://github.com/artemave/hop
 ```
 
 ### Upgrading
 
-After re-running `uv tool install --reinstall .` (or `pip install -U`), the running `hopd` is still the old version. Restart it to apply the upgrade:
+After re-running `uv tool install --reinstall .` (or `pipx upgrade hop`), the running `hopd` is still the old version. Restart it to apply the upgrade:
 
 ```bash
 hopd --restart
