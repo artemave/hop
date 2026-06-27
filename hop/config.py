@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import os
 import tomllib
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, TypeVar, cast
 
 from hop.errors import HopError
 
@@ -13,6 +14,9 @@ PROJECT_CONFIG_FILE = ".hop.toml"
 
 class HopConfigError(HopError):
     """Raised when a hop config file (global or project) has an invalid shape."""
+
+
+_T = TypeVar("_T")
 
 
 # Substitution placeholders supported in command strings.
@@ -225,64 +229,59 @@ def _layer_builtin_backends(global_: HopConfig) -> HopConfig:
     )
 
 
-def merge_backends(project: HopConfig, global_: HopConfig) -> tuple[BackendConfig, ...]:
-    """Merge project and global backend declarations into a single ordered tuple.
+def _merge_by_key(
+    project_items: tuple[_T, ...],
+    global_items: tuple[_T, ...],
+    *,
+    key: Callable[[_T], str],
+    merge_pair: Callable[[_T, _T], _T],
+) -> tuple[_T, ...]:
+    """Merge two ordered item tuples by key, project-wins-per-field.
 
-    Project entries come first in the order they appear. Same-named entries
-    are field-merged with project fields winning; the merged entry takes the
-    project's slot. Global entries whose names weren't covered are appended
-    after, preserving their declaration order.
+    Project entries keep their order and slot; a same-keyed global entry is
+    field-merged into the project one via ``merge_pair``. Global entries whose
+    keys weren't covered are appended after, preserving their order.
     """
 
-    by_name = {b.name: b for b in global_.backends}
+    by_key = {key(g): g for g in global_items}
     seen: set[str] = set()
-    merged: list[BackendConfig] = []
-    for p in project.backends:
-        seen.add(p.name)
-        g = by_name.get(p.name)
-        merged.append(_merge_backend_pair(p, g) if g is not None else p)
-    for g in global_.backends:
-        if g.name in seen:
+    merged: list[_T] = []
+    for p in project_items:
+        seen.add(key(p))
+        g = by_key.get(key(p))
+        merged.append(merge_pair(p, g) if g is not None else p)
+    for g in global_items:
+        if key(g) in seen:
             continue
         merged.append(g)
     return tuple(merged)
+
+
+def merge_backends(project: HopConfig, global_: HopConfig) -> tuple[BackendConfig, ...]:
+    return _merge_by_key(
+        project.backends,
+        global_.backends,
+        key=lambda b: b.name,
+        merge_pair=_merge_backend_pair,
+    )
 
 
 def merge_layouts(project: HopConfig, global_: HopConfig) -> tuple[LayoutConfig, ...]:
-    """Merge layouts the same way as backends — by name, project-wins-per-field.
-
-    Inside a same-named layout, windows are merged by role (per-field).
-    """
-
-    by_name = {layout.name: layout for layout in global_.layouts}
-    seen: set[str] = set()
-    merged: list[LayoutConfig] = []
-    for p in project.layouts:
-        seen.add(p.name)
-        g = by_name.get(p.name)
-        merged.append(_merge_layout_pair(p, g) if g is not None else p)
-    for g in global_.layouts:
-        if g.name in seen:
-            continue
-        merged.append(g)
-    return tuple(merged)
+    return _merge_by_key(
+        project.layouts,
+        global_.layouts,
+        key=lambda layout: layout.name,
+        merge_pair=_merge_layout_pair,
+    )
 
 
 def merge_windows(project: HopConfig, global_: HopConfig) -> tuple[WindowConfig, ...]:
-    """Merge top-level windows by role, project-wins-per-field."""
-
-    by_role = {window.role: window for window in global_.windows}
-    seen: set[str] = set()
-    merged: list[WindowConfig] = []
-    for p in project.windows:
-        seen.add(p.role)
-        g = by_role.get(p.role)
-        merged.append(_merge_window_pair(p, g) if g is not None else p)
-    for g in global_.windows:
-        if g.role in seen:
-            continue
-        merged.append(g)
-    return tuple(merged)
+    return _merge_by_key(
+        project.windows,
+        global_.windows,
+        key=lambda window: window.role,
+        merge_pair=_merge_window_pair,
+    )
 
 
 def _merge_backend_pair(project: BackendConfig, global_: BackendConfig) -> BackendConfig:
@@ -428,20 +427,43 @@ def _parse_workspace_layout(raw: object, *, source: Path) -> str | None:
     return raw
 
 
-def _parse_backends(raw: object, *, source: Path) -> tuple[BackendConfig, ...]:
+def _parse_named_tables(
+    raw: object,
+    *,
+    source: Path,
+    container: str,
+    item_label: Callable[[str], str],
+    parse_item: Callable[[str, dict[str, Any]], _T],
+) -> tuple[_T, ...]:
+    """Validate a TOML table whose values are themselves tables, parsing each.
+
+    ``container`` and ``item_label(key)`` shape the error messages for a missing
+    outer table and a non-table entry respectively.
+    """
+
     if raw is None:
         return ()
     if not isinstance(raw, dict):
-        msg = f"{source}: 'backends' must be a table, got {type(raw).__name__}"
+        msg = f"{source}: {container} must be a table, got {type(raw).__name__}"
         raise HopConfigError(msg)
 
-    parsed: list[BackendConfig] = []
-    for name, value in cast(dict[str, Any], raw).items():
+    parsed: list[_T] = []
+    for key, value in cast(dict[str, Any], raw).items():
         if not isinstance(value, dict):
-            msg = f"{source}: backend {name!r} must be a table, got {type(value).__name__}"
+            msg = f"{source}: {item_label(key)} must be a table, got {type(value).__name__}"
             raise HopConfigError(msg)
-        parsed.append(_parse_backend(name, cast(dict[str, Any], value), source=source))
+        parsed.append(parse_item(key, cast(dict[str, Any], value)))
     return tuple(parsed)
+
+
+def _parse_backends(raw: object, *, source: Path) -> tuple[BackendConfig, ...]:
+    return _parse_named_tables(
+        raw,
+        source=source,
+        container="'backends'",
+        item_label=lambda name: f"backend {name!r}",
+        parse_item=lambda name, table: _parse_backend(name, table, source=source),
+    )
 
 
 def _parse_backend(name: str, table: dict[str, Any], *, source: Path) -> BackendConfig:
@@ -492,19 +514,13 @@ def _parse_backend(name: str, table: dict[str, Any], *, source: Path) -> Backend
 
 
 def _parse_layouts(raw: object, *, source: Path) -> tuple[LayoutConfig, ...]:
-    if raw is None:
-        return ()
-    if not isinstance(raw, dict):
-        msg = f"{source}: 'layouts' must be a table, got {type(raw).__name__}"
-        raise HopConfigError(msg)
-
-    parsed: list[LayoutConfig] = []
-    for name, value in cast(dict[str, Any], raw).items():
-        if not isinstance(value, dict):
-            msg = f"{source}: layout {name!r} must be a table, got {type(value).__name__}"
-            raise HopConfigError(msg)
-        parsed.append(_parse_layout(name, cast(dict[str, Any], value), source=source))
-    return tuple(parsed)
+    return _parse_named_tables(
+        raw,
+        source=source,
+        container="'layouts'",
+        item_label=lambda name: f"layout {name!r}",
+        parse_item=lambda name, table: _parse_layout(name, table, source=source),
+    )
 
 
 def _parse_layout(name: str, table: dict[str, Any], *, source: Path) -> LayoutConfig:
@@ -523,49 +539,33 @@ def _parse_layout_windows(
     layout: str,
     source: Path,
 ) -> tuple[WindowConfig, ...]:
-    if raw is None:
-        return ()
-    if not isinstance(raw, dict):
-        msg = f"{source}: layout {layout!r} field 'windows' must be a table, got {type(raw).__name__}"
-        raise HopConfigError(msg)
-
-    parsed: list[WindowConfig] = []
-    for role, value in cast(dict[str, Any], raw).items():
-        if not isinstance(value, dict):
-            msg = f"{source}: layout {layout!r} window {role!r} must be a table, got {type(value).__name__}"
-            raise HopConfigError(msg)
-        parsed.append(
-            _parse_window(
-                role,
-                cast(dict[str, Any], value),
-                context=f"layout {layout!r} window {role!r}",
-                source=source,
-            )
-        )
-    return tuple(parsed)
+    return _parse_named_tables(
+        raw,
+        source=source,
+        container=f"layout {layout!r} field 'windows'",
+        item_label=lambda role: f"layout {layout!r} window {role!r}",
+        parse_item=lambda role, table: _parse_window(
+            role,
+            table,
+            context=f"layout {layout!r} window {role!r}",
+            source=source,
+        ),
+    )
 
 
 def _parse_top_level_windows(raw: object, *, source: Path) -> tuple[WindowConfig, ...]:
-    if raw is None:
-        return ()
-    if not isinstance(raw, dict):
-        msg = f"{source}: 'windows' must be a table, got {type(raw).__name__}"
-        raise HopConfigError(msg)
-
-    parsed: list[WindowConfig] = []
-    for role, value in cast(dict[str, Any], raw).items():
-        if not isinstance(value, dict):
-            msg = f"{source}: window {role!r} must be a table, got {type(value).__name__}"
-            raise HopConfigError(msg)
-        parsed.append(
-            _parse_window(
-                role,
-                cast(dict[str, Any], value),
-                context=f"window {role!r}",
-                source=source,
-            )
-        )
-    return tuple(parsed)
+    return _parse_named_tables(
+        raw,
+        source=source,
+        container="'windows'",
+        item_label=lambda role: f"window {role!r}",
+        parse_item=lambda role, table: _parse_window(
+            role,
+            table,
+            context=f"window {role!r}",
+            source=source,
+        ),
+    )
 
 
 def _parse_window(role: str, table: dict[str, Any], *, context: str, source: Path) -> WindowConfig:
