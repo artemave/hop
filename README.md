@@ -126,6 +126,24 @@ A session has a **backend** that decides what kind of environment its windows ru
 
 Note, that nvim runs on the backend, not on the host (unless backend is the host).
 
+**System clipboard on non-host backends.** With nvim on a remote host or inside a container there's no local display for `wl-copy`/`xclip` to reach, so the system clipboard has to go through OSC 52, which Kitty relays back to your real clipboard over the terminal. Point nvim's clipboard provider at OSC 52 whenever no display is present:
+
+```vim
+if empty($WAYLAND_DISPLAY) && empty($DISPLAY)
+  let g:clipboard = 'osc52'
+endif
+```
+
+Naming the provider explicitly is required when `'clipboard'` is set to `unnamed`/`unnamedplus` - that otherwise suppresses nvim's automatic OSC 52 detection, leaving the clipboard with no provider at all.
+
+Copy works with that alone. **Paste** (`"+p`) issues an OSC 52 *read*, which Kitty gates behind `clipboard_control` - the default `read-clipboard-ask` prompts on every paste. Add `read-clipboard` to your host `kitty.conf` to silence it:
+
+```conf
+clipboard_control write-clipboard write-primary read-clipboard read-primary
+```
+
+Trade-off: any program in any Kitty window can then read the system clipboard.
+
 ### Remote sessions over ssh
 
 Run any project's session on a remote machine with **`hop ssh <host>`**: it sets up the ssh transport (ControlMaster, the reverse-forwarded bridge socket, the installed shim) and drops you into a remote shell, where `cd <project> && hop` starts the session there. The project's own `.hop.toml` drives it - the *same* recipe runs a container locally or on the remote, with no ssh in the config and no local stub directory. hop wraps each command in the ssh transport for you, and `{host}` resolves to the remote (or `localhost` locally) for host-dependent values like `LOCAL_HOSTNAME={host}`. See **[docs/hop-ssh.md](docs/hop-ssh.md)** for the usage guide (and troubleshooting, e.g. raising sshd `MaxSessions`).
