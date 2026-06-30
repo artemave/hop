@@ -90,6 +90,25 @@ Each command is a single string. Hop runs it through `sh -c` after substituting 
 
 `port_translate` is invoked lazily when the kitten dispatch encounters a URL like `http://localhost:3000` printed inside the container — the recipe above resolves the running container by compose label (so it works whether the container was brought up by `podman-compose up` or by `podman-compose run …` with their different naming conventions) and asks `podman port` for the host-side port the container's port is published on. Stripped stdout (e.g. `35231`) replaces the URL's port; the host (`localhost`) is left untouched. The companion `host_translate` field exists for backends that swap the hostname instead — not needed for a same-host devcontainer.
 
+`{port}` carries the port from each dispatched URL, so a single `port_translate` already covers a project that exposes several ports from **one** container — `3000`, `5432`, and `1080` each substitute in turn and `podman port` returns the matching host port for whichever one was clicked.
+
+#### Multiple service containers
+
+If your compose project publishes ports from **separate** containers (a `web` service on `3000`, a `db` service on `5432`, a `mailcatcher` on `1080`), pin the service label to one container and the recipe above can't find the others. Drop the `--filter label=…service=…` and instead walk the project's containers, asking each for the host port of the requested container-side `{port}` — the one that publishes it answers, the rest exit non-zero:
+
+```toml
+[backends.devcontainer]
+port_translate = """
+  podman ps -q \\
+    --filter label=io.podman.compose.project=$(basename {session_root}) \\
+  | while read -r cid; do podman port "$cid" {port} 2>/dev/null && break; done \\
+  | head -1 \\
+  | cut -d: -f2
+"""
+```
+
+`podman port "$cid" {port}` prints `127.0.0.1:35231` for the container that publishes `{port}` and exits non-zero (printing nothing) for the others, so `break` stops at the first match and `cut -d: -f2` keeps the host port. Clicking `localhost:3000` resolves via the `web` container and `localhost:5432` via `db`, with no per-service config. (`docker ps` / `docker port` take the same arguments; swap the binary. There is no `--filter publish=<port>` in either `ps` — matching the published port is what the loop is for.)
+
 If you use a different compose tool, swap the prefix:
 
 ```toml
