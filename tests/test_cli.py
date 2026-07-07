@@ -260,6 +260,36 @@ def test_main_skips_popup_when_error_already_surfaced(
     assert "prepare failed" in capsys.readouterr().err
 
 
+def test_main_records_every_invocation_with_its_raw_argv(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every `hop` subcommand run lands in the debug log via
+    debug.log_invocation, so a vanished session can be traced to the exact
+    command (e.g. an accidental `kill`). The raw argv is passed through
+    verbatim — the source tag is resolved inside debug.log_invocation."""
+    from collections.abc import Sequence
+    from types import SimpleNamespace
+
+    from hop import cli
+
+    recorded: list[list[str]] = []
+
+    def capture(argv: Sequence[str]) -> None:
+        recorded.append(list(argv))
+
+    def fake_execute(_command: object, *, cwd: object, services: object) -> int:
+        del cwd, services
+        return 0
+
+    monkeypatch.setattr(cli.debug, "log_invocation", capture)
+    monkeypatch.setattr(cli, "load_global_config", lambda: SimpleNamespace(debug_log=None))
+    monkeypatch.setattr(cli, "_warn_if_hopd_version_stale", lambda: None)
+    monkeypatch.setattr(cli, "build_default_services", lambda: SimpleNamespace(popup=None))
+    monkeypatch.setattr(cli, "execute_command", fake_execute)
+
+    assert cli.main(["switch", "demo"]) == 0
+
+    assert recorded == [["switch", "demo"]]
+
+
 def test_main_intercepts_run_lifecycle_before_the_normal_flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`hop __run-lifecycle <spec>` is the popup window's internal entrypoint.
     It runs the spec directly (via run_popup_lifecycle) and must never fall

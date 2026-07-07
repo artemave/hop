@@ -521,6 +521,47 @@ def test_every_script_invokes_hop_by_absolute_shell_quoted_path() -> None:
         assert "$(hop " not in content
 
 
+def test_every_dispatching_script_tags_its_invocations_as_from_vicinae() -> None:
+    """Every generated script exports HOP_SOURCE=vicinae so the `hop`
+    commands it dispatches are attributed to the launcher (not a shell) in
+    the debug log — that's what lets a lost session be blamed on an
+    accidental `Hop kill` from vicinae vs. a CLI run."""
+    sessions = (
+        SessionListing(name="rails", workspace="p:rails", session_root=Path("/tmp/rails")),
+        SessionListing(name="other", workspace="p:other", session_root=Path("/tmp/other")),
+    )
+
+    scripts = _targets(
+        "p:rails",
+        sessions,
+        windows_for=lambda _: _windows(("editor", "nvim")),
+    )
+
+    by_filename = {s.filename: s.content for s in scripts}
+    assert set(by_filename) == {
+        "hop-window-editor",
+        "hop-kill",
+        "hop-switch-other",
+        "hop-create",
+        "hop-move",
+    }
+    for content in by_filename.values():
+        assert "export HOP_SOURCE=vicinae\n" in content
+
+
+def test_kill_script_exports_source_before_detaching() -> None:
+    """The kill script detaches via `setsid -f bash -c '...'`; the export
+    must precede it so the detached teardown's `hop` inherits HOP_SOURCE."""
+    sessions = (SessionListing(name="rails", workspace="p:rails", session_root=Path("/tmp/rails")),)
+
+    scripts = _targets("p:rails", sessions, windows_for=lambda _: ())
+    kill = next(s for s in scripts if s.filename == "hop-kill")
+
+    export_at = kill.content.index("export HOP_SOURCE=vicinae\n")
+    setsid_at = kill.content.index("exec setsid -f bash -c")
+    assert export_at < setsid_at
+
+
 # --- write_daemon_down_script ---------------------------------------------
 
 

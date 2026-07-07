@@ -113,6 +113,47 @@ def test_log_is_noop_when_disabled(tmp_path: Path) -> None:
     assert not target.exists()
 
 
+def test_log_invocation_defaults_source_to_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("HOP_SOURCE", raising=False)
+    target = tmp_path / "debug.log"
+    debug.configure(str(target))
+
+    debug.log_invocation(["switch", "demo"])
+
+    line = target.read_text().splitlines()[0]
+    assert line.endswith(" invoke [cli]: hop switch demo")
+
+
+def test_log_invocation_reads_source_from_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HOP_SOURCE", "vicinae")
+    target = tmp_path / "debug.log"
+    debug.configure(str(target))
+
+    debug.log_invocation(["kill"])
+
+    line = target.read_text().splitlines()[0]
+    assert line.endswith(" invoke [vicinae]: hop kill")
+
+
+def test_log_invocation_shell_quotes_arguments(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("HOP_SOURCE", raising=False)
+    target = tmp_path / "debug.log"
+    debug.configure(str(target))
+
+    debug.log_invocation(["switch", "weird name"])
+
+    assert "invoke [cli]: hop switch 'weird name'" in target.read_text()
+
+
+def test_log_invocation_is_noop_when_disabled(tmp_path: Path) -> None:
+    target = tmp_path / "debug.log"
+    debug.configure(None)
+
+    debug.log_invocation(["kill"])
+
+    assert not target.exists()
+
+
 def test_log_command_writes_argv_exit_stdout_stderr(tmp_path: Path) -> None:
     target = tmp_path / "debug.log"
     debug.configure(str(target))

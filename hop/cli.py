@@ -170,6 +170,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     services = build_default_services()
     try:
         debug.configure(load_global_config().debug_log)
+        debug.log_invocation(args)
         return execute_command(
             command,
             cwd=Path.cwd(),

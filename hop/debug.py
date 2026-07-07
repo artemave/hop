@@ -27,6 +27,11 @@ from typing import Sequence
 _path: Path | None = None
 _lock = threading.Lock()
 
+# Env var the vicinae launcher scripts set so their `hop` invocations are
+# tagged as coming from vicinae rather than a shell. Absent (a plain CLI run,
+# a sway keybinding) means the invocation defaults to ``cli``.
+SOURCE_ENV_VAR = "HOP_SOURCE"
+
 
 def default_log_path() -> Path:
     base = os.environ.get("XDG_RUNTIME_DIR") or gettempdir()
@@ -62,6 +67,21 @@ def log(message: str) -> None:
     if _path is None:
         return
     _write(f"{_timestamp()} {message}\n")
+
+
+def log_invocation(argv: Sequence[str]) -> None:
+    """Record a ``hop`` CLI invocation and where it came from.
+
+    Answers "why did my session vanish?" — an accidental ``kill`` where a
+    ``switch`` was meant shows up here as a distinct line, tagged with its
+    source (``HOP_SOURCE`` env; vicinae launcher scripts set ``vicinae``,
+    everything else defaults to ``cli``).
+    """
+    if _path is None:
+        return
+    source = os.environ.get(SOURCE_ENV_VAR) or "cli"
+    rendered = " ".join(shlex.quote(a) for a in ("hop", *argv))
+    _write(f"{_timestamp()} invoke [{source}]: {rendered}\n")
 
 
 def log_command(

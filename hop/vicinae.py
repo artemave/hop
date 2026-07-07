@@ -20,8 +20,13 @@ from typing import Callable, Iterable, Protocol, Sequence
 
 from hop.commands.session import SESSION_WORKSPACE_PREFIX, SessionListing
 from hop.config import BROWSER_ROLE
+from hop.debug import SOURCE_ENV_VAR
 from hop.layouts import WindowSpec
 from hop.session import ProjectSession
+
+# Every generated script exports this so the `hop` invocations it dispatches
+# are tagged as coming from vicinae in the debug log (see debug.log_invocation).
+_SOURCE_EXPORT = f"export {SOURCE_ENV_VAR}=vicinae\n"
 
 SCRIPT_FILENAME_PREFIX = "hop-"
 WINDOW_FILENAME_PREFIX = "hop-window-"
@@ -249,6 +254,7 @@ def _create_script(*, hop_bin: str) -> GeneratedScript:
             "# @vicinae.mode silent\n"
             "\n"
             "set -euo pipefail\n"
+            f"{_SOURCE_EXPORT}"
             "\n"
             'candidates=$(find "$HOME" -mindepth 1 -maxdepth 3 \\\n'
             "    \\( -name '.*' -o -name 'node_modules' -o -name 'target' "
@@ -296,6 +302,7 @@ def _move_script(*, hop_bin: str) -> GeneratedScript:
             "# @vicinae.mode silent\n"
             "\n"
             "set -euo pipefail\n"
+            f"{_SOURCE_EXPORT}"
             "\n"
             f"candidates=$({shlex.quote(hop_bin)} list)\n"
             'if [ -z "$candidates" ]; then\n'
@@ -363,6 +370,7 @@ def _render(*, title: str, description: str, package_name: str, session_root: Pa
         "# @vicinae.mode silent\n"
         "\n"
         "set -euo pipefail\n"
+        f"{_SOURCE_EXPORT}"
         f"{_session_setup(session_root, host)}"
         f"{body}"
     )
@@ -379,6 +387,7 @@ def _render_no_cd(*, title: str, description: str, package_name: str, body: str)
         "# @vicinae.mode silent\n"
         "\n"
         "set -euo pipefail\n"
+        f"{_SOURCE_EXPORT}"
         f"{body}"
     )
 
@@ -403,6 +412,7 @@ def _render_kill(
         f"# @vicinae.icon {_ICON_PATH}\n"
         "# @vicinae.mode silent\n"
         "\n"
+        f"{_SOURCE_EXPORT}"
         "exec setsid -f bash -c '\n"
         "    set -e\n"
         "    vicinae close || true\n"
