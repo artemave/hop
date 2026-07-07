@@ -1,4 +1,6 @@
-import shlex
+import json
+import os
+import sys
 from pathlib import Path
 from typing import Sequence
 
@@ -11,7 +13,9 @@ from hop.popup import (
     HopPopup,
     KittyHopPopup,
     _error_script,  # pyright: ignore[reportPrivateUsage]
-    _lifecycle_script,  # pyright: ignore[reportPrivateUsage]
+    _hold_shell,  # pyright: ignore[reportPrivateUsage]
+    _lifecycle_spec,  # pyright: ignore[reportPrivateUsage]
+    run_popup_lifecycle,
 )
 from hop.session import ProjectSession
 from hop.sway import SwayWindow
@@ -39,6 +43,22 @@ def _devcontainer_backend() -> CommandBackend:
 
 def _host_backend() -> CommandBackend:
     return CommandBackend(name="host", interactive_prefix="", noninteractive_prefix="")
+
+
+def _write_spec(
+    tmp_path: Path,
+    *,
+    steps: list[dict[str, object]],
+    kind: str = "prepare",
+    verb: str = "Preparing demo",
+) -> tuple[Path, Path]:
+    """Write a lifecycle spec JSON (as ``KittyHopPopup`` would) and return the
+    spec path plus the log path it points at."""
+    log = tmp_path / "popup.log"
+    spec = {"kind": kind, "verb": verb, "cwd": str(tmp_path), "log_path": str(log), "steps": steps}
+    spec_path = tmp_path / "spec.json"
+    spec_path.write_text(json.dumps(spec))
+    return spec_path, log
 
 
 class _FakePopen:
@@ -143,7 +163,8 @@ def test_run_teardown_noop_when_backend_has_no_teardown_command(tmp_path: Path) 
     assert launcher.calls == []
 
 
-def test_run_prepare_launches_plain_kitty_with_popup_app_id(tmp_path: Path) -> None:
+def test_run_prepare_launches_python_lifecycle_entrypoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
     launcher = _RecordingLauncher(exit_code=0)
     popup = KittyHopPopup(launcher=launcher)
     session = _make_session(tmp_path)
@@ -152,26 +173,25 @@ def test_run_prepare_launches_plain_kitty_with_popup_app_id(tmp_path: Path) -> N
 
     assert len(launcher.calls) == 1
     argv = launcher.calls[0]
-    # Plain `kitty` (NOT `kitten panel`) so the window is a regular
-    # xdg-shell toplevel; sway floats and centers it via a `for_window` rule
-    # installed before launch (see the sway-side test). `--class` sets the
-    # Wayland app_id the `for_window` rule matches on.
+    # Plain `kitty` (NOT `kitten panel`) so the window is a regular xdg-shell
+    # toplevel; sway floats and centers it via a `for_window` rule installed
+    # before launch. `--class` sets the Wayland app_id the rule matches on.
     assert argv[0] == "kitty"
     assert "panel" not in argv  # not a layer-shell overlay
-    assert "--class" in argv
     assert argv[argv.index("--class") + 1] == POPUP_APP_ID
-    # Script is the last arg after `-- bash -c`. ``bash`` (not ``sh``) so the
-    # lifecycle script can use process substitution to tee output to a
-    # per-session log file.
-    assert argv[-3:-1] == ("bash", "-c")
-    script = argv[-1]
-    assert f"cd {session.session_root}" in script
-    assert f"Preparing {session.session_name}" in script
-    assert "flock -o" in script
-    assert "compose up -d devcontainer" in script
+    # After `--` the window runs the lifecycle through hop itself (so it reuses
+    # the spinner) via `<python> -m hop __run-lifecycle <spec>`.
+    command = argv[argv.index("--") + 1 :]
+    assert command[0] == sys.executable
+    assert command[1:4] == ("-m", "hop", "__run-lifecycle")
+    spec = json.loads(Path(command[4]).read_text())
+    assert spec["verb"] == f"Preparing {session.session_name}"
+    assert spec["steps"][0]["display"] == "compose up -d devcontainer"
 
 
-def test_run_prepare_installs_for_window_rules_before_launching_kitty(tmp_path: Path) -> None:
+def test_run_prepare_installs_for_window_rules_before_launching_kitty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The float / resize / center happens via sway ``for_window`` rules
     issued *before* kitty launches. Sway evaluates ``for_window`` as the
     window registers, so the float must already be in place at registration
@@ -183,6 +203,7 @@ def test_run_prepare_installs_for_window_rules_before_launching_kitty(tmp_path: 
     first command to the ``for_window`` rule and runs the rest immediately
     against the currently focused container — which errors for ``move
     position center`` because the focused container isn't floating."""
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
     events: list[tuple[str, object]] = []
     sway = _OrderedSway(events=events)
     launcher = _OrderedLauncher(exit_code=0, events=events)
@@ -200,11 +221,10 @@ def test_run_prepare_installs_for_window_rules_before_launching_kitty(tmp_path: 
     assert [kind for kind, _payload in events] == ["sway", "sway", "sway", "launch"]
 
 
-def test_show_error_installs_same_for_window_rules(tmp_path: Path) -> None:
+def test_show_error_installs_same_for_window_rules() -> None:
     """``show_error`` shares the same ``hop:popup`` app_id, so the same
     ``for_window`` rules cover it — no workspace pinning is needed (errors
     have no session in scope and float on the user's current workspace)."""
-    del tmp_path  # unused
     events: list[tuple[str, object]] = []
     sway = _OrderedSway(events=events)
     launcher = _OrderedLauncher(exit_code=0, events=events)
@@ -217,9 +237,10 @@ def test_show_error_installs_same_for_window_rules(tmp_path: Path) -> None:
     assert [kind for kind, _payload in events] == ["sway", "sway", "sway", "launch"]
 
 
-def test_run_prepare_works_without_sway_adapter(tmp_path: Path) -> None:
+def test_run_prepare_works_without_sway_adapter(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Tests / non-sway contexts can omit the sway adapter; the popup still
     launches kitty and waits, just without the ``for_window`` install."""
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
     launcher = _RecordingLauncher(exit_code=0)
     popup = KittyHopPopup(launcher=launcher)  # sway omitted
 
@@ -228,7 +249,8 @@ def test_run_prepare_works_without_sway_adapter(tmp_path: Path) -> None:
     assert len(launcher.calls) == 1
 
 
-def test_run_teardown_announces_tearing_down_in_script(tmp_path: Path) -> None:
+def test_run_teardown_writes_teardown_spec(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
     launcher = _RecordingLauncher(exit_code=0)
     popup = KittyHopPopup(launcher=launcher)
     session = _make_session(tmp_path)
@@ -236,15 +258,16 @@ def test_run_teardown_announces_tearing_down_in_script(tmp_path: Path) -> None:
     popup.run_teardown(session, _devcontainer_backend())
 
     assert len(launcher.calls) == 1
-    argv = launcher.calls[0]
-    # Per-kind UI signal lives inside the script's announcement printf, not on
-    # the kitty command line.
-    script = argv[-1]
-    assert f"Tearing down {session.session_name}" in script
-    assert "compose down" in script
+    spec = json.loads(Path(launcher.calls[0][-1]).read_text())
+    assert spec["kind"] == "teardown"
+    assert spec["verb"] == f"Tearing down {session.session_name}"
+    assert spec["steps"][0]["display"] == "compose down"
 
 
-def test_run_prepare_raises_session_backend_error_on_non_zero_exit(tmp_path: Path) -> None:
+def test_run_prepare_raises_session_backend_error_on_non_zero_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
     launcher = _RecordingLauncher(exit_code=1)
     popup = KittyHopPopup(launcher=launcher)
     session = _make_session(tmp_path)
@@ -259,7 +282,10 @@ def test_run_prepare_raises_session_backend_error_on_non_zero_exit(tmp_path: Pat
     assert excinfo.value.surfaced_by_popup is True
 
 
-def test_run_teardown_raises_session_backend_error_on_non_zero_exit(tmp_path: Path) -> None:
+def test_run_teardown_raises_session_backend_error_on_non_zero_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
     launcher = _RecordingLauncher(exit_code=130)
     popup = KittyHopPopup(launcher=launcher)
     session = _make_session(tmp_path)
@@ -280,8 +306,9 @@ def test_show_error_launches_kitty_window_with_error_text() -> None:
     assert len(launcher.calls) == 1
     argv = launcher.calls[0]
     assert argv[0] == "kitty"
-    assert "--class" in argv
     assert argv[argv.index("--class") + 1] == POPUP_APP_ID
+    # The error panel is still a bash one-liner (no lifecycle to run).
+    assert argv[-3:-1] == ("bash", "-c")
     script = argv[-1]
     assert "hop:" in script
     # The type name surfaces in the printed message so the user sees both
@@ -303,176 +330,60 @@ def test_show_error_does_not_raise_when_launcher_exits_non_zero() -> None:
     popup.show_error(HopError("boom"))
 
 
-def test_lifecycle_script_prepare_shape(tmp_path: Path) -> None:
-    session = _make_session(tmp_path)
-    script = _lifecycle_script(session, ("compose up -d devcontainer",), kind="prepare", backend=_host_backend())
-
-    assert f"cd {session.session_root}" in script
-    assert f"Preparing {session.session_name}" in script
-    assert "$ %s\\n\\n" in script  # template literal — escaped \n for the printf format string
-    assert "flock -o" in script
-    assert "compose up -d devcontainer" in script
-    # `exit 0` shortcut on success.
-    assert "exit 0" in script
-    # `prepare failed (exit %d)` and a held-open shell on failure. Using a
-    # non-`exec` `sh` lets us run `exit "$status"` afterwards — `exec sh`
-    # would clobber the captured status when the user dismisses (sh exits 0)
-    # and the parent hop process would interpret the panel's exit-0 as
-    # "prepare succeeded".
-    assert "prepare" in script
-    assert "exec sh" not in script
-    assert "    sh" in script
-    assert 'exit "$status"' in script
+# --- lifecycle spec ------------------------------------------------------
 
 
-def test_lifecycle_script_multi_step_emits_per_step_blocks(tmp_path: Path) -> None:
-    """Each step renders its own announcement + flock + per-step failure guard.
-    The held-open ``sh`` fires *only* for the failing step; later steps don't
-    execute. Successful steps fall through to the next without dropping the
-    user into a shell."""
-    session = _make_session(tmp_path)
-    script = _lifecycle_script(
-        session, ("compose up", "install hop", "install kitten"), kind="prepare", backend=_host_backend()
-    )
-
-    assert "compose up" in script
-    assert "install hop" in script
-    assert "install kitten" in script
-    # One per-step failure guard per step (three total).
-    assert script.count('if [ "$status" -ne 0 ]; then') == 3
-    # The terminal `exit 0` only fires if every step succeeded.
-    assert script.rstrip().endswith("exit 0")
-
-
-def test_lifecycle_script_preserves_failure_status_through_held_shell(tmp_path: Path) -> None:
-    """End-to-end: the generated script, run through a real `sh`, propagates
-    the inner command's non-zero exit code even after the held shell is
-    dismissed. Simulates the user pressing Ctrl-D by feeding EOF on stdin."""
-    import subprocess
-
-    session = _make_session(tmp_path)
-    # Substitute a command that always fails (the `flock` invocation runs
-    # `sh -c "false"`).
-    script = _lifecycle_script(session, ("false",), kind="prepare", backend=_host_backend())
-
-    result = subprocess.run(
-        ["bash", "-c", script],
-        input="",  # EOF immediately — simulates Ctrl-D on the held shell
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-    # Original prepare exit code propagates through the panel.
-    assert result.returncode != 0
-    # User-visible announcement still rendered before the held shell.
-    assert f"Preparing {session.session_name}" in result.stdout
-    assert "prepare failed (exit 1)" in result.stdout
-
-
-def test_lifecycle_script_success_does_not_hold_shell(tmp_path: Path) -> None:
-    """On success the script must `exit 0` immediately — no held shell.
-    Otherwise the popup would linger and the user has to dismiss it manually."""
-    import subprocess
-
-    session = _make_session(tmp_path)
-    script = _lifecycle_script(session, ("true",), kind="prepare", backend=_host_backend())
-
-    result = subprocess.run(
-        ["bash", "-c", script],
-        input="",
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-    assert result.returncode == 0
-    # Failure-path banner must NOT appear when prepare succeeded.
-    assert "failed" not in result.stdout
-    assert "Press Ctrl-D" not in result.stdout
-
-
-def test_lifecycle_script_writes_output_to_per_session_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Running the lifecycle script produces a log file under
-    ``$XDG_RUNTIME_DIR/hop/`` containing the user-visible output — so prepare
-    failures can be diagnosed after the transient popup has closed."""
-    import subprocess
-
-    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
-    session = _make_session(tmp_path)
-    script = _lifecycle_script(session, ("printf 'hello-from-prepare\\n'",), kind="prepare", backend=_host_backend())
-
-    subprocess.run(["bash", "-c", script], input="", capture_output=True, text=True, check=True)
-
-    log_file = tmp_path / "hop" / f"popup-{session.session_name}-prepare.log"
-    assert log_file.exists()
-    contents = log_file.read_text()
-    assert f"Preparing {session.session_name}" in contents
-    assert "hello-from-prepare" in contents
-
-
-def test_lifecycle_script_log_overwrites_on_each_invocation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The log file is truncated on each popup run (``tee`` without ``-a``) so
-    stale output from a prior invocation never masks the current one."""
-    import subprocess
-
+def test_lifecycle_spec_prepare_shape(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
     session = _make_session(tmp_path)
 
-    first = _lifecycle_script(session, ("printf 'FIRST\\n'",), kind="prepare", backend=_host_backend())
-    subprocess.run(["bash", "-c", first], input="", capture_output=True, text=True, check=True)
-
-    second = _lifecycle_script(session, ("printf 'SECOND\\n'",), kind="prepare", backend=_host_backend())
-    subprocess.run(["bash", "-c", second], input="", capture_output=True, text=True, check=True)
-
-    contents = (tmp_path / "hop" / f"popup-{session.session_name}-prepare.log").read_text()
-    assert "FIRST" not in contents
-    assert "SECOND" in contents
-
-
-def test_lifecycle_script_teardown_shape(tmp_path: Path) -> None:
-    session = _make_session(tmp_path)
-    script = _lifecycle_script(session, ("compose down",), kind="teardown", backend=_host_backend())
-
-    assert f"Tearing down {session.session_name}" in script
-    assert "compose down" in script
-    assert "teardown" in script
-
-
-def test_lifecycle_script_quotes_shell_metacharacters(tmp_path: Path) -> None:
-    """`shlex.quote` keeps the announcement lines safe when the prepare
-    command contains shell metacharacters; the command itself runs verbatim
-    inside the `flock -o ... sh -c '<cmd>'` invocation. We verify semantics
-    by piping the generated script (minus the held-open `exec sh`) through a
-    real `sh -c` and capturing what it prints."""
-    import subprocess
-
-    session = _make_session(tmp_path)
-    nasty = "echo $(date) > /tmp/'foo bar'.log && true"
-
-    script = _lifecycle_script(session, (nasty,), kind="prepare", backend=_host_backend())
-
-    # Slice out everything up to (and including) the announcement printfs —
-    # before `flock` actually runs the user command. Running the full script
-    # would invoke `flock` and the user's prepare command for real. Drop `cd`
-    # (would change the test process's dir) and the `mkdir -p`/`exec > >(tee
-    # …)` log-redirect prelude (would create a stray log file in this test).
-    announcement = script.split("flock -o", 1)[0]
-    runnable = "\n".join(
-        line for line in announcement.splitlines() if not line.startswith(("cd ", "mkdir ", "exec > >(tee"))
+    spec = json.loads(
+        _lifecycle_spec(session, ("compose up -d devcontainer",), kind="prepare", backend=_host_backend())
     )
 
-    result = subprocess.run(["bash", "-c", runnable], capture_output=True, text=True, check=True)
+    assert spec["kind"] == "prepare"
+    assert spec["verb"] == f"Preparing {session.session_name}"
+    assert spec["cwd"] == str(session.session_root)
+    assert spec["log_path"].endswith(f"popup-{session.session_name}-prepare.log")
+    assert len(spec["steps"]) == 1
+    step = spec["steps"][0]
+    assert step["display"] == "compose up -d devcontainer"
+    # The composed argv is flock-guarded and carries the verbatim command.
+    assert step["argv"][0] == "flock"
+    assert "compose up -d devcontainer" in step["argv"]
 
-    # The user-visible announcement contains the verbatim command despite
-    # the embedded `'`, `$(...)`, `&&`.
-    assert nasty in result.stdout
+
+def test_lifecycle_spec_lists_steps_in_order(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    session = _make_session(tmp_path)
+
+    spec = json.loads(
+        _lifecycle_spec(
+            session, ("compose up", "install hop", "install kitten"), kind="prepare", backend=_host_backend()
+        )
+    )
+
+    assert [step["display"] for step in spec["steps"]] == ["compose up", "install hop", "install kitten"]
 
 
-def test_lifecycle_script_routes_remote_session_through_ssh_transport() -> None:
+def test_lifecycle_spec_teardown_verb(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    session = _make_session(tmp_path)
+
+    spec = json.loads(_lifecycle_spec(session, ("compose down",), kind="teardown", backend=_host_backend()))
+
+    assert spec["kind"] == "teardown"
+    assert spec["verb"] == f"Tearing down {session.session_name}"
+    assert spec["steps"][0]["display"] == "compose down"
+
+
+def test_lifecycle_spec_routes_remote_session_through_ssh_and_home_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """For a remote session the popup must cd locally to the host home and run
     each step over the ssh transport — never `cd <remote project root>` (which
-    only exists on the remote) followed by a local `sh -c`."""
+    only exists on the remote)."""
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
     session = ProjectSession(
         session_root=Path("/remote/proj"),
         session_name="proj",
@@ -488,15 +399,106 @@ def test_lifecycle_script_routes_remote_session_through_ssh_transport() -> None:
         host="devbox",
     )
 
-    script = _lifecycle_script(session, ("podman-compose up -d",), kind="prepare", backend=backend)
+    spec = json.loads(_lifecycle_spec(session, ("podman-compose up -d",), kind="prepare", backend=backend))
 
     # The popup's own cwd is the local home, not the remote project root.
-    assert f"cd {shlex.quote(str(Path.home()))}" in script
-    # The step runs over ssh under flock; the remote cd is inside the base64
-    # payload, so the remote path never appears as a bare local `cd`.
-    flock_line = next(line for line in script.splitlines() if line.startswith("flock -o"))
-    assert " ssh " in f" {flock_line} "
-    assert "cd /remote/proj &&" not in script
+    assert spec["cwd"] == str(Path.home())
+    argv = spec["steps"][0]["argv"]
+    assert argv[0] == "flock"
+    assert "ssh" in argv  # the step is transported over ssh
+
+
+# --- run_popup_lifecycle (the popup-side executor) -----------------------
+
+
+def test_run_popup_lifecycle_runs_steps_and_writes_clean_log(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    spec_path, log = _write_spec(
+        tmp_path,
+        steps=[
+            {"display": "step one", "argv": ["sh", "-c", "printf 'ONE\\n'"]},
+            {"display": "step two", "argv": ["sh", "-c", "printf 'TWO\\n'"]},
+        ],
+    )
+
+    code = run_popup_lifecycle(spec_path)
+
+    assert code == 0
+    contents = log.read_text()
+    assert "Preparing demo" in contents
+    assert "$ step one" in contents
+    assert "ONE" in contents
+    assert "TWO" in contents
+    # The tee'd log stays free of the spinner's cursor-control codes.
+    assert "\x1b" not in contents
+    assert "\r" not in contents
+    # The output was streamed to the terminal (stderr) too.
+    assert "ONE" in capsys.readouterr().err
+
+
+def test_run_popup_lifecycle_holds_shell_and_returns_code_on_failure(tmp_path: Path) -> None:
+    spec_path, log = _write_spec(
+        tmp_path,
+        steps=[{"display": "boom", "argv": ["sh", "-c", "printf 'DETAIL\\n' >&2; exit 3"]}],
+    )
+    held: list[bool] = []
+
+    code = run_popup_lifecycle(spec_path, hold=lambda: held.append(True))
+
+    assert code == 3
+    assert held == [True]  # the held shell ran so the user can read the error
+    contents = log.read_text()
+    assert "DETAIL" in contents  # the failing step's output is logged
+    assert "prepare failed (exit 3)" in contents
+
+
+def test_run_popup_lifecycle_short_circuits_after_a_failing_step(tmp_path: Path) -> None:
+    marker = tmp_path / "third-ran"
+    spec_path, _log = _write_spec(
+        tmp_path,
+        steps=[
+            {"display": "ok", "argv": ["sh", "-c", "true"]},
+            {"display": "fail", "argv": ["sh", "-c", "exit 2"]},
+            {"display": "third", "argv": ["sh", "-c", f"touch {marker}"]},
+        ],
+    )
+
+    code = run_popup_lifecycle(spec_path, hold=lambda: None)
+
+    assert code == 2
+    assert not marker.exists()  # the step after the failure never ran
+
+
+def test_run_popup_lifecycle_overwrites_log_each_run(tmp_path: Path) -> None:
+    spec_first, log = _write_spec(tmp_path, steps=[{"display": "a", "argv": ["sh", "-c", "printf 'FIRST\\n'"]}])
+    run_popup_lifecycle(spec_first)
+
+    spec_second, log_again = _write_spec(tmp_path, steps=[{"display": "b", "argv": ["sh", "-c", "printf 'SECOND\\n'"]}])
+    run_popup_lifecycle(spec_second)
+
+    assert log == log_again  # same (session, kind) → same log path
+    contents = log.read_text()
+    assert "FIRST" not in contents  # truncated, not appended
+    assert "SECOND" in contents
+
+
+def test_hold_shell_drops_into_a_shell_that_exits_on_eof() -> None:
+    """`_hold_shell` execs an interactive `sh` inheriting stdio. Point fd 0 at
+    /dev/null so the shell reads EOF and returns immediately (what the user's
+    Ctrl-D does), and run it in-process so coverage sees it — no mocks."""
+    devnull = os.open(os.devnull, os.O_RDONLY)
+    saved_stdin = os.dup(0)
+    try:
+        os.dup2(devnull, 0)
+        _hold_shell()
+    finally:
+        os.dup2(saved_stdin, 0)
+        os.close(saved_stdin)
+        os.close(devnull)
+
+
+# --- error panel ---------------------------------------------------------
 
 
 def test_error_script_includes_class_name_and_message() -> None:

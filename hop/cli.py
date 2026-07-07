@@ -154,6 +154,16 @@ def parse_command(argv: Sequence[str] | None = None) -> Command:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    args = list(argv) if argv is not None else sys.argv[1:]
+    # Internal entrypoint: the lifecycle popup window runs `hop __run-lifecycle
+    # <spec>` (see hop.popup.run_popup_lifecycle). It's self-contained — it needs
+    # no services and must not fall through to the normal session flow — so it's
+    # intercepted before parsing and building services.
+    if args[:1] == ["__run-lifecycle"]:
+        from hop.popup import run_popup_lifecycle
+
+        return run_popup_lifecycle(Path(args[1]))
+
     command = parse_command(argv)
     _warn_if_hopd_version_stale()
 

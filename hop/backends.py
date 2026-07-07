@@ -5,10 +5,12 @@ import os
 import shlex
 import subprocess
 import sys
+import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import gettempdir, mkdtemp
-from typing import Protocol, Sequence
+from typing import Callable, Protocol, Sequence
 from urllib.parse import urlsplit, urlunsplit
 
 from hop import debug
@@ -140,6 +142,158 @@ def default_runner(
 # accept a CommandRunner. Kept under the original private name so existing
 # call-sites don't need to change.
 _default_runner = default_runner
+
+
+# How often the sticky status line repaints its spinner (~10 fps). The elapsed
+# counter only changes once a second, but a faster repaint keeps the spinner
+# animating so the user can tell a slow step apart from a hung one even while
+# the step produces no output — a blocking `podman-compose up --wait` (or a
+# `docker build` waiting on a network fetch) can sit silent for minutes.
+_STATUS_REPAINT_SECONDS = 0.1
+
+# Braille spinner frames + the "return to column 0, erase the whole line"
+# sequence used to redraw the status line in place.
+_SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+_ERASE_LINE = "\r\x1b[2K"
+
+
+def _is_interactive() -> bool:
+    """Whether lifecycle steps have a live terminal to stream progress to.
+
+    The headless path renders its own popup (``hop.popup``); only the inline,
+    attached-terminal path streams output + status line from here. A
+    module-level seam so tests can force the interactive branch without a real
+    tty."""
+
+    return sys.stderr.isatty()
+
+
+class _StatusLine:
+    """A one-line status pinned to the bottom of the terminal that redraws in
+    place — ``<spinner> <label> (Ns)`` — while log lines scroll above it.
+
+    Two sinks keep the ephemeral UI and the real output apart. Cursor controls
+    (erase + spinner repaint) go only to ``status`` — a live tty. Log lines go
+    to ``out`` verbatim, which a caller can tee to a file without the file
+    filling up with escape codes and repeated spinner frames. For the inline
+    terminal path both are the same stream; the popup passes ``out`` = tee(tty,
+    logfile) and ``status`` = tty.
+
+    Every write funnels through one lock so a log line and a spinner repaint
+    can't interleave mid-escape-sequence. ``log`` erases the status line, prints
+    the log line, then repaints the status beneath it; a background thread
+    repaints on a timer to animate the spinner and advance the elapsed counter.
+    Interval + clock are injected so tests can drive it deterministically."""
+
+    def __init__(
+        self,
+        *,
+        label: str,
+        out: "SupportsWrite",
+        status: "SupportsWrite",
+        interval: float = _STATUS_REPAINT_SECONDS,
+        now: "Callable[[], float]" = time.monotonic,
+    ) -> None:
+        self._label = label
+        self._out = out
+        self._status = status
+        self._interval = interval
+        self._now = now
+        self._lock = threading.Lock()
+        self._frame = 0
+        self._start = now()
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def _repaint(self) -> None:
+        # Caller holds the lock. Erase the line and rewrite the status with no
+        # trailing newline, leaving the cursor parked on the status line.
+        elapsed = int(self._now() - self._start)
+        frame = _SPINNER_FRAMES[self._frame % len(_SPINNER_FRAMES)]
+        self._status.write(f"{_ERASE_LINE}{frame} {self._label} ({elapsed}s)")
+        self._status.flush()
+
+    def __enter__(self) -> "_StatusLine":
+        self._start = self._now()
+
+        def loop() -> None:
+            # `Event.wait` doubles as the sleep and the stop signal: `False` on
+            # timeout (advance + repaint), `True` the instant `__exit__` fires.
+            while not self._stop.wait(self._interval):
+                with self._lock:
+                    self._frame += 1
+                    self._repaint()
+
+        self._thread = threading.Thread(target=loop, daemon=True)
+        self._thread.start()
+        return self
+
+    def log(self, line: str) -> None:
+        # Wipe the spinner from the tty, print `line` (verbatim, so a tee'd log
+        # stays clean), then repaint the status beneath it. `line` carries its
+        # own trailing newline.
+        with self._lock:
+            self._status.write(_ERASE_LINE)
+            self._status.flush()
+            self._out.write(line)
+            self._out.flush()
+            self._repaint()
+
+    def __exit__(self, *exc: object) -> None:
+        self._stop.set()
+        assert self._thread is not None  # __enter__ always runs first under `with`
+        self._thread.join()
+        # Wipe the status line for good — the step's own output is the record.
+        with self._lock:
+            self._status.write(_ERASE_LINE)
+            self._status.flush()
+
+
+def stream_step(
+    argv: Sequence[str],
+    cwd: Path,
+    *,
+    announce: str,
+    label: str,
+    out: "SupportsWrite",
+    status: "SupportsWrite",
+    interval: float = _STATUS_REPAINT_SECONDS,
+    now: "Callable[[], float]" = time.monotonic,
+) -> subprocess.CompletedProcess[str]:
+    """Run one lifecycle step, streaming its output live under a status line.
+
+    Unlike ``default_runner`` (which pipes stdout so translate helpers can read
+    it, leaving lifecycle stdout invisible until the step returns), this echoes
+    the step's merged stdout+stderr to ``out`` as it arrives, so the user sees a
+    slow ``compose up`` / build progress in real time — scrolling above a sticky
+    ``_StatusLine`` (drawn on ``status``) whose spinner keeps moving even while
+    the step is silent (a blocking ``--wait`` would otherwise print nothing).
+    Output is accumulated and returned verbatim — free of the status line's
+    cursor controls — so the caller keeps a clean failure message + debug log."""
+
+    out.write(announce)
+    out.flush()
+    proc = subprocess.Popen(
+        list(argv),
+        cwd=str(cwd),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    captured: list[str] = []
+    assert proc.stdout is not None  # PIPE above guarantees a readable stream
+    with _StatusLine(label=label, out=out, status=status, interval=interval, now=now) as line_status:
+        for line in proc.stdout:
+            line_status.log(line)
+            captured.append(line)
+        proc.wait()
+    return subprocess.CompletedProcess(list(argv), proc.returncode, "".join(captured), "")
+
+
+class SupportsWrite(Protocol):
+    def write(self, data: str, /) -> object: ...
+
+    def flush(self) -> object: ...
 
 
 class Transport(Protocol):
@@ -461,9 +615,27 @@ class CommandBackend:
         """
 
         multi_step = len(steps) > 1
+        interactive = _is_interactive()
         for index, step in enumerate(steps, start=1):
             argv = _flock_sh(step, session=session, transport=self.noninteractive_transport, host=self._host)
-            result = self.runner(argv, runner_cwd(self.host, session.session_root))
+            cwd = runner_cwd(self.host, session.session_root)
+            # Attached-terminal runs stream the step's output live with a
+            # heartbeat, so a slow or blocking step (e.g. `compose up --wait`)
+            # never leaves the terminal frozen on a stale line. The headless
+            # path renders its own popup and never reaches here; tests drive the
+            # captured `self.runner` branch by leaving `_is_interactive` False.
+            if interactive:
+                # Inline terminal: the spinner and the output share one stream.
+                result = stream_step(
+                    argv,
+                    cwd,
+                    announce=f"$ {step}\n",
+                    label=f"hop {kind} is running",
+                    out=sys.stderr,
+                    status=sys.stderr,
+                )
+            else:
+                result = self.runner(argv, cwd)
             debug.log_command(argv, session.session_root, result)
             if result.returncode != 0:
                 stderr = (result.stderr or result.stdout or "").strip()

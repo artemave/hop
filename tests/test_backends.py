@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import shlex
 import subprocess
+import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Sequence
@@ -12,8 +14,10 @@ from hop.backends import (
     CommandBackend,
     SessionBackendError,
     UnknownBackendError,
+    _StatusLine,  # pyright: ignore[reportPrivateUsage]
     backend_from_config,
     select_backend,
+    stream_step,
 )
 from hop.config import BackendConfig
 from hop.session import ProjectSession
@@ -294,6 +298,135 @@ def test_command_backend_prepare_aborts_on_first_step_failure(tmp_path: Path) ->
         backend.prepare(build_session(tmp_path))
 
     assert len(runner.calls) == 2
+
+
+# --- interactive live output + status line --------------------------------
+
+
+class _CollectingSink:
+    """Thread-safe text sink standing in for a live terminal, so the status
+    line's repaint thread can write while the test reads. A real fake (like
+    ``StringIO``), not a mock: it holds no expectations, it just records what
+    was written."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._chunks: list[str] = []
+
+    def write(self, data: str, /) -> int:
+        with self._lock:
+            self._chunks.append(data)
+        return len(data)
+
+    def flush(self) -> None:
+        pass
+
+    def text(self) -> str:
+        with self._lock:
+            return "".join(self._chunks)
+
+
+def test_status_line_animates_the_spinner_in_place_and_erases_on_exit() -> None:
+    out = _CollectingSink()
+    status = _CollectingSink()
+    # Constant clock → every repaint reports the same elapsed (0s), so the text
+    # is deterministic; the real 10ms interval drives the animation.
+    with _StatusLine(label="hop prepare is running", out=out, status=status, interval=0.01, now=lambda: 7.0):
+        while status.text().count("is running") < 3:
+            time.sleep(0.005)
+    text = status.text()
+
+    assert "hop prepare is running (0s)" in text
+    # Each repaint returns to column 0 and clears the line — i.e. redraws in place.
+    assert "\r\x1b[2K" in text
+    # The spinner cycles through distinct frames rather than sitting still.
+    assert len({c for c in text if c in "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"}) >= 2
+    # On exit the status line is wiped, leaving the scrollback to the real output.
+    assert text.endswith("\r\x1b[2K")
+    # No log lines → the clean `out` sink stays empty.
+    assert out.text() == ""
+
+
+def test_status_line_log_prints_clean_to_out_and_confines_cursor_codes_to_status() -> None:
+    out = _CollectingSink()
+    status = _CollectingSink()
+    # A huge interval means no timer repaint fires; the only draw is from log().
+    with _StatusLine(label="hop prepare is running", out=out, status=status, interval=100.0, now=lambda: 3.0) as line:
+        line.log("mise ruby build\n")
+
+    # The log line reaches `out` verbatim — no cursor controls, so a tee'd log
+    # file stays clean.
+    assert out.text() == "mise ruby build\n"
+    # The erase + spinner repaint are confined to the tty `status` sink.
+    assert "\r\x1b[2K" in status.text()
+    assert "hop prepare is running (0s)" in status.text()
+
+
+def test_stream_step_streams_clean_output_to_out_and_spinner_to_status(tmp_path: Path) -> None:
+    out = _CollectingSink()
+    status = _CollectingSink()
+    argv = ("sh", "-c", "printf 'to-stdout\\n'; printf 'to-stderr\\n' >&2; exit 7")
+    # A huge interval means the fast command finishes before a spinner repaint.
+    result = stream_step(
+        argv,
+        tmp_path,
+        announce="$ demo-step\n",
+        label="hop prepare is running",
+        out=out,
+        status=status,
+        interval=100.0,
+    )
+
+    assert result.returncode == 7
+    # Merged stdout+stderr is captured for the caller's failure message / debug log…
+    assert "to-stdout\n" in result.stdout
+    assert "to-stderr\n" in result.stdout
+    assert result.stderr == ""
+    # …and stays free of the status line's cursor-control codes.
+    assert "\x1b" not in result.stdout
+    assert "\r" not in result.stdout
+
+    # `out` gets announce + merged output, clean enough to tee into a log file.
+    clean = out.text()
+    assert clean.startswith("$ demo-step\n")  # announcement precedes output
+    assert "to-stdout" in clean
+    assert "to-stderr" in clean
+    assert "\x1b" not in clean
+    # The spinner / erase codes live only on the tty `status` sink.
+    assert "\r\x1b[2K" in status.text()
+
+
+def test_prepare_streams_live_when_interactive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    monkeypatch.setattr("hop.backends._is_interactive", lambda: True)
+    runner = RecordingRunner()
+    backend = backend_from_config(make_backend(prepare=("printf 'hello-live\\n'",)), runner=runner)
+
+    backend.prepare(build_session(tmp_path))
+
+    # The interactive branch streams through stream_step, bypassing the
+    # captured runner entirely.
+    assert runner.calls == []
+    err = capsys.readouterr().err
+    assert "$ printf 'hello-live\\n'" in err  # the announced step
+    assert "hello-live" in err  # its output, streamed live to the terminal
+    assert "hop prepare is running" in err  # the status-line label names the phase
+
+
+def test_prepare_interactive_failure_surfaces_captured_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    monkeypatch.setattr("hop.backends._is_interactive", lambda: True)
+    backend = backend_from_config(
+        make_backend(prepare=("echo boom-detail >&2; exit 3",)),
+        runner=RecordingRunner(),
+    )
+
+    # Streaming live must not swallow the failure: the captured output still
+    # feeds the raised error (and the debug log), so callers aren't left blind.
+    with pytest.raises(SessionBackendError, match="boom-detail"):
+        backend.prepare(build_session(tmp_path))
 
 
 def test_command_backend_translate_uses_last_step_stdout(tmp_path: Path) -> None:

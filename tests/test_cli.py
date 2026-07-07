@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from hop.cli import parse_command
@@ -256,3 +258,32 @@ def test_main_skips_popup_when_error_already_surfaced(
     # must not pop a second, redundant error panel.
     assert popup.shown_errors == []
     assert "prepare failed" in capsys.readouterr().err
+
+
+def test_main_intercepts_run_lifecycle_before_the_normal_flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`hop __run-lifecycle <spec>` is the popup window's internal entrypoint.
+    It runs the spec directly (via run_popup_lifecycle) and must never fall
+    through to the session flow, so any attempt to build services here fails
+    the test."""
+    import json
+
+    from hop import cli
+
+    def _no_services() -> object:
+        raise AssertionError("__run-lifecycle must not build services / enter the normal flow")
+
+    monkeypatch.setattr(cli, "build_default_services", _no_services)
+
+    log = tmp_path / "out.log"
+    spec = {
+        "kind": "prepare",
+        "verb": "Preparing demo",
+        "cwd": str(tmp_path),
+        "log_path": str(log),
+        "steps": [{"display": "greet", "argv": ["sh", "-c", "printf 'FROM-SPEC\\n'"]}],
+    }
+    spec_path = tmp_path / "spec.json"
+    spec_path.write_text(json.dumps(spec))
+
+    assert cli.main(["__run-lifecycle", str(spec_path)]) == 0
+    assert "FROM-SPEC" in log.read_text()
