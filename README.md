@@ -229,26 +229,26 @@ Built-in roles `shell`, `editor`, and `browser` ship with hop defaults:
 
 To change a built-in, declare it as a top-level window: `[windows.editor] activate = "false"` opts out of the editor for this config; `[windows.browser] activate = "true"` activates the browser; `[windows.shell] command = "/usr/bin/zsh"` overrides the shell.
 
-To enable Kitty shell integration end-to-end inside a non-host backend (so `hop tail` and other OSC-133-dependent features work for in-container / over-ssh shells), wrap the shell role with kitty's recommended mechanism - `kitten run-shell` for container-style backends, `kitten ssh` as the prefix for ssh backends. The empty-command inheritance rule means every other role in the same session picks up the same wrap automatically:
+To enable Kitty shell integration end-to-end inside a non-host backend (so `hop tail` and other OSC-133-dependent features work for in-container / over-ssh shells), wrap the shell role with kitty's recommended mechanism - `kitten run-shell` for container-style backends, `kitten ssh` as the prefix for ssh backends. Every terminal role's window is launched as the shell role's command, so every role in the same session picks up the same wrap automatically:
 
 ```toml
 [layouts.rails.windows.shell]
 command = "kitten run-shell"  # kitten auto-detects $SHELL / passwd
 
 [layouts.rails.windows.test]
-command = ""  # inherits the shell role's kitten wrap
+command = ""  # a bare shell — same kitten wrap as every role
 ```
 
 Multiple matching layouts compose: a Rails project that also has `vite.config.ts` activates both layouts and gets their windows.
 
-A window `command` is an ordinary shell string, so make a long-running role idempotent - survive a window close and reopen - by freeing its resource before it starts:
+A window `command` is typed into the role's shell as if you ran it there - so it lands in the shell's history (up-arrow re-runs it after a Ctrl-C) and any shell syntax works as written. Make a long-running role idempotent - survive a window close and reopen - by freeing its resource before it starts:
 
 ```toml
 [layouts.rails.windows.server]
 command = "fuser -k 3000/tcp 2>/dev/null; bin/dev"
 ```
 
-The cleanup runs through the active backend, in the same namespace as the server - inside the container for a devcontainer backend, on the remote over ssh - so it clears an instance that outlived the previous window (common when the window's child was a `podman exec` / `ssh` transport that didn't propagate the hangup) before `bin/dev` rebinds the port. Use whatever the image has: `pkill -f bin/dev`, `lsof -ti:3000 | xargs -r kill`, etc.
+The command runs in the role's interactive shell, in the same namespace as the session - inside the container for a devcontainer backend, on the remote over ssh - so the cleanup clears an instance that outlived the previous window before `bin/dev` rebinds the port. Use whatever the image has: `pkill -f bin/dev`, `lsof -ti:3000 | xargs -r kill`, etc.
 
 ### Editor keystroke templates
 

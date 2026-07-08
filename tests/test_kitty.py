@@ -92,6 +92,31 @@ def build_session() -> ProjectSession:
 SESSION_SOCKET = session_socket_address("demo")
 
 
+def _role_window_listing(role: str, window_id: int) -> dict[str, object]:
+    """A kitty `ls` response carrying a single role window for the demo session."""
+    return {
+        "ok": True,
+        "data": [
+            {
+                "tabs": [
+                    {
+                        "windows": [
+                            {
+                                "id": window_id,
+                                "user_vars": {
+                                    "hop_session": "demo",
+                                    "hop_role": role,
+                                    "hop_session_root": str(build_session().session_root),
+                                },
+                            }
+                        ]
+                    }
+                ]
+            }
+        ],
+    }
+
+
 def test_ensure_terminal_focuses_existing_role_window() -> None:
     factory = StubKittyFactory(
         [
@@ -538,16 +563,16 @@ def test_ensure_terminal_uses_base_shell_args_in_launch_payload() -> None:
     ]
 
 
-def test_launch_payload_composes_command_and_shell_for_non_shell_role() -> None:
-    """A custom-role window like `server` running `bin/dev` must keep the
-    kitty window alive when the command exits or is Ctrl-C'd. Hop achieves
-    this by composing `<command>; <shell>` inside the launch args — when
-    `bin/dev` returns, the trailing shell takes over so the window stays
-    usable instead of disappearing."""
+def test_non_shell_role_launches_shell_then_sends_command() -> None:
+    """A custom-role window like `server` running `bin/dev` launches a bare
+    shell, then types `bin/dev` into it via send-text. The command lands in
+    shell history and, when it exits, the window is still a usable shell."""
     factory = StubKittyFactory(
         [
-            {"ok": True, "data": []},
-            {"ok": True},
+            {"ok": True, "data": []},  # find → none
+            {"ok": True},  # launch
+            _role_window_listing("server", 7),  # require_window
+            {"ok": True},  # send-text
         ]
     )
 
@@ -580,19 +605,27 @@ def test_launch_payload_composes_command_and_shell_for_non_shell_role() -> None:
     assert launch_call[1] == "launch"
     payload = launch_call[2]
     assert payload is not None
-    # The shell command in the resolved windows is "" (sentinel for platform
-    # default), so the post-exit shell falls back to ${SHELL:-sh}.
-    assert payload["args"] == ["sh", "-c", "bin/dev; ${SHELL:-sh}"]
+    # The shell command is "" (host default sentinel) → empty argv, kitty picks
+    # the platform shell. The role's command is NOT baked into the launch.
+    assert payload["args"] == []
+    # bin/dev is typed into the launched shell.
+    assert factory.calls[-1] == (
+        SESSION_SOCKET,
+        "send-text",
+        {"match": "id:7", "data": "text:bin/dev\n"},
+    )
 
 
-def test_launch_payload_composes_through_backend_prefix() -> None:
-    """Same Ctrl-C-survives behavior in a prefix backend — each piece is
-    wrapped by the prefix individually so the trailing shell still runs
-    inside the backend's environment."""
+def test_non_shell_role_command_is_sent_raw_into_the_prefixed_shell() -> None:
+    """In a prefix (container) backend the shell is launched *through* the
+    prefix, but the role's command is typed into that shell raw — it runs in
+    the container with no wrapping, because the shell is already there."""
     factory = StubKittyFactory(
         [
-            {"ok": True, "data": []},
-            {"ok": True},
+            {"ok": True, "data": []},  # find → none
+            {"ok": True},  # launch
+            _role_window_listing("server", 7),  # require_window
+            {"ok": True},  # send-text
         ]
     )
 
@@ -621,13 +654,20 @@ def test_launch_payload_composes_through_backend_prefix() -> None:
 
     adapter.ensure_terminal(build_session(), role="server")
 
+    # The shell is launched through the prefix (shell command "" → ${SHELL:-sh}).
     payload = factory.calls[1][2]
     assert payload is not None
     assert payload["args"] == [
         "sh",
         "-c",
-        "compose exec devcontainer bin/dev; compose exec devcontainer ${SHELL:-sh}",
+        "compose exec devcontainer ${SHELL:-sh}",
     ]
+    # bin/dev is sent raw — no prefix wrapping — into that in-container shell.
+    assert factory.calls[-1] == (
+        SESSION_SOCKET,
+        "send-text",
+        {"match": "id:7", "data": "text:bin/dev\n"},
+    )
 
 
 def test_empty_command_non_shell_role_inherits_shell_role_command() -> None:
@@ -715,16 +755,17 @@ def test_shell_role_empty_command_does_not_self_inherit() -> None:
     assert "args" not in payload or payload.get("args") in (None, [], ())
 
 
-def test_non_shell_role_with_primary_command_composes_with_shell_role_wrap() -> None:
-    """A role with a real primary command (``log`` window running ``less``)
-    composes ``<primary>; <shell-fallback>`` so the window survives the primary
-    process exiting. The shell-fallback is the shell role's command — including
-    a user wrap like ``kitten run-shell``. After ``less`` exits the user lands
-    in an integrated shell with OSC 133 markers firing."""
+def test_non_shell_role_launches_shell_role_command_and_sends_its_own() -> None:
+    """A role with a real command (``log`` running ``less``) launches the
+    shell role's command — including a user's ``kitten run-shell`` wrap — and
+    types its own command into it. After ``less`` exits the user is back at
+    that integrated shell with OSC 133 markers firing."""
     factory = StubKittyFactory(
         [
-            {"ok": True, "data": []},
-            {"ok": True},
+            {"ok": True, "data": []},  # find → none
+            {"ok": True},  # launch
+            _role_window_listing("log", 7),  # require_window
+            {"ok": True},  # send-text
         ]
     )
 
@@ -754,11 +795,12 @@ def test_non_shell_role_with_primary_command_composes_with_shell_role_wrap() -> 
 
     payload = factory.calls[1][2]
     assert payload is not None
-    assert payload["args"] == [
-        "sh",
-        "-c",
-        "less -R log/test.log; kitten run-shell",
-    ]
+    assert payload["args"] == ["sh", "-c", "kitten run-shell"]
+    assert factory.calls[-1] == (
+        SESSION_SOCKET,
+        "send-text",
+        {"match": "id:7", "data": "text:less -R log/test.log\n"},
+    )
 
 
 def test_launch_payload_does_not_compose_for_shell_role() -> None:

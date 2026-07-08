@@ -8,7 +8,7 @@ Two facts about non-host (container) backends make configuration noisier than it
 
 1. **Integration is a per-role command that must be repeated.** To get Kitty's OSC 133 markers inside a `podman exec`-backed shell, the user sets `[windows.shell] command = "kitten run-shell"` and relies on the empty-command inheritance rule (`hop/kitty.py::_command_for_role`) to spray that wrap onto every other role's shell slot. Integration is really a property of the *backend* (it needs the `kitten` binary that lives in that container), not a global shell-role override — but there's nowhere on the backend to put it, so it leaks into `[windows.shell]` and applies to every backend including the host, which doesn't need it.
 
-2. **Container shells are non-login — the lone outlier among backends.** A host session's shell is a login shell (kitty spawns `-zsh`), and an ssh session's shell is login (`SshTransport` wraps every command in `exec "${SHELL:-/bin/sh}" -lc …`, `hop/backends.py:388,402-403`). Only the container shell is non-login, because `podman exec` provides no implicit login shell the way `sshd` does. So anything a user keeps in a login-only profile (`.zprofile`/`.zlogin`, login-only env, agent/keychain setup) silently doesn't run in containers. hop is a generic tool; that per-backend inconsistency is a footgun independent of whether a *particular* user's `PATH` happens to survive without login. (Empirically it often does — a container that populates `PATH` from interactive rc (`.zshenv`/`.zshrc`) gives typed commands the full `PATH` with no login shell at all — which is why the `$SHELL -lc` cleanup belongs to [Send role commands into the role shell](send-role-commands-into-the-role-shell.md), not here. This task is about *consistency*, not PATH.)
+2. **Container shells are non-login — the lone outlier among backends.** A host session's shell is a login shell (kitty spawns `-zsh`), and an ssh session's shell is login (`SshTransport` wraps every command in `exec "${SHELL:-/bin/sh}" -lc …`, `hop/backends.py:388,402-403`). Only the container shell is non-login, because `podman exec` provides no implicit login shell the way `sshd` does. So anything a user keeps in a login-only profile (`.zprofile`/`.zlogin`, login-only env, agent/keychain setup) silently doesn't run in containers. hop is a generic tool; that per-backend inconsistency is a footgun independent of whether a *particular* user's `PATH` happens to survive without login. (Empirically it often does — a container that populates `PATH` from interactive rc (`.zshenv`/`.zshrc`) gives typed commands the full `PATH` with no login shell at all — which is why the `$SHELL -lc` cleanup belongs to the send-to-shell change, not here. This task is about *consistency*, not PATH.)
 
 hop already achieves login parity for ssh via `SshTransport` (`hop/backends.py:379-405`): it never prepends a raw `$SHELL -lc` — it base64-encodes the command and decodes it inside a fixed `exec "${SHELL:-/bin/sh}" -lc "$(… base64 -d)"` wrapper, so no quoting or argv-flattening can corrupt it. This task gives the container backend the same treatment, and moves `kitten run-shell` from a repeated role command to a single backend field.
 
@@ -37,7 +37,7 @@ S = <explicit [windows.shell].command if set>   # _command_for_role(session, SHE
 
 Precedence is deliberate: an explicit `[windows.shell]` override still wins (so a user can force one shell everywhere), `backend.shell` is the per-backend default, and empty falls through to the existing behavior.
 
-`S` is the shell-slot value every terminal role launches. After [Send role commands into the role shell](send-role-commands-into-the-role-shell.md), terminal roles launch a bare shell and receive their command via `send-text`, so there is no `<command>; <shell>` composition — every terminal role (`shell`, `server`, `console`, `log`, `test`, ad-hoc `shell-N`) simply launches `backend.wrap(S, session)`. For the host backend with `S == ""`, `wrap("")` returns `()` (kitty picks the login shell) exactly as today; for a container with `S == "kitten run-shell"`, it launches the wrapped integrated shell.
+`S` is the shell-slot value every terminal role launches. After the send-to-shell change, terminal roles launch a bare shell and receive their command via `send-text`, so there is no `<command>; <shell>` composition — every terminal role (`shell`, `server`, `console`, `log`, `test`, ad-hoc `shell-N`) simply launches `backend.wrap(S, session)`. For the host backend with `S == ""`, `wrap("")` returns `()` (kitty picks the login shell) exactly as today; for a container with `S == "kitten run-shell"`, it launches the wrapped integrated shell.
 
 This replaces the "integration rides the empty-command inheritance of the shell-role command" mechanism from [multi-step-lifecycle-commands-and-shell-role-inheritance](multi-step-lifecycle-commands-and-shell-role-inheritance.md): every terminal role now launches `S`, which resolves through the backend rather than only through the shell role's config command.
 
@@ -64,7 +64,7 @@ def inline(self, command, session):
     return f"{substituted_prefix} {_login_wrap(substituted)}"
 ```
 
-`inline` is the seam `wrap` uses to launch windows. After [Send role commands into the role shell](send-role-commands-into-the-role-shell.md), role commands are *typed into* the shell rather than launched, so the only things flowing through `inline` are the shell-slot value `S` and the editor's `nvim` — both login-wrapped, so the container's shell (and nvim) run login, matching host and ssh sessions. Login-only profiles now run in containers too. (The per-command `$SHELL -lc` wrappers were already removed in the blocking task, where typing commands into the interactive shell made them redundant.)
+`inline` is the seam `wrap` uses to launch windows. After the send-to-shell change, role commands are *typed into* the shell rather than launched, so the only things flowing through `inline` are the shell-slot value `S` and the editor's `nvim` — both login-wrapped, so the container's shell (and nvim) run login, matching host and ssh sessions. Login-only profiles now run in containers too. (The per-command `$SHELL -lc` wrappers were already removed in the blocking task, where typing commands into the interactive shell made them redundant.)
 
 Scope of the login-wrap:
 
@@ -130,7 +130,7 @@ implement
 
 ## Blocked By
 
-- [Send role commands into the role shell](send-role-commands-into-the-role-shell.md)
+(none)
 
 ## Definition of Done
 

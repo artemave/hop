@@ -11,7 +11,7 @@ from tempfile import gettempdir
 from typing import Any, Callable, Mapping, Protocol, Sequence, cast
 
 from hop import debug
-from hop.backends import SHELL_FALLBACK, CommandBackend, SessionBackend
+from hop.backends import CommandBackend, SessionBackend
 from hop.config import SHELL_ROLE
 from hop.errors import HopError
 from hop.layouts import WindowSpec, find_window
@@ -225,6 +225,13 @@ class KittyRemoteControlAdapter:
             return
 
         self._launch_window(session, role=role, keep_focus=False, already_prepared=already_prepared)
+        # The window is a bare shell; type the role's command into it so it lands
+        # in shell history and runs with the interactive shell's environment.
+        # Only on first creation (the early return above skips re-entry).
+        command = self._role_command_to_send(session, role)
+        if command:
+            window = self._require_window(session, role=role)
+            self._send_text_line(session, window.id, command)
 
     def is_alive(self, session: ProjectSession) -> bool:
         # Truth of "this session's kitty is reachable": probe the per-session
@@ -241,28 +248,34 @@ class KittyRemoteControlAdapter:
         command: str,
         focus: bool = False,
     ) -> int:
-        window = self._find_window(session, role=role)
-        existed = window is not None
-        if window is None:
+        existing = self._find_window(session, role=role)
+        existed = existing is not None
+        if existing is None:
             self._launch_window(session, role=role, keep_focus=not focus)
-            window = self._find_window(session, role=role)
 
+        window = existing or self._require_window(session, role=role)
+        self._send_text_line(session, window.id, command)
+        if focus and existed:
+            self._send_to(session.session_name, "focus-window", {"match": f"id:{window.id}"})
+        return window.id
+
+    def _require_window(self, session: ProjectSession, *, role: str) -> KittyWindow:
+        window = self._find_window(session, role=role)
         if window is None:
             msg = (
                 "Kitty created a terminal window, but hop could not find it again for "
                 f"{session.session_name!r}:{role!r}."
             )
             raise KittyCommandError(msg)
+        return window
 
+    def _send_text_line(self, session: ProjectSession, window_id: int, command: str) -> None:
         text = command if command.endswith("\n") else f"{command}\n"
         self._send_to(
             session.session_name,
             "send-text",
-            {"match": f"id:{window.id}", "data": f"text:{text}"},
+            {"match": f"id:{window_id}", "data": f"text:{text}"},
         )
-        if focus and existed:
-            self._send_to(session.session_name, "focus-window", {"match": f"id:{window.id}"})
-        return window.id
 
     def get_window_state(self, session_name: str, window_id: int) -> KittyWindowState:
         response = self._send_to(
@@ -427,7 +440,7 @@ class KittyRemoteControlAdapter:
         # process needs at least one window. Resolve the shell command from
         # the active layout/windows config (built-in default is "" → kitty's
         # platform-default shell on host).
-        shell_command = self._command_for_role(session, SHELL_ROLE)
+        shell_command = self._shell_command(session)
         shell_argv = list(backend.wrap(shell_command, session))
         if shell_argv:
             kitty_args.append("--")
@@ -568,7 +581,7 @@ class KittyRemoteControlAdapter:
         # command from layouts / top-level windows. Ad-hoc roles like
         # `shell-2` aren't declared, so they fall back to the shell role's
         # command — preserving "ask for any role, get a shell" ergonomic.
-        args = list(self._launch_args(session, backend=backend, role=role))
+        args = list(self._launch_args(session, backend=backend))
         return {
             "args": args,
             "cwd": str(session.session_root),
@@ -588,59 +601,31 @@ class KittyRemoteControlAdapter:
         session: ProjectSession,
         *,
         backend: SessionBackend,
-        role: str,
     ) -> Sequence[str]:
-        # "Shell-like" means: this role is meant to land at an interactive
-        # shell, not run a primary process and *then* drop to a shell. The
-        # `; <shell>` post-exit composition only applies to non-shell-like
-        # roles (server, log, console, custom).
-        #
-        # A role is shell-like when:
-        #   - It is the shell role, OR
-        #   - Its own ``spec.command`` is the empty sentinel (e.g. the
-        #     ``test`` role declared as ``command = ""``). The inheritance
-        #     fall-through in ``_command_for_role`` may give such a role a
-        #     non-empty *resolved* command (the shell role's wrap), but we
-        #     don't want to compose with a trailing shell on top of that —
-        #     the inherited wrap is *already* the shell.
-        windows = self._session_windows_for(session)
-        spec = find_window(windows, role)
-        own_command = spec.command if spec is not None else ""
-        is_shell_like = _is_shell_role(role) or not own_command
+        # Every terminal role launches the session shell. A role's own command
+        # (server's ``bin/dev``, console's ``bin/rails console``) is typed into
+        # that shell afterward via ``send-text`` (see ``_role_command_to_send``),
+        # so it lands in shell history and runs with the interactive shell's
+        # environment rather than being baked into the launch argv.
+        return backend.wrap(self._shell_command(session), session)
 
-        command = self._command_for_role(session, role)
-        if is_shell_like:
-            return backend.wrap(command, session)
-        # Compose `<command>; <shell>` so the kitty window stays open if the
-        # role's process exits cleanly or is Ctrl-C'd. Each piece is wrapped
-        # through the prefix individually (via inline) before a single outer
-        # sh -c, so the `;` runs each side as its own backend exec.
-        shell_command = self._command_for_role(session, SHELL_ROLE) or SHELL_FALLBACK
-        command_inline = backend.inline(command, session)
-        shell_inline = backend.inline(shell_command, session)
-        return backend.compose(f"{command_inline}; {shell_inline}")
+    def _shell_command(self, session: ProjectSession) -> str:
+        # The shell-role command drives every terminal window's launch. Empty
+        # (the built-in default on host) means "let kitty pick the platform
+        # shell"; a backend/user override (e.g. ``kitten run-shell``) applies to
+        # every role uniformly.
+        spec = find_window(self._session_windows_for(session), SHELL_ROLE)
+        return spec.command if spec is not None and spec.command else ""
 
-    def _command_for_role(self, session: ProjectSession, role: str) -> str:
-        windows = self._session_windows_for(session)
-        spec = find_window(windows, role)
-        if spec is not None and spec.command:
-            return spec.command
-        # Two fall-through cases land here:
-        #   1. The role has no spec at all (ad-hoc roles like shell-2, or no
-        #      resolver wired).
-        #   2. The role has a spec but its command is empty (e.g. a `test`
-        #      role declared as ``command = ""`` to mean "just an empty shell").
-        # Both inherit the shell role's command so any wrap the user puts on
-        # the shell role (e.g. ``kitten run-shell --shell=$SHELL`` to enable
-        # OSC 133 inside a backend) propagates to every other role uniformly.
-        # The shell role itself never falls through — its own empty command is
-        # the host-default sentinel that ``backend.wrap`` interprets as
-        # "let kitty pick the user's login shell".
-        if role != SHELL_ROLE:
-            shell_spec = find_window(windows, SHELL_ROLE)
-            if shell_spec is not None and shell_spec.command:
-                return shell_spec.command
-        return ""
+    def _role_command_to_send(self, session: ProjectSession, role: str) -> str:
+        # The command typed into a freshly-launched role window. Shell-like
+        # roles (the shell role and ad-hoc ``shell-N``) are bare shells with
+        # nothing to send; every other role sends its own declared command
+        # (empty for a ``command = ""`` role, which stays a bare shell).
+        if _is_shell_role(role):
+            return ""
+        spec = find_window(self._session_windows_for(session), role)
+        return spec.command if spec is not None else ""
 
 
 class SocketKittyTransport:
