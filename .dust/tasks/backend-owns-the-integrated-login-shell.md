@@ -39,12 +39,9 @@ S = <explicit [windows.shell].command if set>   # _command_for_role(session, SHE
 
 Precedence is deliberate: an explicit `[windows.shell]` override still wins (so a user can force one shell everywhere), `backend.shell` is the per-backend default, and empty falls through to the existing behavior.
 
-Apply `S` at both shell-slot sites in `_shell_like_command`:
+`S` is the shell-slot value every terminal role launches. After [Send role commands into the role shell](send-role-commands-into-the-role-shell.md), terminal roles launch a bare shell and receive their command via `send-text`, so there is no `<command>; <shell>` composition — every terminal role (`shell`, `server`, `console`, `log`, `test`, ad-hoc `shell-N`) simply launches `backend.wrap(S, session)`. For the host backend with `S == ""`, `wrap("")` returns `()` (kitty picks the login shell) exactly as today; for a container with `S == "kitten run-shell"`, it launches the wrapped integrated shell.
 
-- **Shell-like roles** (the `shell` role, or any role whose own `command` is empty — e.g. a `test` role declared `command = ""`, or an ad-hoc `shell-2`): launch `backend.wrap(S, session)`. For the host backend with `S == ""`, `wrap("")` returns `()` (kitty picks the login shell) exactly as today; for a container with `S == "kitten run-shell"`, it launches the wrapped integrated shell.
-- **Non-shell roles** (`nvim`, `server`, `console`, …): the post-exit composition becomes `<command>; <S or SHELL_FALLBACK>` — the drop-shell reads `S` instead of `_command_for_role(SHELL_ROLE)`.
-
-This replaces the "integration rides the empty-command inheritance of the shell-role command" mechanism from [multi-step-lifecycle-commands-and-shell-role-inheritance](multi-step-lifecycle-commands-and-shell-role-inheritance.md): empty-command roles still inherit *a* shell, but the shell they inherit is now `S`, which resolves through the backend rather than only through the shell role's config command.
+This replaces the "integration rides the empty-command inheritance of the shell-role command" mechanism from [multi-step-lifecycle-commands-and-shell-role-inheritance](multi-step-lifecycle-commands-and-shell-role-inheritance.md): every terminal role now launches `S`, which resolves through the backend rather than only through the shell role's config command.
 
 ### Login-wrap for interactive container commands
 
@@ -69,7 +66,7 @@ def inline(self, command, session):
     return f"{substituted_prefix} {_login_wrap(substituted)}"
 ```
 
-Because `inline` is the single seam used by both `wrap` (shell-like roles) and the `<cmd>; <shell>` composition in `hop/kitty.py`, every interactive command in a container — the shell slot value `S`, `nvim`, `claude`, `bin/dev` — is uniformly login-wrapped. The user's per-command `$SHELL -lc` wrappers become redundant and are removed from config.
+`inline` is the seam `wrap` uses to launch windows. After [Send role commands into the role shell](send-role-commands-into-the-role-shell.md), role commands are *typed into* the shell rather than launched, so the only things flowing through `inline` are the shell-slot value `S` and the editor's `nvim` — both login-wrapped, so the interactive shell (and nvim) resolve the container's login `PATH`. Because the shell is now a login shell, the commands typed into it inherit that `PATH`, and the user's per-command `$SHELL -lc` wrappers become redundant and are removed from config.
 
 Scope of the login-wrap:
 
@@ -97,7 +94,7 @@ Double-wrapping is harmless: if a user forgets to strip their manual `sh -c '$SH
 - `hop/backends.py` — `CommandBackend.shell: str | None`; module-level `_login_wrap`; apply it in `inline` gated on non-empty `interactive_prefix`. `base64` is already imported.
 - `hop/state.py` — `CommandBackendRecord.shell`; round-trip in `to_json` / `_decode_backend_record` (old records without `shell` decode as `shell=None`).
 - `hop/app.py` — `_backend_from_record` (`:328-340`) / `_record_for_backend` (`:346-358`) carry `shell`.
-- `hop/kitty.py` — compute `S` and use it in `_shell_like_command` at both the shell-like launch and the drop-shell composition. Thread `backend` where needed.
+- `hop/kitty.py` — compute `S` and launch it for every terminal role in `_shell_like_command` / `_launch_args`. Thread `backend` where needed. (The `<cmd>; <shell>` composition is already gone from the blocking task.)
 - `hop_spec.md`, `README.md`, `docs/devcontainer.md`, `docs/ssh-devcontainer.md` — document `backend.shell` and the automatic container login-wrap; retire the "wrap the shell role with `kitten run-shell` + inheritance" framing and the "install kitten so `kitten run-shell` windows work" phrasing (the kitten install stays; the *reason* is now `backend.shell`).
 - `~/.config/hop/config.toml` — the migration above.
 
@@ -112,11 +109,10 @@ Real subprocesses / real backends where possible (no mocks, per project conventi
   - `wrap("")` on a container returns the login-wrapped `${SHELL:-sh}`; `wrap("")` on the host returns `()`.
   - A multi-word / metacharacter command (`pkill -f '[f]oreman'; bin/dev`) round-trips intact through the base64 wrap.
 - `tests/test_kitty.py`:
-  - With `backend.shell = "kitten run-shell"` and no `[windows.shell]`, a shell-like role launches the backend shell (`S` resolves to `kitten run-shell`, login-wrapped).
-  - An empty-command non-shell role (`test`, `command = ""`) inherits `S` (the backend shell), not `SHELL_FALLBACK`.
-  - A non-shell role (`server`, `command = "bin/dev"`) composes `bin/dev; <S>` with `S` as the drop-shell.
+  - With `backend.shell = "kitten run-shell"` and no `[windows.shell]`, a terminal role launches the backend shell (`S` resolves to `kitten run-shell`, login-wrapped).
+  - A role declared `command = ""` (e.g. `test`) launches `S` (the backend shell), not a bare `SHELL_FALLBACK`.
   - An explicit `[windows.shell] command = "fish"` overrides `backend.shell` (precedence).
-  - Host backend with no `backend.shell` still returns the kitty-native `()` shell and the existing `; ${SHELL:-sh}` drop-shell.
+  - Host backend with no `backend.shell` still launches the kitty-native `()` shell.
 - `tests/test_remote_ssh.py`: an ssh→container backend (`interactive_prefix` set, `SshTransport`) nests both login-wraps; the decoded innermost command is the shell slot value.
 - `tests/test_state.py`: persist/restore `shell`; an old record without `shell` decodes as `shell=None`.
 - `tests/test_app.py`: `_record_for_backend` / `_backend_from_record` round-trip `shell`.
@@ -140,14 +136,14 @@ implement
 
 ## Blocked By
 
-(none)
+- [Send role commands into the role shell](send-role-commands-into-the-role-shell.md)
 
 ## Definition of Done
 
 - `BackendConfig` and `CommandBackend` carry `shell: str | None`; the parser accepts `[backends.<name>] shell = "…"` and rejects non-string / empty values; a backend without the field resolves to `shell=None`.
 - `CommandBackend.inline` login-wraps interactive commands (via a base64 `exec "${SHELL:-/bin/sh}" -lc …` helper mirroring `SshTransport`) when `interactive_prefix` is non-empty, and is unchanged for the host backend. The noninteractive command path (`paths_exist`/`read_file`/`binary_file`/`port_translate`) is untouched.
-- The shell slot value `S` resolves as explicit `[windows.shell].command` → `backend.shell` → empty, and is used for shell-like roles (`backend.wrap(S)`) and the non-shell drop-shell (`<cmd>; <S or SHELL_FALLBACK>`). Host-native `()` shell behavior is preserved when `S` is empty and the prefix is empty.
-- Empty-command roles inherit `S` (the backend shell), not a bare `SHELL_FALLBACK`.
+- The shell slot value `S` resolves as explicit `[windows.shell].command` → `backend.shell` → empty, and every terminal role launches `backend.wrap(S)`. Host-native `()` shell behavior is preserved when `S` is empty and the prefix is empty.
+- Roles declared `command = ""` launch `S` (the backend shell), not a bare `SHELL_FALLBACK`.
 - `CommandBackendRecord` persists `shell`; old records decode as `shell=None`. `_backend_from_record` / `_record_for_backend` round-trip it.
 - ssh→container backends nest the ssh and container login-wraps without corruption; the decoded innermost command is correct.
 - Tests in the Tests section pass under `uv run pytest -q` and follow the no-mock convention (base64 tokens asserted by decoding, not literal matching).
