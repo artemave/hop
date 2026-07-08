@@ -1,6 +1,6 @@
 # Backend owns the integrated login shell
 
-Add a backend `shell` field for the integrated shell and login-wrap interactive container commands, dropping per-command `$SHELL -lc` boilerplate.
+Add a backend `shell` field for the integrated shell and make the container shell a login shell, for parity with host and ssh session shells.
 
 ## Background
 
@@ -8,11 +8,9 @@ Two facts about non-host (container) backends make configuration noisier than it
 
 1. **Integration is a per-role command that must be repeated.** To get Kitty's OSC 133 markers inside a `podman exec`-backed shell, the user sets `[windows.shell] command = "kitten run-shell"` and relies on the empty-command inheritance rule (`hop/kitty.py::_command_for_role`) to spray that wrap onto every other role's shell slot. Integration is really a property of the *backend* (it needs the `kitten` binary that lives in that container), not a global shell-role override — but there's nowhere on the backend to put it, so it leaks into `[windows.shell]` and applies to every backend including the host, which doesn't need it.
 
-2. **`podman exec` runs commands non-login, so `PATH` is missing.** A devcontainer's interactive `PATH` (Homebrew, version managers, `~/.local/bin`) is set in login profiles (`.zprofile`/`.zlogin`). `podman exec dc <cmd>` runs `<cmd>` non-login, so `claude`, `bin/dev`, `mix`, `iex`, `bin/rails` aren't found. Users compensate by hand-wrapping *every* command: `command = "sh -c '$SHELL -lc \"bin/rails console\"'"`. The live `~/.config/hop/config.toml` currently carries five such hand-written `$SHELL -lc` wraps (llm, rails server, rails console, phoenix server, phoenix console).
+2. **Container shells are non-login — the lone outlier among backends.** A host session's shell is a login shell (kitty spawns `-zsh`), and an ssh session's shell is login (`SshTransport` wraps every command in `exec "${SHELL:-/bin/sh}" -lc …`, `hop/backends.py:388,402-403`). Only the container shell is non-login, because `podman exec` provides no implicit login shell the way `sshd` does. So anything a user keeps in a login-only profile (`.zprofile`/`.zlogin`, login-only env, agent/keychain setup) silently doesn't run in containers. hop is a generic tool; that per-backend inconsistency is a footgun independent of whether a *particular* user's `PATH` happens to survive without login. (Empirically it often does — a container that populates `PATH` from interactive rc (`.zshenv`/`.zshrc`) gives typed commands the full `PATH` with no login shell at all — which is why the `$SHELL -lc` cleanup belongs to [Send role commands into the role shell](send-role-commands-into-the-role-shell.md), not here. This task is about *consistency*, not PATH.)
 
-hop already solves (2) for ssh: `SshTransport` (`hop/backends.py:379-405`) never prepends a raw `$SHELL -lc` — it base64-encodes the command and decodes it inside a fixed `exec "${SHELL:-/bin/sh}" -lc "$(… base64 -d)"` wrapper (lines 402-403), so no quoting or argv-flattening can corrupt it, and every command over ssh runs under a login shell "so the remote user's normal PATH (e.g. Homebrew) resolves." Containers have no equivalent — `podman exec` provides no implicit login shell the way `sshd` does.
-
-This task gives the container backend the same treatment ssh already gets, and moves `kitten run-shell` from a repeated role command to a single backend field.
+hop already achieves login parity for ssh via `SshTransport` (`hop/backends.py:379-405`): it never prepends a raw `$SHELL -lc` — it base64-encodes the command and decodes it inside a fixed `exec "${SHELL:-/bin/sh}" -lc "$(… base64 -d)"` wrapper, so no quoting or argv-flattening can corrupt it. This task gives the container backend the same treatment, and moves `kitten run-shell` from a repeated role command to a single backend field.
 
 ### Why not express it inside `interactive_prefix`?
 
@@ -66,7 +64,7 @@ def inline(self, command, session):
     return f"{substituted_prefix} {_login_wrap(substituted)}"
 ```
 
-`inline` is the seam `wrap` uses to launch windows. After [Send role commands into the role shell](send-role-commands-into-the-role-shell.md), role commands are *typed into* the shell rather than launched, so the only things flowing through `inline` are the shell-slot value `S` and the editor's `nvim` — both login-wrapped, so the interactive shell (and nvim) resolve the container's login `PATH`. Because the shell is now a login shell, the commands typed into it inherit that `PATH`, and the user's per-command `$SHELL -lc` wrappers become redundant and are removed from config.
+`inline` is the seam `wrap` uses to launch windows. After [Send role commands into the role shell](send-role-commands-into-the-role-shell.md), role commands are *typed into* the shell rather than launched, so the only things flowing through `inline` are the shell-slot value `S` and the editor's `nvim` — both login-wrapped, so the container's shell (and nvim) run login, matching host and ssh sessions. Login-only profiles now run in containers too. (The per-command `$SHELL -lc` wrappers were already removed in the blocking task, where typing commands into the interactive shell made them redundant.)
 
 Scope of the login-wrap:
 
@@ -78,14 +76,10 @@ Double-wrapping is harmless: if a user forgets to strip their manual `sh -c '$SH
 
 ### `~/.config/hop/config.toml` migration
 
+The `$SHELL -lc` command wrappers were already stripped in the blocking task; this task only moves the shell declaration onto the backend:
+
 - Delete the global `[windows.shell] command = "kitten run-shell"` block.
 - Add `shell = "kitten run-shell"` to `[backends.devcontainer]` and `[backends.starfish]`.
-- Strip the now-redundant `sh -c '$SHELL -lc …'` wrappers, leaving the bare commands:
-  - `[windows.llm] command = "claude --dangerously-skip-permissions"`
-  - `[layouts.rails.windows.server] command = "pkill -f '[f]oreman' 2>/dev/null; bin/dev"`
-  - `[layouts.rails.windows.console] command = "bin/rails console"`
-  - `[layouts.phoenix.windows.server] command = "pkill -f '[b]eam.*phx.server' 2>/dev/null; mix phx.server"`
-  - `[layouts.phoenix.windows.console] command = "iex -S mix"`
 - `[layouts.rails.windows.test] command = ""` stays — it now inherits `S` (the backend's integrated shell).
 
 ## Files to change

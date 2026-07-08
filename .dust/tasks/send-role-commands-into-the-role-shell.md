@@ -33,6 +33,20 @@ Commands are sent as-configured. Until [Backend owns the integrated login shell]
 
 Send immediately after launch, as `run_in_terminal` already does — no `at_prompt` gate. The pty buffers input, and a shell sources its rc before entering its read loop, so a command sent right after launch is read once the shell is ready.
 
+Verified against a real podman container (`starfish_one_devcontainer_1`): a command written to the pty the instant the window launches — before the shell can possibly be ready — buffers and runs correctly, for both a plain `kitten run-shell` and a login-wrapped shell. The same test showed the typed command runs with the shell's **full interactive `PATH`** (`.zshenv` + `.zshrc`: mise/bun/linuxbrew/pyenv/…), whereas the old non-interactive `podman exec dc <cmd>` sees only `/workspace/bin:/usr/local/bin:/usr/bin`. That is why send-to-shell alone makes the `$SHELL -lc` command wrappers redundant.
+
+### `~/.config/hop/config.toml` migration
+
+Because commands now run in the interactive shell (full `PATH` from rc), strip the hand-written `sh -c '$SHELL -lc …'` wrappers to the bare commands:
+
+- `[windows.llm] command = "claude --dangerously-skip-permissions"`
+- `[layouts.rails.windows.server] command = "pkill -f '[f]oreman' 2>/dev/null; bin/dev"`
+- `[layouts.rails.windows.console] command = "bin/rails console"`
+- `[layouts.phoenix.windows.server] command = "pkill -f '[b]eam.*phx.server' 2>/dev/null; mix phx.server"`
+- `[layouts.phoenix.windows.console] command = "iex -S mix"`
+
+`[windows.shell] command = "kitten run-shell"` and `[layouts.rails.windows.test] command = ""` stay — moving `kitten run-shell` onto the backend is the follow-up task's job.
+
 ### Unchanged
 
 - **Editor** stays the shared-nvim launch (one-shared-editor-per-session); **browser** stays xdg. Neither is a "type a command into a shell" role.
@@ -44,6 +58,7 @@ Send immediately after launch, as `run_in_terminal` already does — no `at_prom
 - `hop/commands/session.py` — `enter_project_session`: for each terminal role with a resolved command, launch the role shell and send the command (via the `run_in_terminal` path); the shell role launches with nothing sent.
 - `hop/app.py` — thread the resolved per-role commands into the bootstrap dispatch if not already available there.
 - `hop_spec.md`, `README.md` — document that terminal-role commands are typed into the role shell (and land in history), replacing the drop-into-shell composition.
+- `~/.config/hop/config.toml` — strip the `sh -c '$SHELL -lc …'` command wrappers (llm, rails server/console, phoenix server/console) to their bare commands.
 
 ## Tests
 
@@ -87,6 +102,7 @@ implement
 - Commands containing shell syntax are sent verbatim, with no wrapping or quoting.
 - The `shell` role and ad-hoc `shell-N` roles launch a shell with nothing sent; editor and browser keep their launch adapters.
 - Re-entry re-sends nothing.
+- `~/.config/hop/config.toml` has the `$SHELL -lc` command wrappers stripped to bare commands (verified: the interactive shell resolves the full `PATH`).
 - Tests in the Tests section pass under `uv run pytest -q` and follow the no-mock convention.
 - `hop_spec.md` and `README.md` document the typed-command dispatch.
 - `make` passes (test, typecheck, lint, format-check, 100% coverage).
