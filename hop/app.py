@@ -121,10 +121,6 @@ class KittyAdapter(Protocol):
 
 
 class NeovimAdapter(Protocol):
-    def ensure(self, session: ProjectSession, *, keep_focus: bool = True) -> None: ...
-
-    def focus(self, session: ProjectSession) -> None: ...
-
     def open_target(self, session: ProjectSession, *, target: str) -> None: ...
 
 
@@ -444,7 +440,7 @@ def execute_command(
                         current_directory,
                         sway=services.sway,
                         terminals=services.kitty,
-                        editor=services.neovim if is_first_entry else None,
+                        first_entry=is_first_entry,
                         browser=services.browser if is_first_entry else None,
                         windows=windows,
                         workspace_layout=workspace_layout,
@@ -488,7 +484,6 @@ def execute_command(
                 current_directory,
                 terminals=services.kitty,
                 sway=services.sway,
-                neovim=services.neovim,
                 role=role,
             )
         case RunCommand(role=role, command_text=command_text, focus=focus):
@@ -554,8 +549,8 @@ def build_default_services() -> HopServices:
         sway=sway,
     )
     neovim = SharedNeovimEditorAdapter(
+        terminals=kitty,
         sway=sway,
-        session_backend_for=registry.for_session,
         session_windows_for=registry.resolve_windows_for_entry,
     )
     return HopServices(
@@ -585,9 +580,8 @@ def build_kitten_services(boss: object) -> HopServices:
         sway=sway,
     )
     neovim = SharedNeovimEditorAdapter(
-        sway=sway,
         kitty_io=BossKittyEditorIO(boss),
-        session_backend_for=registry.for_session,
+        sway=sway,
         session_windows_for=registry.resolve_windows_for_entry,
     )
     return HopServices(

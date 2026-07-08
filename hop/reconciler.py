@@ -13,10 +13,9 @@ from typing import Protocol, Sequence
 
 from hop.browser import DEFAULT_BROWSER_MARK_PREFIX
 from hop.commands.session import SESSION_WORKSPACE_PREFIX
-from hop.editor import EDITOR_MARK_PREFIX
 from hop.sway import SwayWindow
 
-_SESSION_MARK_PREFIXES = (EDITOR_MARK_PREFIX, DEFAULT_BROWSER_MARK_PREFIX)
+_SESSION_MARK_PREFIXES = (DEFAULT_BROWSER_MARK_PREFIX,)
 
 
 class ReconcilerSwayAdapter(Protocol):

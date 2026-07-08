@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-import time
 from typing import Any, Callable, Mapping, Protocol, Sequence, cast
 
-from hop.backends import SHELL_FALLBACK, CommandBackend, SessionBackend
 from hop.config import EDITOR_ROLE as _EDITOR_ROLE_CONST
-from hop.config import SHELL_ROLE
 from hop.errors import HopError
 from hop.kitty import HOP_ROLE_VAR, KittyTransport, SocketKittyTransport, session_socket_address
 from hop.layouts import WindowSpec, find_window
@@ -14,9 +11,6 @@ from hop.sway import SwayIpcAdapter, SwayWindow
 
 EDITOR_ROLE = _EDITOR_ROLE_CONST
 EDITOR_OS_WINDOW_NAME = f"hop:{EDITOR_ROLE}"
-EDITOR_MARK_PREFIX = "_hop_editor:"
-EDITOR_READY_TIMEOUT_SECONDS = 5.0
-EDITOR_READY_POLL_INTERVAL_SECONDS = 0.05
 
 # Keystroke building blocks used to drive the in-pty editor.
 # `<Esc>` (0x1b) is the prefix we send before `:drop`. Tempting to use
@@ -38,13 +32,7 @@ _CR = "\r"
 DEFAULT_OPEN_KEYS = f"{_NORMAL_MODE}:exec 'drop '.fnameescape('{{path}}'){_CR}"
 DEFAULT_OPEN_KEYS_WITH_LINE = f"{DEFAULT_OPEN_KEYS}:{{line}}{_CR}"
 
-SessionBackendFactory = Callable[[ProjectSession], SessionBackend]
 SessionWindowsFactory = Callable[[ProjectSession], Sequence[WindowSpec]]
-
-
-# Default backend handed to ad-hoc callers that don't supply a session
-# backend factory. Empty prefixes mean "run on host, unwrapped".
-_BUILTIN_HOST_BACKEND = CommandBackend(name="host", interactive_prefix="", noninteractive_prefix="")
 
 
 class NeovimError(HopError):
@@ -52,7 +40,7 @@ class NeovimError(HopError):
 
 
 class NeovimCommandError(NeovimError):
-    """Raised when hop cannot start or control the shared Neovim instance."""
+    """Raised when hop cannot control the shared Neovim instance."""
 
 
 class EditorSwayAdapter(Protocol):
@@ -60,29 +48,19 @@ class EditorSwayAdapter(Protocol):
 
     def focus_window(self, window_id: int) -> None: ...
 
-    def mark_window(self, window_id: int, mark: str) -> None: ...
 
-    def move_window_to_workspace(self, window_id: int, workspace_name: str) -> None: ...
+class EditorTerminalAdapter(Protocol):
+    def ensure_terminal(self, session: ProjectSession, *, role: str, already_prepared: bool = False) -> None: ...
 
 
 class KittyEditorIO(Protocol):
-    """How the editor adapter actually drives kitty.
+    """How the editor adapter types keystrokes into the running nvim.
 
     Two implementations live below: ``IpcKittyEditorIO`` for the host CLI
     (synchronous unix-socket IPC against the per-session kitty), and
     ``BossKittyEditorIO`` for use inside the kitty boss event loop (kittens),
     where IPC against ourselves would deadlock the loop.
     """
-
-    def launch_editor(
-        self,
-        session: ProjectSession,
-        *,
-        args: Sequence[str],
-        os_window_class: str,
-        var: Sequence[str],
-        keep_focus: bool,
-    ) -> None: ...
 
     def send_text_to_editor(self, session: ProjectSession, text: str) -> None: ...
 
@@ -98,37 +76,6 @@ class IpcKittyEditorIO:
     ) -> None:
         self._transport_factory: Callable[[str], KittyTransport] = transport_factory or (
             lambda listen_on: SocketKittyTransport(listen_on)
-        )
-
-    def launch_editor(
-        self,
-        session: ProjectSession,
-        *,
-        args: Sequence[str],
-        os_window_class: str,
-        var: Sequence[str],
-        keep_focus: bool,
-    ) -> None:
-        self._transport(session).send_command(
-            "launch",
-            {
-                "args": list(args),
-                "cwd": str(session.session_root),
-                "type": "os-window",
-                "keep_focus": keep_focus,
-                "allow_remote_control": True,
-                "window_title": EDITOR_ROLE,
-                "os_window_title": EDITOR_ROLE,
-                # `os_window_class` sets Sway's `app_id` on Wayland;
-                # `os_window_name` would only set the X11 WM_CLASS-name half
-                # and leave Wayland's app_id at the default (`kitty`), which
-                # would prevent Sway-side window discovery from matching.
-                "os_window_class": os_window_class,
-                # User-var so subsequent matches can find the window without
-                # re-walking ls — newly launched editors carry it; older
-                # editors fall back to wm_class matching.
-                "var": list(var),
-            },
         )
 
     def send_text_to_editor(self, session: ProjectSession, text: str) -> None:
@@ -183,27 +130,6 @@ class BossKittyEditorIO:
     def __init__(self, boss: Any) -> None:
         self._boss = boss
 
-    def launch_editor(
-        self,
-        session: ProjectSession,
-        *,
-        args: Sequence[str],
-        os_window_class: str,
-        var: Sequence[str],
-        keep_focus: bool,
-    ) -> None:
-        # Launching a new editor while the boss is busy running a kitten is
-        # awkward — kitty's launch helpers want to dispatch into the event
-        # loop. In practice the kitten only dispatches when an editor is
-        # already running (the user has been editing for a while); if it
-        # isn't, surface a clear error and let the user run
-        # `hop term --role editor` from a shell to bring it up.
-        msg = (
-            "No editor is running for this session. The kitten cannot launch "
-            "one without blocking kitty; run `hop term --role editor` from a shell first."
-        )
-        raise NeovimCommandError(msg)
-
     def send_text_to_editor(self, session: ProjectSession, text: str) -> None:
         window = self._find_editor_window()
         if window is None:
@@ -240,64 +166,44 @@ class BossKittyEditorIO:
 
 
 class SharedNeovimEditorAdapter:
+    """Routes ``hop open <file>`` into the session's editor role window.
+
+    The editor is a plain role terminal (a shell launched with ``nvim`` typed
+    in, exactly like ``server``/``console``) — there is no bespoke editor
+    launch path. This adapter only *drives* the running nvim: it brings the
+    editor up if it's gone, focuses it, and types the ``:drop`` open-file
+    keystrokes into it.
+    """
+
     def __init__(
         self,
         *,
-        sway: EditorSwayAdapter | None = None,
         kitty_io: KittyEditorIO | None = None,
-        session_backend_for: SessionBackendFactory | None = None,
+        terminals: EditorTerminalAdapter | None = None,
+        sway: EditorSwayAdapter | None = None,
         session_windows_for: SessionWindowsFactory | None = None,
-        ready_timeout_seconds: float = EDITOR_READY_TIMEOUT_SECONDS,
-        ready_poll_interval_seconds: float = EDITOR_READY_POLL_INTERVAL_SECONDS,
     ) -> None:
-        self._sway: EditorSwayAdapter = sway or SwayIpcAdapter()
         self._kitty_io: KittyEditorIO = kitty_io or IpcKittyEditorIO()
-        self._session_backend_for: SessionBackendFactory = session_backend_for or (
-            lambda _session: _BUILTIN_HOST_BACKEND
-        )
-        # Resolves the session's window list so the launch path can pick up
-        # user overrides for editor / shell commands. Default returns no
-        # windows so the built-in nvim + ${SHELL:-sh} fallback applies.
+        # The terminal adapter that launches/focuses role windows. ``None``
+        # inside the kitty boss (kitten) — there we can't launch without
+        # blocking the loop, so the editor must already be running and
+        # ``send_text_to_editor`` raises a clear error if it isn't.
+        self._terminals: EditorTerminalAdapter | None = terminals
+        self._sway: EditorSwayAdapter = sway or SwayIpcAdapter()
+        # Resolves the session's window list so ``open_target`` can pick up a
+        # user override for the editor's ``open_keys``. Default returns no
+        # windows so the built-in vim templates apply.
         self._session_windows_for: SessionWindowsFactory = session_windows_for or (lambda _session: ())
-        self._ready_timeout_seconds = ready_timeout_seconds
-        self._ready_poll_interval_seconds = ready_poll_interval_seconds
-
-    def ensure(self, session: ProjectSession, *, keep_focus: bool = True) -> None:
-        # Bring up the editor. ``keep_focus`` controls whether the launch
-        # steals focus to the new editor (False) or leaves it on the
-        # currently-focused window (True).
-        #
-        # The bootstrap path passes ``keep_focus=False`` so that the
-        # activation sweep's subsequent terminal launches tab in *after*
-        # the editor in sway's tabbed layout (sway inserts new tabs after
-        # the focused one). With ``keep_focus=True`` the shell would stay
-        # focused, terminals would slot in between shell and editor, and
-        # the editor would walk to the end of the tab strip. End-of-
-        # bootstrap ``_focus_shell_if_present`` still hands focus back
-        # to the shell.
-        self._ensure_editor(session, keep_focus=keep_focus)
-
-    def focus(self, session: ProjectSession) -> None:
-        # `focus()` re-focuses the editor unconditionally: an explicit
-        # sway.focus_window after the launch handles both the "editor
-        # already existed" and "editor was just launched" cases. Kitty's
-        # keep_focus is irrelevant here because we override sway focus
-        # afterwards anyway, so passing True keeps the launch-time focus
-        # change from briefly flickering through another window.
-        window, _ = self._ensure_editor(session, keep_focus=True)
-        # Sway-driven focus (rather than Kitty's `focus-window`) so the focus
-        # change escalates to a workspace switch when the editor lives on a
-        # different Sway workspace than the caller — e.g. when the kitten
-        # dispatches a file or URL from a terminal session.
-        self._sway.focus_window(window.id)
 
     def open_target(self, session: ProjectSession, *, target: str) -> None:
         # ``target`` is in the active backend's namespace already (the kitten
         # resolves candidates against the source window's in-shell cwd via
         # OSC 7, and the open path filter runs through ``backend.paths_exist``
         # without translating namespaces). Pass it through unchanged.
-        window, _ = self._ensure_editor(session, keep_focus=True)
-        self._sway.focus_window(window.id)
+        if self._terminals is not None:
+            # CLI path: bring the editor up like any role terminal if it's gone.
+            self._terminals.ensure_terminal(session, role=EDITOR_ROLE)
+        self._focus_editor(session)
         path_text, line_number = _split_target(target)
         editor_spec = find_window(self._session_windows_for(session), EDITOR_ROLE)
         open_keys = (editor_spec.open_keys if editor_spec is not None else None) or DEFAULT_OPEN_KEYS
@@ -314,87 +220,20 @@ class SharedNeovimEditorAdapter:
             ),
         )
 
-    def _ensure_editor(self, session: ProjectSession, *, keep_focus: bool) -> tuple[SwayWindow, bool]:
-        existing = self._find_editor_window(session)
-        if existing is not None:
-            return existing, False
-        # Snapshot pre-launch Sway windows so we can pick out the freshly
-        # created one by id, regardless of which workspace it lands on.
-        # `hop term --role editor` from a host shell triggers this path:
-        # kitty creates the editor on whatever workspace was focused at launch
-        # time, and we have to relocate it to the session workspace ourselves
-        # (Sway has no per-app_id placement rule from hop's side).
-        known_window_ids = {window.id for window in self._sway.list_windows()}
-        backend = self._session_backend_for(session)
-        self._kitty_io.launch_editor(
-            session,
-            args=list(self._editor_launch_args(session, backend=backend)),
-            os_window_class=EDITOR_OS_WINDOW_NAME,
-            var=[f"{HOP_ROLE_VAR}={EDITOR_ROLE}"],
-            keep_focus=keep_focus,
-        )
-        return self._adopt_new_editor_window(session, known_window_ids=known_window_ids), True
-
-    def _editor_launch_args(
-        self,
-        session: ProjectSession,
-        *,
-        backend: SessionBackend,
-    ) -> Sequence[str]:
-        # Compose `<editor>; <shell>` so the kitty window remains usable
-        # after the editor exits — `nvim -S Session.vim` to restore buffers,
-        # peek at git, etc. Each piece is wrapped through the backend's
-        # inline() helper so the prefix runs each side as its own backend
-        # exec, preserving today's two-call behavior. The post-exit shell
-        # falls back to ${SHELL:-sh} when the resolver yields the empty
-        # sentinel (built-in shell on host or backend default).
-        windows = self._session_windows_for(session)
-        editor_spec = find_window(windows, EDITOR_ROLE)
-        editor_command = editor_spec.command if editor_spec is not None and editor_spec.command else "nvim"
-        shell_spec = find_window(windows, SHELL_ROLE)
-        shell_command = shell_spec.command if shell_spec is not None and shell_spec.command else SHELL_FALLBACK
-        editor_inline = backend.inline(editor_command, session)
-        shell_inline = backend.inline(shell_command, session)
-        return backend.compose(f"{editor_inline}; {shell_inline}")
-
-    def _find_editor_window(self, session: ProjectSession) -> SwayWindow | None:
-        mark = _editor_mark(session)
-        marked = [window for window in self._sway.list_windows() if mark in window.marks]
-        if not marked:
-            return None
-        return min(marked, key=lambda candidate: candidate.id)
-
-    def _adopt_new_editor_window(
-        self,
-        session: ProjectSession,
-        *,
-        known_window_ids: set[int],
-    ) -> SwayWindow:
-        # After kitty creates the window, Sway sees it via Wayland a moment
-        # later. Poll for any new window with the editor's app_id /
-        # window_class — workspace-agnostic, since the new window may have
-        # landed on the caller's workspace rather than the session's. Once
-        # found: relocate to the session workspace if it drifted, then mark
-        # so subsequent lookups (kitten dispatch, repeat focus calls) find
-        # it instantly via the mark across workspaces.
-        deadline = time.monotonic() + self._ready_timeout_seconds
-        while time.monotonic() < deadline:
-            new_candidates = [
-                window
-                for window in self._sway.list_windows()
-                if window.id not in known_window_ids
-                and (window.app_id == EDITOR_OS_WINDOW_NAME or window.window_class == EDITOR_OS_WINDOW_NAME)
-            ]
-            if new_candidates:
-                window = min(new_candidates, key=lambda candidate: candidate.id)
-                if window.workspace_name != session.workspace_name:
-                    self._sway.move_window_to_workspace(window.id, session.workspace_name)
-                self._sway.mark_window(window.id, _editor_mark(session))
-                return window
-            time.sleep(self._ready_poll_interval_seconds)
-
-        msg = f"Sway did not register an editor window for session {session.session_name!r}."
-        raise NeovimCommandError(msg)
+    def _focus_editor(self, session: ProjectSession) -> None:
+        # Sway-driven focus (rather than Kitty's `focus-window`) so opening a
+        # file from another workspace escalates to a workspace switch — e.g.
+        # when the kitten dispatches a file from a terminal session. The editor
+        # is a role window on `p:<session>`, matched by app_id exactly like
+        # every other role (see term.py's `_find_role_window`).
+        candidates = [
+            window
+            for window in self._sway.list_windows()
+            if (window.app_id == EDITOR_OS_WINDOW_NAME or window.window_class == EDITOR_OS_WINDOW_NAME)
+            and window.workspace_name == session.workspace_name
+        ]
+        if candidates:
+            self._sway.focus_window(min(candidates, key=lambda window: window.id).id)
 
 
 def _coerce_ls_payload(response: object) -> Sequence[object]:
@@ -445,7 +284,3 @@ def _split_target(target: str) -> tuple[str, int | None]:
     if separator and suffix.isdigit() and path_text:
         return path_text, int(suffix)
     return target, None
-
-
-def _editor_mark(session: ProjectSession) -> str:
-    return f"{EDITOR_MARK_PREFIX}{session.session_name}"

@@ -69,16 +69,6 @@ class StubTerminalAdapter:
         return self._existing_windows
 
 
-class StubEditorAdapter:
-    def __init__(self) -> None:
-        self.ensured: list[str] = []
-        self.keep_focus_calls: list[bool] = []
-
-    def ensure(self, session: ProjectSession, *, keep_focus: bool = True) -> None:
-        self.ensured.append(session.session_name)
-        self.keep_focus_calls.append(keep_focus)
-
-
 class StubBrowserAdapter:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str | None]] = []
@@ -131,111 +121,55 @@ def test_enter_project_session_uses_supplied_session_over_cwd(tmp_path: Path) ->
     ]
 
 
-def test_enter_project_session_ensures_editor_when_one_is_supplied(tmp_path: Path) -> None:
-    """Bootstrap path: callers (app.py on first entry) pass an editor
-    adapter so the new session comes up with both shell and editor."""
+def test_enter_project_session_ensures_editor_on_first_entry(tmp_path: Path) -> None:
+    """Bootstrap path: on first entry the session comes up with both shell
+    and editor. The editor is a plain role terminal — the legacy no-windows
+    path ensures it right after the shell."""
     session_root = tmp_path / "demo"
     session_root.mkdir()
 
     sway = StubSwayAdapter()
     terminals = StubTerminalAdapter()
-    editor = StubEditorAdapter()
 
-    enter_project_session(session_root, sway=sway, terminals=terminals, editor=editor)
+    enter_project_session(session_root, sway=sway, terminals=terminals, first_entry=True)
 
-    assert editor.ensured == ["demo"]
-    assert terminals.ensured_terminals == [("demo", "shell", session_root)]
+    assert terminals.ensured_terminals == [
+        ("demo", "shell", session_root),
+        ("demo", "editor", session_root),
+    ]
 
 
-def test_enter_project_session_passes_keep_focus_false_to_editor_during_bootstrap(tmp_path: Path) -> None:
-    """In sway tabbed mode, new windows are inserted right after the
-    focused tab. The bootstrap activation sweep launches editor first,
-    then layout terminals. If the editor doesn't take focus, every
-    subsequent terminal slots in between shell and editor and the editor
-    walks to the end of the tab strip. Passing ``keep_focus=False``
-    makes the editor the focused tab, so terminals tab in *after* it,
-    yielding the desired shell → editor → terminals order."""
+def test_enter_project_session_launches_shell_before_editor(tmp_path: Path) -> None:
+    """Order matters: the per-session kitty isn't running on first entry, and
+    the shell must be ensured first (its ensure_terminal bootstraps kitty).
+    The editor follows as a plain role terminal."""
     session_root = tmp_path / "demo"
     session_root.mkdir()
 
-    editor = StubEditorAdapter()
+    terminals = StubTerminalAdapter()
 
     enter_project_session(
         session_root,
         sway=StubSwayAdapter(),
-        terminals=StubTerminalAdapter(),
-        editor=editor,
-        windows=(
-            WindowSpec(role="shell", command="", active=True),
-            WindowSpec(role="editor", command="nvim", active=True),
-            WindowSpec(role="server", command="bin/dev", active=True),
-        ),
+        terminals=terminals,
+        first_entry=True,
     )
 
-    assert editor.keep_focus_calls == [False]
-
-
-def test_enter_project_session_passes_keep_focus_false_to_editor_in_legacy_no_windows_path(tmp_path: Path) -> None:
-    """Same keep_focus contract for the legacy path (callers that pass no
-    ``windows`` tuple) — the editor still owns slot 2 in the tab strip."""
-    session_root = tmp_path / "demo"
-    session_root.mkdir()
-
-    editor = StubEditorAdapter()
-
-    enter_project_session(
-        session_root,
-        sway=StubSwayAdapter(),
-        terminals=StubTerminalAdapter(),
-        editor=editor,
-    )
-
-    assert editor.keep_focus_calls == [False]
-
-
-def test_enter_project_session_launches_terminal_before_editor(tmp_path: Path) -> None:
-    """Order matters: the per-session kitty isn't running on first entry,
-    and only ensure_terminal knows how to bootstrap it. The editor adapter
-    talks to the kitty socket directly with no fallback — if it runs first,
-    the call fails with `Could not talk to Kitty over unix:.../...sock`."""
-    session_root = tmp_path / "demo"
-    session_root.mkdir()
-
-    call_log: list[str] = []
-
-    class OrderedTerminalAdapter(StubTerminalAdapter):
-        def ensure_terminal(self, session: ProjectSession, *, role: str, already_prepared: bool = False) -> None:
-            call_log.append("terminal")
-            super().ensure_terminal(session, role=role, already_prepared=already_prepared)
-
-    class OrderedEditorAdapter(StubEditorAdapter):
-        def ensure(self, session: ProjectSession, *, keep_focus: bool = True) -> None:
-            call_log.append("editor")
-            super().ensure(session, keep_focus=keep_focus)
-
-    enter_project_session(
-        session_root,
-        sway=StubSwayAdapter(),
-        terminals=OrderedTerminalAdapter(),
-        editor=OrderedEditorAdapter(),
-    )
-
-    assert call_log == ["terminal", "editor"]
+    assert [role for _name, role, _root in terminals.ensured_terminals] == ["shell", "editor"]
 
 
 def test_enter_project_session_does_not_touch_editor_on_re_entry(tmp_path: Path) -> None:
     """Re-entry from another workspace must not resurrect an editor the
-    user deliberately closed — callers signal that by passing editor=None."""
+    user deliberately closed — callers signal that with first_entry=False."""
     session_root = tmp_path / "demo"
     session_root.mkdir()
 
     sway = StubSwayAdapter()
     terminals = StubTerminalAdapter()
-    editor = StubEditorAdapter()
 
-    enter_project_session(session_root, sway=sway, terminals=terminals, editor=None)
+    enter_project_session(session_root, sway=sway, terminals=terminals, first_entry=False)
 
-    assert editor.ensured == []
+    assert terminals.ensured_terminals == [("demo", "shell", session_root)]
 
 
 def test_enter_project_session_activates_windows_in_declaration_order(tmp_path: Path) -> None:
@@ -246,14 +180,13 @@ def test_enter_project_session_activates_windows_in_declaration_order(tmp_path: 
 
     sway = StubSwayAdapter()
     terminals = StubTerminalAdapter()
-    editor = StubEditorAdapter()
     browser = StubBrowserAdapter()
 
     enter_project_session(
         session_root,
         sway=sway,
         terminals=terminals,
-        editor=editor,
+        first_entry=True,
         browser=browser,
         windows=(
             WindowSpec(role="shell", command="zsh", active=True),
@@ -263,9 +196,9 @@ def test_enter_project_session_activates_windows_in_declaration_order(tmp_path: 
         ),
     )
 
-    assert editor.ensured == ["demo"]
     assert terminals.ensured_terminals == [
         ("demo", "shell", session_root),
+        ("demo", "editor", session_root),
         ("demo", "server", session_root),
     ]
     assert browser.calls == []
@@ -285,7 +218,7 @@ def test_enter_project_session_skips_activation_sweep_on_re_entry(tmp_path: Path
         session_root,
         sway=sway,
         terminals=terminals,
-        editor=None,
+        first_entry=False,
         browser=browser,
         windows=(
             WindowSpec(role="shell", command="zsh", active=True),
@@ -304,14 +237,13 @@ def test_enter_project_session_dispatches_browser_role_to_browser_adapter(tmp_pa
 
     sway = StubSwayAdapter()
     terminals = StubTerminalAdapter()
-    editor = StubEditorAdapter()
     browser = StubBrowserAdapter()
 
     enter_project_session(
         session_root,
         sway=sway,
         terminals=terminals,
-        editor=editor,
+        first_entry=True,
         browser=browser,
         windows=(
             WindowSpec(role="shell", command="zsh", active=True),
@@ -333,13 +265,12 @@ def test_enter_project_session_skips_browser_role_when_no_browser_adapter(tmp_pa
 
     sway = StubSwayAdapter()
     terminals = StubTerminalAdapter()
-    editor = StubEditorAdapter()
 
     enter_project_session(
         session_root,
         sway=sway,
         terminals=terminals,
-        editor=editor,
+        first_entry=True,
         browser=None,
         windows=(
             WindowSpec(role="shell", command="zsh", active=True),
@@ -361,14 +292,13 @@ def test_enter_project_session_skips_inactive_window(tmp_path: Path) -> None:
 
     sway = StubSwayAdapter()
     terminals = StubTerminalAdapter()
-    editor = StubEditorAdapter()
     browser = StubBrowserAdapter()
 
     enter_project_session(
         session_root,
         sway=sway,
         terminals=terminals,
-        editor=editor,
+        first_entry=True,
         browser=browser,
         windows=(
             WindowSpec(role="shell", command="zsh", active=True),
@@ -393,13 +323,12 @@ def test_enter_project_session_applies_workspace_layout_after_refocusing_shell(t
     shell_window = SwayWindow(id=42, workspace_name="p:demo", app_id="hop:shell", window_class=None)
     sway = StubSwayAdapter(windows=(shell_window,))
     terminals = StubTerminalAdapter()
-    editor = StubEditorAdapter()
 
     enter_project_session(
         session_root,
         sway=sway,
         terminals=terminals,
-        editor=editor,
+        first_entry=True,
         workspace_layout="tabbed",
     )
 
@@ -418,13 +347,12 @@ def test_enter_project_session_skips_workspace_layout_when_no_shell_on_session_w
 
     sway = StubSwayAdapter()
     terminals = StubTerminalAdapter()
-    editor = StubEditorAdapter()
 
     enter_project_session(
         session_root,
         sway=sway,
         terminals=terminals,
-        editor=editor,
+        first_entry=True,
         workspace_layout="tabbed",
     )
 
@@ -444,9 +372,8 @@ def test_enter_project_session_focuses_shell_window_after_sweep(tmp_path: Path) 
     editor_window = SwayWindow(id=43, workspace_name="p:demo", app_id="hop:editor", window_class=None)
     sway = StubSwayAdapter(windows=(shell_window, editor_window))
     terminals = StubTerminalAdapter()
-    editor = StubEditorAdapter()
 
-    enter_project_session(session_root, sway=sway, terminals=terminals, editor=editor)
+    enter_project_session(session_root, sway=sway, terminals=terminals, first_entry=True)
 
     assert sway.focused_window_ids == [42]
 
@@ -459,9 +386,8 @@ def test_enter_project_session_skips_focus_when_no_shell_window_in_sway(tmp_path
 
     sway = StubSwayAdapter()  # no windows
     terminals = StubTerminalAdapter()
-    editor = StubEditorAdapter()
 
-    enter_project_session(session_root, sway=sway, terminals=terminals, editor=editor)
+    enter_project_session(session_root, sway=sway, terminals=terminals, first_entry=True)
 
     assert sway.focused_window_ids == []
 
@@ -476,9 +402,8 @@ def test_enter_project_session_focuses_lowest_id_shell_on_session_workspace(tmp_
     session_shell = SwayWindow(id=20, workspace_name="p:demo", app_id="hop:shell", window_class=None)
     sway = StubSwayAdapter(windows=(foreign_shell, session_shell))
     terminals = StubTerminalAdapter()
-    editor = StubEditorAdapter()
 
-    enter_project_session(session_root, sway=sway, terminals=terminals, editor=editor)
+    enter_project_session(session_root, sway=sway, terminals=terminals, first_entry=True)
 
     assert sway.focused_window_ids == [20]
 
@@ -489,9 +414,8 @@ def test_enter_project_session_skips_layout_call_when_unset(tmp_path: Path) -> N
 
     sway = StubSwayAdapter()
     terminals = StubTerminalAdapter()
-    editor = StubEditorAdapter()
 
-    enter_project_session(session_root, sway=sway, terminals=terminals, editor=editor)
+    enter_project_session(session_root, sway=sway, terminals=terminals, first_entry=True)
 
     assert sway.layout_calls == []
 
@@ -504,12 +428,13 @@ def test_enter_project_session_falls_back_to_legacy_behavior_without_windows(tmp
 
     sway = StubSwayAdapter()
     terminals = StubTerminalAdapter()
-    editor = StubEditorAdapter()
 
-    enter_project_session(session_root, sway=sway, terminals=terminals, editor=editor)
+    enter_project_session(session_root, sway=sway, terminals=terminals, first_entry=True)
 
-    assert editor.ensured == ["demo"]
-    assert terminals.ensured_terminals == [("demo", "shell", session_root)]
+    assert terminals.ensured_terminals == [
+        ("demo", "shell", session_root),
+        ("demo", "editor", session_root),
+    ]
 
 
 def test_enter_project_session_reuses_the_same_directory_session_on_repeat_invocation(tmp_path: Path) -> None:

@@ -153,15 +153,7 @@ class StubKittyAdapter:
 
 class StubNeovimAdapter:
     def __init__(self) -> None:
-        self.ensured_sessions: list[tuple[str, Path]] = []
-        self.focused_sessions: list[tuple[str, Path]] = []
         self.opened_targets: list[tuple[str, str, Path]] = []
-
-    def ensure(self, session: ProjectSession, *, keep_focus: bool = True) -> None:
-        self.ensured_sessions.append((session.session_name, session.session_root))
-
-    def focus(self, session: ProjectSession) -> None:
-        self.focused_sessions.append((session.session_name, session.session_root))
 
     def open_target(self, session: ProjectSession, *, target: str) -> None:
         self.opened_targets.append((session.session_name, target, session.session_root))
@@ -353,7 +345,10 @@ def test_execute_command_enters_project_session_and_bootstraps_shell(tmp_path: P
 
     assert execute_command(EnterSessionCommand(), cwd=nested_directory, services=services.as_services()) == 0
     assert services.sway.switched_workspaces == [f"p:{nested_directory.name}"]
-    assert services.kitty.ensured_roles == [("src", "shell", nested_directory.resolve())]
+    assert services.kitty.ensured_roles == [
+        ("src", "shell", nested_directory.resolve()),
+        ("src", "editor", nested_directory.resolve()),
+    ]
 
 
 def test_execute_command_spawns_extra_shell_when_focused_on_session_workspace(tmp_path: Path) -> None:
@@ -378,7 +373,6 @@ def test_execute_command_spawns_extra_shell_when_focused_on_session_workspace(tm
     )
     assert services.sway.switched_workspaces == []
     assert services.kitty.ensured_roles == [("demo", "shell-2", session_root.resolve())]
-    assert services.neovim.ensured_sessions == []
 
 
 def test_execute_command_recreates_session_when_on_emptied_workspace(tmp_path: Path) -> None:
@@ -406,8 +400,10 @@ def test_execute_command_recreates_session_when_on_emptied_workspace(tmp_path: P
     # redundant switch — the user stays where they are while the windows
     # come up around them.
     assert services.sway.switched_workspaces == []
-    assert services.kitty.ensured_roles == [("demo", "shell", session_root.resolve())]
-    assert services.neovim.ensured_sessions == [("demo", session_root.resolve())]
+    assert services.kitty.ensured_roles == [
+        ("demo", "shell", session_root.resolve()),
+        ("demo", "editor", session_root.resolve()),
+    ]
 
 
 def test_execute_command_first_entry_brings_up_both_editor_and_shell(tmp_path: Path) -> None:
@@ -427,8 +423,10 @@ def test_execute_command_first_entry_brings_up_both_editor_and_shell(tmp_path: P
         == 0
     )
     assert services.sway.switched_workspaces == ["p:demo"]
-    assert services.kitty.ensured_roles == [("demo", "shell", session_root.resolve())]
-    assert services.neovim.ensured_sessions == [("demo", session_root.resolve())]
+    assert services.kitty.ensured_roles == [
+        ("demo", "shell", session_root.resolve()),
+        ("demo", "editor", session_root.resolve()),
+    ]
 
 
 def test_execute_command_applies_workspace_layout_from_config_on_first_entry(tmp_path: Path) -> None:
@@ -523,7 +521,6 @@ def test_execute_command_re_entry_does_not_resurrect_a_closed_editor(tmp_path: P
     )
     assert services.sway.switched_workspaces == ["p:demo"]
     assert services.kitty.ensured_roles == [("demo", "shell", session_root.resolve())]
-    assert services.neovim.ensured_sessions == []
 
 
 def test_execute_command_runs_full_activation_when_state_is_stale_and_kitty_dead(
@@ -550,8 +547,10 @@ def test_execute_command_runs_full_activation_when_state_is_stale_and_kitty_dead
         )
         == 0
     )
-    assert services.kitty.ensured_roles == [("demo", "shell", session_root.resolve())]
-    assert services.neovim.ensured_sessions == [("demo", session_root.resolve())]
+    assert services.kitty.ensured_roles == [
+        ("demo", "shell", session_root.resolve()),
+        ("demo", "editor", session_root.resolve()),
+    ]
 
 
 def test_execute_command_switches_to_named_session() -> None:
@@ -805,10 +804,10 @@ def test_execute_command_tails_run_output_to_stdout(tmp_path: Path, monkeypatch:
     assert stdout.getvalue() == "hello\n"
 
 
-def test_execute_command_focuses_shared_editor_via_term_role_editor(tmp_path: Path) -> None:
-    """`hop term --role editor` routes through the shared neovim adapter
-    rather than the kitty role launch path. The editor adapter's `focus`
-    handles launch-if-missing / focus-if-present / recreate-if-quit."""
+def test_execute_command_focuses_editor_via_term_role_editor(tmp_path: Path) -> None:
+    """`hop term --role editor` is a plain role terminal like any other:
+    it goes through `ensure_terminal`, which launches the editor (shell +
+    typed-in nvim) if missing or focuses it if present."""
     session_root = tmp_path / "demo"
     nested_directory = session_root / "src"
     nested_directory.mkdir(parents=True)
@@ -824,13 +823,7 @@ def test_execute_command_focuses_shared_editor_via_term_role_editor(tmp_path: Pa
         == 0
     )
     assert services.sway.switched_workspaces == []
-    assert services.neovim.focused_sessions == [("src", nested_directory.resolve())]
-    # The editor doesn't go through `ensure_terminal` — its launch path is
-    # editor-specific (composed `<editor>; <shell>`, deterministic listen
-    # socket, sway mark). Asserting nothing flowed through kitty here is
-    # what guards against the regression where a future refactor sends the
-    # editor through the regular role-terminal launch path.
-    assert services.kitty.ensured_roles == []
+    assert services.kitty.ensured_roles == [("src", "editor", nested_directory.resolve())]
 
 
 def test_execute_command_routes_file_open_targets_to_shared_editor(tmp_path: Path) -> None:
@@ -996,8 +989,11 @@ def test_create_headless_runs_prepare_in_popup_after_eager_workspace_switch(tmp_
     # (`flock -o ... sh -c 'compose up -d devcontainer'`) — only activate and
     # workspace_path probes ran.
     assert all("compose up -d devcontainer" not in " ".join(args) for args in runner_calls)
-    # The shell role was bootstrapped after prepare succeeded.
-    assert kitty_stub.ensured_roles == [("demo", "shell", session_root.resolve())]
+    # Shell + editor role terminals were bootstrapped after prepare succeeded.
+    assert kitty_stub.ensured_roles == [
+        ("demo", "shell", session_root.resolve()),
+        ("demo", "editor", session_root.resolve()),
+    ]
 
 
 def test_create_headless_failure_aborts_bootstrap(tmp_path: Path) -> None:
@@ -1035,7 +1031,6 @@ def test_create_headless_failure_aborts_bootstrap(tmp_path: Path) -> None:
     assert sway.switched_workspaces == ["p:demo"]
     # Bootstrap was aborted: no kitty / editor ensure calls.
     assert kitty_stub.ensured_roles == []
-    assert neovim_stub.ensured_sessions == []
 
 
 def test_create_interactive_runs_prepare_inline_not_in_popup(tmp_path: Path) -> None:
@@ -1091,7 +1086,10 @@ def test_create_headless_without_prepare_command_still_bootstraps(tmp_path: Path
     # the test doesn't drill into what the real KittyHopPopup would do
     # (covered in test_popup.py).
     assert services.popup.prepare_calls == [("demo", None)]
-    assert services.kitty.ensured_roles == [("demo", "shell", session_root.resolve())]
+    assert services.kitty.ensured_roles == [
+        ("demo", "shell", session_root.resolve()),
+        ("demo", "editor", session_root.resolve()),
+    ]
 
 
 def test_create_headless_reentry_does_not_run_popup(tmp_path: Path) -> None:

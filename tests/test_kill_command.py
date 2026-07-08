@@ -69,28 +69,6 @@ def test_kill_session_closes_browser_that_drifted_to_another_workspace(tmp_path:
     assert sway.closed_windows == [99]
 
 
-def test_kill_session_closes_editor_marked_window_outside_session_workspace(tmp_path: Path) -> None:
-    # Editor's kitty is sometimes the parent kitty (different workspace) when
-    # the editor was launched from the kitty boss with a stale KITTY_LISTEN_ON.
-    # The session's editor mark catches it regardless of which workspace it
-    # ended up on.
-    session_root = tmp_path / "demo"
-    session_root.mkdir()
-
-    drifted_editor = SwayWindow(
-        id=42,
-        workspace_name="p:other",
-        app_id="hop:editor",
-        window_class=None,
-        marks=("_hop_editor:demo",),
-    )
-    sway = StubSwayAdapter(windows=(drifted_editor,))
-
-    kill_session(session_root, sway=sway)
-
-    assert sway.closed_windows == [42]
-
-
 def test_kill_session_does_not_close_windows_on_other_workspaces(tmp_path: Path) -> None:
     session_root = tmp_path / "demo"
     session_root.mkdir()

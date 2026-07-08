@@ -325,7 +325,7 @@ Behavior:
 - if a terminal with that role exists → focus it
 - otherwise → create it
 - terminal lookup is keyed by stable Kitty metadata for the session and role, not by ad hoc window IDs
-- `hop term --role editor` is the way to focus or launch the session's shared Neovim. The editor isn't a plain role terminal — it has its own launch path (composed `<editor>; <shell>` startup, a deterministic per-session listen socket, an `_hop_editor:<session>` Sway mark) — but the verb is unified with every other role so launchers (vicinae, rofi) dispatch all session windows through one command.
+- `hop term --role editor` focuses or launches the session's shared Neovim. The editor is a plain role terminal like every other role: `ensure_terminal` launches a shell and types `nvim` into it (or focuses the existing editor window). The singleton — one editor per session — comes from the per-role window mechanism, not a bespoke launch path.
 - `hop term`, `hop open`, `hop run`, and `hop browser` do **not** switch Sway workspaces by default — they assume the caller is already on `p:<session>` (which is true when the command is invoked from any of that session's terminals). Use bare `hop` or `hop switch` to enter a session's workspace. `hop run --focus` is the one explicit opt-in that crosses workspaces, since asking to focus the role terminal is meaningless if the caller is somewhere else.
 
 `hop term` invoked without `--role` is an alias for bare `hop` — same env-driven branching: spawns a new `shell-<N>` terminal when run from inside a session, otherwise enters the session.
@@ -462,12 +462,9 @@ Wire protocol — HTTP/1.0 over `AF_UNIX`:
 The acceptor dispatches by request shape:
 
 - **Remote session entry** — a call carrying a non-empty `host` and *no* args (`hop` with no subcommand, from a `hop ssh`-installed shim). No session exists yet, so identity comes from the shim's `(host, cwd)`, not from focus: hop is run with `HOP_REMOTE_HOST` / `HOP_REMOTE_CWD` set and builds the remote `ProjectSession` from them.
-- **Everything else** — session identity is resolved on the host from existing Sway state, not from the request. The acceptor queries Sway for the focused window and applies two resolution rules in order:
+- **Everything else** — session identity is resolved on the host from existing Sway state, not from the request. The acceptor queries Sway for the focused window: if its workspace name matches `p:<session>`, the suffix is the session name. This covers every kitty role terminal — shell, editor, test/server/console/… — since they all live on the session workspace, plus any other window inside a session workspace; they carry no per-window session identity in Sway, but the workspace tag is hop's canonical session-to-window mapping.
 
-  1. If the focused window carries an `_hop_editor:<session>` mark (set by the editor adapter at launch), the suffix is the session name. This path also works when the editor window has drifted off its session workspace.
-  2. Otherwise, if the focused window's workspace name matches `p:<session>`, the suffix is the session name. This covers kitty role terminals (test/server/console/…) and any other window inside a session workspace — they carry no per-window session identity in Sway, but the workspace tag is hop's canonical session-to-window mapping.
-
-  The session record is then looked up in `$XDG_RUNTIME_DIR/hop/sessions/<name>.json`; the `hop` subprocess is spawned with `cwd` set to that session's `session_root`. Bridge calls from windows that are neither a hop editor nor on a `p:<session>` workspace are rejected with `400`.
+  The session record is then looked up in `$XDG_RUNTIME_DIR/hop/sessions/<name>.json`; the `hop` subprocess is spawned with `cwd` set to that session's `session_root`. Bridge calls from windows that are not on a `p:<session>` workspace are rejected with `400`.
 
 Dispatch is via subprocess (`python -m hop <argv>`) per request. Output is buffered before the response is written; streaming is out of scope. The protocol is curl-compatible — `curl --unix-socket $XDG_RUNTIME_DIR/hop/api.sock --data-binary @- http://_/call < argv.nul` is sufficient to drive it from the host, which is also how the host-side test suite exercises it.
 
@@ -605,11 +602,10 @@ Changing vigun is outside of the scope of hop, but we need to have a contract do
 
 The editor is whatever command the user configures on the `editor` role; nvim is the default. The open-file dispatch is editor-agnostic by construction: hop substitutes `{path}` and `{line}` into the `open_keys` / `open_keys_with_line` templates declared on `[windows.editor]` (default templates emit vim's `:drop fnameescape(...)` sequence), then writes the rendered bytes into the editor's kitty pty.
 
-- the editor is started when needed (e.g. via `hop term --role editor`, or when `hop open <target>` lands on a file/Rails ref)
+- the editor is started when needed (e.g. via `hop term --role editor`, or when `hop open <target>` lands on a file/Rails ref) — as a plain role terminal, a shell with `nvim` typed into it
 - the shared editor is driven by writing keystrokes into kitty's pty via `kitty @ send-text`, matched by the `hop_role=editor` user var on the kitty window — no editor-side remote-control socket is involved, so backends with a private filesystem (devcontainer, ssh) work without any cross-namespace socket coordination
-- the editor window is rediscovered through its `_hop_editor:<session>` Sway mark, which `hop term --role editor` sets at launch time
-- raw Sway moves of the editor off `p:<session>` clear that mark — `hopd` reconciles marks against current placement on every Sway `window` event. The window stops being the session's editor, and the next `hop term --role editor` launches a fresh one
-- if the editor is closed (`:qa` in nvim, equivalent in other TUI editors), it can be recreated by:
+- the editor window is rediscovered like any role window — by its `hop_role=editor` user var (or `hop:editor` app_id) on `p:<session>` — so `hop open` and `hop term --role editor` always find the one editor per session
+- if the editor window is closed, the next `hop term --role editor` launches a fresh one. If the editor is quit (`:qa`) but the window stays open at a shell, the next `hop term --role editor` focuses that shell; it can be recreated by:
 
 ```bash
 hop term --role editor

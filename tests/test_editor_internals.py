@@ -102,97 +102,19 @@ def _marked_editor(window_id: int) -> SwayWindow:
     )
 
 
-def _unmarked_editor(window_id: int, *, app_id: str = "hop:editor") -> SwayWindow:
-    return SwayWindow(
-        id=window_id,
-        workspace_name=build_session().workspace_name,
-        app_id=app_id,
-        window_class=None,
-    )
+# --- open_target error paths ----------------------------------------------
 
 
-# --- focus / window discovery ---------------------------------------------
-
-
-def test_focus_picks_lowest_id_when_multiple_marked_editor_windows_exist() -> None:
-    factory = TransportFactory()
-    sway = StubSwayAdapter([_marked_editor(31), _marked_editor(29), _marked_editor(30)])
-    adapter = SharedNeovimEditorAdapter(sway=sway, kitty_io=IpcKittyEditorIO(transport_factory=factory))
-
-    adapter.focus(build_session())
-
-    assert sway.focused == [29]
-    assert sway.marked == []
-
-
-def test_focus_picks_marked_editor_over_an_unmarked_sibling() -> None:
-    """An unmarked `hop:editor` window alongside the marked one is ignored —
-    lookup is mark-based, not app_id-based."""
-    factory = TransportFactory()
-    sway = StubSwayAdapter([_unmarked_editor(29), _marked_editor(31)])
-    adapter = SharedNeovimEditorAdapter(sway=sway, kitty_io=IpcKittyEditorIO(transport_factory=factory))
-
-    adapter.focus(build_session())
-
-    assert sway.focused == [31]
-    assert sway.marked == []
-
-
-def test_focus_triggers_launch_when_only_unmarked_editor_is_present() -> None:
-    """An unmarked editor-class window on the session ws is no longer adopted;
-    focus drives a fresh launch instead. The stub launch adds no window, so
-    the adoption poll times out."""
-    factory = TransportFactory()  # on_launch deliberately does not add a window
-    sway = StubSwayAdapter([_unmarked_editor(42)])
-    adapter = SharedNeovimEditorAdapter(
-        sway=sway,
-        kitty_io=IpcKittyEditorIO(transport_factory=factory),
-        ready_timeout_seconds=0.05,
-        ready_poll_interval_seconds=0.01,
-    )
-
-    with pytest.raises(NeovimCommandError, match="Sway did not register"):
-        adapter.focus(build_session())
-
-    assert sway.marked == []
-
-
-def test_focus_skips_unmarked_editor_belonging_to_a_different_session() -> None:
-    """An editor window marked for another session is ignored. The launch
-    transport adds no new window, so the launch-then-poll path times out."""
-    foreign_editor = SwayWindow(
-        id=42,
-        workspace_name=build_session().workspace_name,
-        app_id="hop:editor",
-        window_class=None,
-        marks=("_hop_editor:other",),
-    )
-    factory = TransportFactory()  # on_launch deliberately does not add a window
-    sway = StubSwayAdapter([foreign_editor])
-    adapter = SharedNeovimEditorAdapter(
-        sway=sway,
-        kitty_io=IpcKittyEditorIO(transport_factory=factory),
-        ready_timeout_seconds=0.05,
-        ready_poll_interval_seconds=0.01,
-    )
-
-    with pytest.raises(NeovimCommandError, match="Sway did not register"):
-        adapter.focus(build_session())
-
-
-def test_open_target_raises_when_no_editor_window_after_launch() -> None:
-    """If the editor window never appears in Sway after launch, the focus
-    step has nothing to focus and raises rather than silently dropping the
-    keystrokes."""
-    factory = TransportFactory()  # on_launch deliberately does not add a window
+def test_open_target_raises_when_no_editor_kitty_window() -> None:
+    """If no editor kitty window exists, the send step raises rather than
+    silently dropping the keystrokes."""
+    factory = TransportFactory()  # `ls` returns no editor window
     adapter = SharedNeovimEditorAdapter(
         sway=StubSwayAdapter(),
         kitty_io=IpcKittyEditorIO(transport_factory=factory),
-        ready_timeout_seconds=0.05,
-        ready_poll_interval_seconds=0.01,
     )
 
-    with pytest.raises(NeovimCommandError, match="Sway did not register"):
+    with pytest.raises(NeovimCommandError, match="No editor kitty window"):
         adapter.open_target(build_session(), target="README.md")
 
 
@@ -451,17 +373,3 @@ def test_boss_send_text_skips_windows_without_os_window_id() -> None:
 
     with pytest.raises(NeovimCommandError, match="Run `hop term --role editor`"):
         io.send_text_to_editor(build_session(), "hi")
-
-
-def test_boss_launch_editor_raises_explaining_the_constraint() -> None:
-    boss = _boss(windows=[])
-    io = BossKittyEditorIO(boss=boss)
-
-    with pytest.raises(NeovimCommandError, match="run `hop term --role editor` from a shell"):
-        io.launch_editor(
-            build_session(),
-            args=("nvim",),
-            os_window_class="hop:editor",
-            var=["hop_role=editor"],
-            keep_focus=True,
-        )

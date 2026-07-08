@@ -51,10 +51,6 @@ class SpawnTerminalAdapter(SessionTerminalAdapter, Protocol):
     def list_session_windows(self, session: ProjectSession) -> Sequence[KittyWindow]: ...
 
 
-class SessionEditorAdapter(Protocol):
-    def ensure(self, session: ProjectSession, *, keep_focus: bool = True) -> None: ...
-
-
 class SessionBrowserAutostartAdapter(Protocol):
     def ensure_browser(self, session: ProjectSession, *, url: str | None) -> None: ...
 
@@ -64,7 +60,7 @@ def enter_project_session(
     *,
     sway: SessionSwayAdapter,
     terminals: SessionTerminalAdapter,
-    editor: SessionEditorAdapter | None = None,
+    first_entry: bool = False,
     browser: SessionBrowserAutostartAdapter | None = None,
     windows: Sequence[WindowSpec] = (),
     workspace_layout: str | None = None,
@@ -91,34 +87,29 @@ def enter_project_session(
     # Terminal must come first: on first entry the per-session kitty isn't
     # running yet, and only ensure_terminal knows how to bootstrap it (catch
     # KittyConnectionError → spawn kitty listening on the session socket).
-    # The editor adapter talks to that socket directly with no fallback, so
-    # ensuring the editor first would fail with "Could not talk to Kitty".
-    # `editor` is only passed on first entry to a session — re-entry from
-    # another workspace must not resurrect a deliberately-closed editor.
+    # ``first_entry`` is only true on the cold bootstrap of a session — re-entry
+    # from another workspace must not resurrect a deliberately-closed editor or
+    # role window, so it stops after ensuring the shell.
     # ``already_prepared=True`` short-circuits the redundant ``backend.prepare``
     # call inside the bootstrap path: the caller (resolve_for_entry inline, or
     # popup.run_prepare for headless) has already brought the backend up. A
     # repeat ``compose up -d`` on an up container can stall 20+ seconds doing
     # nothing useful.
     terminals.ensure_terminal(session, role=SHELL_TERMINAL_ROLE, already_prepared=True)
-    if editor is None:
-        # Re-entry path: caller signals "shell only" by omitting the editor
-        # adapter. The activation sweep is gated on the same signal.
+    if not first_entry:
         return session
     if not windows:
         # No resolved windows (legacy callers/tests): fall back to bringing
         # up the editor alongside the shell, matching the pre-resolver
-        # bootstrap behavior.
-        editor.ensure(session, keep_focus=False)
+        # bootstrap behavior. The editor is a plain role terminal now.
+        terminals.ensure_terminal(session, role=EDITOR_ROLE, already_prepared=True)
     else:
         for window in windows:
             if window.role == SHELL_ROLE:
                 continue
             if not window.active:
                 continue
-            if window.role == EDITOR_ROLE:
-                editor.ensure(session, keep_focus=False)
-            elif window.role == BROWSER_ROLE:
+            if window.role == BROWSER_ROLE:
                 if browser is not None:
                     browser.ensure_browser(session, url=None)
             else:

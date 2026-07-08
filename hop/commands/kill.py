@@ -6,7 +6,6 @@ from typing import Callable, Protocol, Sequence
 
 from hop.backends import CommandBackend, SessionBackend
 from hop.browser import DEFAULT_BROWSER_MARK_PREFIX
-from hop.editor import EDITOR_MARK_PREFIX
 from hop.session import ProjectSession, remote_session_from_env, resolve_project_session
 from hop.state import forget_session
 from hop.sway import SwayWindow
@@ -45,20 +44,16 @@ def kill_session(
     backend = session_backend_for(session)
 
     browser_mark = f"{DEFAULT_BROWSER_MARK_PREFIX}{session.session_name}"
-    editor_mark = f"{EDITOR_MARK_PREFIX}{session.session_name}"
 
     def belongs_to_session(window: SwayWindow) -> bool:
-        return (
-            window.workspace_name == session.workspace_name
-            or browser_mark in window.marks
-            or editor_mark in window.marks
-        )
+        return window.workspace_name == session.workspace_name or browser_mark in window.marks
 
-    # Close every window on the session workspace plus any session-marked
-    # window that's drifted off it (browser via `hop browser`, editor when
-    # its kitty was launched outside the session). Sway-driven closing means
-    # we don't care which kitty instance owns each window — every process
-    # gets SIGHUP from the window-close.
+    # Close every window on the session workspace plus the session's browser
+    # if it drifted off it (via `hop browser`). Role terminals — shell,
+    # editor, test/server/… — all live on the session workspace, so the
+    # workspace sweep covers them. Sway-driven closing means we don't care
+    # which kitty instance owns each window — every process gets SIGHUP from
+    # the window-close.
     closed_ids: set[int] = set()
     for window in sway.list_windows():
         if belongs_to_session(window):

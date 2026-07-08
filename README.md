@@ -321,7 +321,7 @@ Prompt detection uses Kitty's shell integration (OSC 133), which is on by defaul
 - `hop switch <name>` - focus the Sway workspace `p:<name>`.
 - `hop move <name>` - move the currently focused Sway window onto `p:<name>` and switch to that workspace.
 - `hop open <target>` - route the target to the right place: a URL goes to the session browser (with the backend's localhost translation applied), a binary file (image, PDF, archive, ...) opens on the host with `xdg-open`, a Rails `Controller#action` ref or `path[:line]` goes to the shared Neovim. See [Binary files open on the host](#binary-files-open-on-the-host). The kitten under [Open visible-output targets from Kitty](#open-visible-output-targets-from-kitty) uses the same parser.
-- `hop term --role <name>` - focus or create the window for the given role. `hop term --role editor` focuses the session's shared Neovim - launching it on first use, focusing it when it's already running, recreating it after `:qa`.
+- `hop term --role <name>` - focus or create the window for the given role. The editor is a plain role terminal too: `hop term --role editor` launches the session's shared Neovim on first use (a shell with `nvim` typed in) and focuses it when it's already running.
 - `hop browser [<url>]` - reuse or create a session-owned browser window. If the window was moved to another workspace, it's moved back before being focused.
 - `hop kill` - close every Sway/Kitty window owned by the session, remove its workspace, and run the backend's `teardown`. Run from the session root.
 

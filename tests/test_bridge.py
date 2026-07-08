@@ -124,7 +124,7 @@ def _editor_window(session_name: str) -> SwayWindow:
         workspace_name=f"p:{session_name}",
         app_id="hop:editor",
         window_class=None,
-        marks=(f"_hop_editor:{session_name}",),
+        marks=(),
         focused=True,
     )
 
@@ -211,7 +211,7 @@ def test_focused_window_off_any_session_workspace_returns_400(tmp_path: Path) ->
         response = _curl_post(socket_path, b"\x00\x00hop\x00")
 
     assert response.status == 400
-    assert b"neither a hop editor nor on a session workspace" in response.body
+    assert b"not on a session workspace" in response.body
 
 
 def test_focused_role_terminal_on_session_workspace_resolves_session(tmp_path: Path) -> None:

@@ -18,7 +18,6 @@ from subprocess import CompletedProcess
 from typing import Callable, Sequence, cast
 
 from hop.commands.session import SESSION_WORKSPACE_PREFIX
-from hop.editor import EDITOR_MARK_PREFIX
 from hop.session import ProjectSession
 from hop.state import load_sessions
 from hop.sway import SwayWindow
@@ -122,17 +121,13 @@ def resolve_session_from_focus(
 ) -> ProjectSession:
     """Resolve the focused Sway window to a hop session.
 
-    Resolution order:
+    The focused window's workspace name must match ``p:<session>``. That covers
+    every kitty role terminal — shell, editor, test/server/console/… — since
+    they all live on the session workspace, plus any other window the user
+    happens to be on while inside a session workspace.
 
-    1. ``_hop_editor:<session>`` mark on the focused window (set by the editor
-       adapter; most specific — the editor window may have drifted off its
-       session workspace and the mark still identifies it).
-    2. The focused window's workspace name matches ``p:<session>``. Covers
-       kitty role terminals (test/server/console/…) and any other window the
-       user happens to be on while inside a session workspace.
-
-    Raises ``BridgeError(400, ...)`` if neither path yields a session known to
-    ``load_sessions()``.
+    Raises ``BridgeError(400, ...)`` if the focused window isn't on a session
+    workspace, or names a session unknown to ``load_sessions()``.
     """
 
     windows = sway_source()
@@ -142,21 +137,9 @@ def resolve_session_from_focus(
 
     sessions = load_sessions(sessions_dir=sessions_dir)
 
-    candidate_name: str | None = None
-    editor_mark = next(
-        (mark for mark in focused.marks if mark.startswith(EDITOR_MARK_PREFIX)),
-        None,
-    )
-    if editor_mark is not None:
-        candidate_name = editor_mark[len(EDITOR_MARK_PREFIX) :]
-    elif focused.workspace_name and focused.workspace_name.startswith(SESSION_WORKSPACE_PREFIX):
-        candidate_name = focused.workspace_name[len(SESSION_WORKSPACE_PREFIX) :]
-
-    if candidate_name is None:
-        raise BridgeError(
-            400,
-            "focused window is neither a hop editor nor on a session workspace",
-        )
+    if not (focused.workspace_name and focused.workspace_name.startswith(SESSION_WORKSPACE_PREFIX)):
+        raise BridgeError(400, "focused window is not on a session workspace")
+    candidate_name = focused.workspace_name[len(SESSION_WORKSPACE_PREFIX) :]
 
     state = sessions.get(candidate_name)
     if state is None:

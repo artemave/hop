@@ -1,10 +1,8 @@
 from pathlib import Path
-from typing import Any, Mapping, Sequence, cast
-
-import pytest
+from typing import Mapping, Sequence
 
 from hop.editor import IpcKittyEditorIO, SharedNeovimEditorAdapter
-from hop.kitty import HOP_ROLE_VAR, session_socket_address
+from hop.kitty import session_socket_address
 from hop.session import ProjectSession
 from hop.sway import SwayWindow
 
@@ -13,25 +11,18 @@ CR = "\r"
 
 
 class StubKittyTransport:
-    """Records IPC commands and replays scripted ``ls`` responses.
+    """Records IPC commands and replays a scripted ``ls`` response.
 
     ``ls_response`` is the kitty response payload for ``ls`` — a list of OS
     windows. Other commands return ``{"ok": True}``.
     """
 
-    def __init__(
-        self,
-        ls_response: object | None = None,
-        on_launch: object = None,
-    ) -> None:
+    def __init__(self, ls_response: object | None = None) -> None:
         self._ls_response = ls_response
-        self._on_launch = on_launch
         self.commands: list[tuple[str, Mapping[str, object] | None]] = []
 
     def send_command(self, command_name: str, payload: Mapping[str, object] | None = None) -> object:
         self.commands.append((command_name, payload))
-        if command_name == "launch" and callable(self._on_launch) and payload is not None:
-            self._on_launch(dict(payload))
         if command_name == "ls":
             return self._ls_response
         return {"ok": True}
@@ -41,22 +32,13 @@ class TransportFactory:
     """Per-session transport factory. Tests assert against the recorded
     command stream of the per-session transport."""
 
-    def __init__(
-        self,
-        *,
-        ls_response: object | None = None,
-        on_launch: object = None,
-    ) -> None:
+    def __init__(self, *, ls_response: object | None = None) -> None:
         self._ls_response = ls_response
-        self._on_launch = on_launch
         self.transports: dict[str, StubKittyTransport] = {}
 
     def __call__(self, listen_on: str) -> StubKittyTransport:
         if listen_on not in self.transports:
-            self.transports[listen_on] = StubKittyTransport(
-                ls_response=self._ls_response,
-                on_launch=self._on_launch,
-            )
+            self.transports[listen_on] = StubKittyTransport(ls_response=self._ls_response)
         return self.transports[listen_on]
 
     def for_session(self, session_name: str) -> StubKittyTransport:
@@ -65,51 +47,23 @@ class TransportFactory:
 
 class StubSwayAdapter:
     def __init__(self, windows: Sequence[SwayWindow] = ()) -> None:
-        self._windows: list[SwayWindow] = list(windows)
+        self._windows: tuple[SwayWindow, ...] = tuple(windows)
         self.focused: list[int] = []
-        self.marked: list[tuple[int, str]] = []
-        self.moved: list[tuple[int, str]] = []
 
     def list_windows(self) -> Sequence[SwayWindow]:
-        return tuple(self._windows)
+        return self._windows
 
     def focus_window(self, window_id: int) -> None:
         self.focused.append(window_id)
 
-    def mark_window(self, window_id: int, mark: str) -> None:
-        self.marked.append((window_id, mark))
-        self._windows = [
-            SwayWindow(
-                id=window.id,
-                workspace_name=window.workspace_name,
-                app_id=window.app_id,
-                window_class=window.window_class,
-                marks=window.marks + (mark,),
-                focused=window.focused,
-            )
-            if window.id == window_id
-            else window
-            for window in self._windows
-        ]
 
-    def move_window_to_workspace(self, window_id: int, workspace_name: str) -> None:
-        self.moved.append((window_id, workspace_name))
-        self._windows = [
-            SwayWindow(
-                id=window.id,
-                workspace_name=workspace_name,
-                app_id=window.app_id,
-                window_class=window.window_class,
-                marks=window.marks,
-                focused=window.focused,
-            )
-            if window.id == window_id
-            else window
-            for window in self._windows
-        ]
+class StubTerminalAdapter:
+    def __init__(self) -> None:
+        self.ensured: list[str] = []
 
-    def add_window(self, window: SwayWindow) -> None:
-        self._windows.append(window)
+    def ensure_terminal(self, session: ProjectSession, *, role: str, already_prepared: bool = False) -> None:
+        del session, already_prepared
+        self.ensured.append(role)
 
 
 def build_session() -> ProjectSession:
@@ -121,13 +75,12 @@ def build_session() -> ProjectSession:
     )
 
 
-def build_marked_editor_window(window_id: int, *, mark: str = "_hop_editor:demo") -> SwayWindow:
+def build_editor_window(window_id: int) -> SwayWindow:
     return SwayWindow(
         id=window_id,
         workspace_name="p:/tmp/demo",
         app_id="hop:editor",
         window_class=None,
-        marks=(mark,),
     )
 
 
@@ -148,134 +101,18 @@ def make_adapter(
     *,
     sway: StubSwayAdapter,
     factory: TransportFactory,
-    session_backend_for: Any = None,
-    ready_timeout_seconds: float = 5.0,
-    ready_poll_interval_seconds: float = 0.05,
+    terminals: StubTerminalAdapter | None = None,
 ) -> SharedNeovimEditorAdapter:
     return SharedNeovimEditorAdapter(
-        sway=sway,
         kitty_io=IpcKittyEditorIO(transport_factory=factory),
-        session_backend_for=session_backend_for,
-        ready_timeout_seconds=ready_timeout_seconds,
-        ready_poll_interval_seconds=ready_poll_interval_seconds,
+        terminals=terminals,
+        sway=sway,
     )
-
-
-def test_ensure_is_a_noop_when_editor_already_running() -> None:
-    """With a marked editor window already present, ensure() does no work:
-    no focus shift, no kitty IPC. The first-entry bootstrap relies on this
-    so re-entering an already-prepared session is cheap."""
-    factory = TransportFactory()
-    sway = StubSwayAdapter([build_marked_editor_window(23)])
-    adapter = make_adapter(sway=sway, factory=factory)
-
-    adapter.ensure(build_session())
-
-    assert sway.focused == []
-    assert factory.transports == {}
-
-
-def test_ensure_launches_an_editor_when_none_exists() -> None:
-    """With no editor window, ensure() asks kitty to launch one. ensure()
-    doesn't call sway.focus_window — the bootstrap relies on kitty's
-    keep_focus=True to leave the shell focused."""
-    sway = StubSwayAdapter()
-
-    def on_launch(_payload: dict[str, object]) -> None:
-        sway.add_window(
-            SwayWindow(
-                id=101,
-                workspace_name=build_session().workspace_name,
-                app_id="hop:editor",
-                window_class=None,
-            )
-        )
-
-    factory = TransportFactory(on_launch=on_launch)
-    adapter = make_adapter(sway=sway, factory=factory)
-
-    adapter.ensure(build_session())
-
-    assert sway.focused == []
-    transport = factory.for_session("demo")
-    assert len(transport.commands) == 1
-    name, payload = transport.commands[0]
-    assert name == "launch"
-    assert payload is not None
-    assert payload["keep_focus"] is True
-
-
-def test_focus_reuses_existing_editor_window_without_relaunch() -> None:
-    factory = TransportFactory()
-    sway = StubSwayAdapter([build_marked_editor_window(23)])
-    adapter = make_adapter(sway=sway, factory=factory)
-
-    adapter.focus(build_session())
-
-    # No launch needed; focus alone via Sway. No kitty IPC at all.
-    assert factory.transports == {}
-    assert sway.focused == [23]
-    assert sway.marked == []
-
-
-def test_focus_launches_editor_when_window_missing() -> None:
-    sway = StubSwayAdapter()
-
-    def on_launch(_payload: dict[str, object]) -> None:
-        sway.add_window(
-            SwayWindow(
-                id=101,
-                workspace_name=build_session().workspace_name,
-                app_id="hop:editor",
-                window_class=None,
-            )
-        )
-
-    factory = TransportFactory(on_launch=on_launch)
-    adapter = make_adapter(sway=sway, factory=factory)
-
-    adapter.focus(build_session())
-
-    transport = factory.for_session("demo")
-    assert len(transport.commands) == 1
-    name, payload = transport.commands[0]
-    assert name == "launch"
-    assert payload is not None
-    assert payload["args"] == ["sh", "-c", "nvim; ${SHELL:-sh}"]
-    assert payload["os_window_class"] == "hop:editor"
-    assert payload["var"] == [f"{HOP_ROLE_VAR}=editor"]
-
-    assert sway.marked == [(101, "_hop_editor:demo")]
-    assert sway.focused == [101]
-
-
-def test_focus_adopts_xwayland_editor_via_window_class_after_launch() -> None:
-    """XWayland-launched editors expose `hop:editor` via `window_class` rather
-    than `app_id`. The adoption poll must accept either."""
-    sway = StubSwayAdapter()
-
-    def on_launch(_payload: dict[str, object]) -> None:
-        sway.add_window(
-            SwayWindow(
-                id=101,
-                workspace_name=build_session().workspace_name,
-                app_id=None,
-                window_class="hop:editor",
-            )
-        )
-
-    factory = TransportFactory(on_launch=on_launch)
-    adapter = make_adapter(sway=sway, factory=factory)
-
-    adapter.focus(build_session())
-
-    assert sway.marked == [(101, "_hop_editor:demo")]
-    assert sway.focused == [101]
 
 
 def test_open_target_sends_drop_keystrokes_to_editor_window() -> None:
     factory = TransportFactory(ls_response=make_ls_response(kitty_window_id=77))
-    sway = StubSwayAdapter([build_marked_editor_window(31)])
+    sway = StubSwayAdapter([build_editor_window(31)])
     adapter = make_adapter(sway=sway, factory=factory)
 
     adapter.open_target(build_session(), target="app/models/user.rb:42")
@@ -285,15 +122,78 @@ def test_open_target_sends_drop_keystrokes_to_editor_window() -> None:
     assert [name for name, _ in transport.commands] == ["ls", "send-text"]
     _, send_payload = transport.commands[1]
     assert send_payload is not None
-    # send-text matches by id (the one ls returned), not by var.
+    # send-text matches by id (the one ls returned).
     assert send_payload["match"] == "id:77"
     assert send_payload["data"] == (f"text:{NORMAL_MODE}:exec 'drop '.fnameescape('app/models/user.rb'){CR}:42{CR}")
     assert sway.focused == [31]
 
 
+def test_open_target_brings_up_the_editor_role_terminal() -> None:
+    """CLI path: ``open_target`` ensures the editor role terminal exists
+    (shell + typed-in ``nvim``, or focus the existing one) before typing the
+    open-file keystrokes into it — just like `hop term --role editor`."""
+    factory = TransportFactory(ls_response=make_ls_response(kitty_window_id=77))
+    sway = StubSwayAdapter([build_editor_window(31)])
+    terminals = StubTerminalAdapter()
+    adapter = make_adapter(sway=sway, factory=factory, terminals=terminals)
+
+    adapter.open_target(build_session(), target="app/models/user.rb")
+
+    assert terminals.ensured == ["editor"]
+    assert sway.focused == [31]
+
+
+def test_open_target_without_a_terminal_adapter_does_not_launch() -> None:
+    """Boss (kitten) path: no terminal adapter is wired because we can't
+    launch without blocking kitty's loop. The editor must already be running;
+    ``open_target`` only focuses it and types the keystrokes in."""
+    factory = TransportFactory(ls_response=make_ls_response(kitty_window_id=77))
+    sway = StubSwayAdapter([build_editor_window(31)])
+    adapter = make_adapter(sway=sway, factory=factory, terminals=None)
+
+    adapter.open_target(build_session(), target="app/models/user.rb")
+
+    transport = factory.for_session("demo")
+    # No launch — just find-and-send.
+    assert [name for name, _ in transport.commands] == ["ls", "send-text"]
+    assert sway.focused == [31]
+
+
+def test_open_target_skips_sway_focus_when_no_editor_window_visible() -> None:
+    factory = TransportFactory(ls_response=make_ls_response(kitty_window_id=77))
+    sway = StubSwayAdapter([])
+    adapter = make_adapter(sway=sway, factory=factory)
+
+    adapter.open_target(build_session(), target="app/models/user.rb")
+
+    assert sway.focused == []
+
+
+def test_open_target_ignores_editor_windows_on_other_workspaces() -> None:
+    factory = TransportFactory(ls_response=make_ls_response(kitty_window_id=77))
+    other = SwayWindow(id=31, workspace_name="p:other", app_id="hop:editor", window_class=None)
+    sway = StubSwayAdapter([other])
+    adapter = make_adapter(sway=sway, factory=factory)
+
+    adapter.open_target(build_session(), target="app/models/user.rb")
+
+    assert sway.focused == []
+
+
+def test_open_target_matches_editor_via_x11_window_class_fallback() -> None:
+    factory = TransportFactory(ls_response=make_ls_response(kitty_window_id=77))
+    xwayland_editor = SwayWindow(id=31, workspace_name="p:/tmp/demo", app_id=None, window_class="hop:editor")
+    sway = StubSwayAdapter([xwayland_editor])
+    adapter = make_adapter(sway=sway, factory=factory)
+
+    adapter.open_target(build_session(), target="app/models/user.rb")
+
+    assert sway.focused == [31]
+
+
 def test_open_target_doubles_single_quotes_for_vim_string_literal() -> None:
     factory = TransportFactory(ls_response=make_ls_response(kitty_window_id=77))
-    sway = StubSwayAdapter([build_marked_editor_window(31)])
+    sway = StubSwayAdapter([build_editor_window(31)])
     adapter = make_adapter(sway=sway, factory=factory)
 
     adapter.open_target(build_session(), target="app/models/user's file.rb")
@@ -307,7 +207,7 @@ def test_open_target_doubles_single_quotes_for_vim_string_literal() -> None:
 
 def test_open_target_omits_line_jump_when_target_has_no_line_suffix() -> None:
     factory = TransportFactory(ls_response=make_ls_response(kitty_window_id=77))
-    sway = StubSwayAdapter([build_marked_editor_window(31)])
+    sway = StubSwayAdapter([build_editor_window(31)])
     adapter = make_adapter(sway=sway, factory=factory)
 
     adapter.open_target(build_session(), target="app/models/user.rb")
@@ -325,7 +225,7 @@ def test_open_target_passes_path_through_to_nvim_unchanged() -> None:
     exist). The adapter just splits off the optional line suffix and hands
     everything to nvim's :drop unchanged."""
     factory = TransportFactory(ls_response=make_ls_response(kitty_window_id=77))
-    sway = StubSwayAdapter([build_marked_editor_window(31)])
+    sway = StubSwayAdapter([build_editor_window(31)])
     adapter = make_adapter(sway=sway, factory=factory)
 
     adapter.open_target(build_session(), target="/workspace/lib/foo.py:42")
@@ -337,98 +237,3 @@ def test_open_target_passes_path_through_to_nvim_unchanged() -> None:
     assert isinstance(data, str)
     assert "/workspace/lib/foo.py" in data
     assert ":42" in data
-
-
-def test_launch_composes_editor_then_shell_through_backend_inline() -> None:
-    """The editor adapter composes `<editor>; <shell>` so the kitty window
-    stays usable after the editor exits. Each piece goes through
-    backend.inline so the prefix wraps each one individually — preserving
-    the today's two-call exec behavior for prefix backends."""
-    sway = StubSwayAdapter()
-    captured: list[list[Any]] = []
-
-    def on_launch(payload: dict[str, object]) -> None:
-        args = payload["args"]
-        assert isinstance(args, list)
-        captured.append(cast(list[Any], args))
-        sway.add_window(
-            SwayWindow(
-                id=200,
-                workspace_name=build_session().workspace_name,
-                app_id="hop:editor",
-                window_class=None,
-            )
-        )
-
-    factory = TransportFactory(on_launch=on_launch)
-
-    class FakeBackend:
-        def inline(self, command: str, _session: ProjectSession) -> str:
-            return f"podman-compose exec devcontainer {command}"
-
-        def compose(self, command: str) -> Sequence[str]:
-            return ("sh", "-c", command)
-
-    adapter = make_adapter(
-        sway=sway,
-        factory=factory,
-        session_backend_for=lambda _session: FakeBackend(),  # type: ignore[arg-type]
-    )
-
-    adapter.focus(build_session())
-
-    assert captured == [
-        [
-            "sh",
-            "-c",
-            "podman-compose exec devcontainer nvim; podman-compose exec devcontainer ${SHELL:-sh}",
-        ]
-    ]
-
-
-def test_focus_relocates_freshly_launched_editor_to_session_workspace() -> None:
-    """When `hop term --role editor` is invoked from outside the session, kitty
-    creates the editor on whatever Sway workspace was focused at launch time.
-    Hop must move it onto the session's workspace before focusing — otherwise
-    the user lands in nvim on the wrong workspace and the kitten dispatch can't
-    find the editor by Sway mark."""
-    sway = StubSwayAdapter()
-
-    def on_launch(_payload: dict[str, object]) -> None:
-        sway.add_window(
-            SwayWindow(
-                id=101,
-                workspace_name="p:other",  # caller's workspace, not the session's
-                app_id="hop:editor",
-                window_class=None,
-            )
-        )
-
-    factory = TransportFactory(on_launch=on_launch)
-    adapter = make_adapter(sway=sway, factory=factory)
-
-    adapter.focus(build_session())
-
-    assert sway.moved == [(101, build_session().workspace_name)]
-    assert sway.marked == [(101, "_hop_editor:demo")]
-    assert sway.focused == [101]
-
-
-def test_focus_raises_after_launch_when_sway_window_never_appears() -> None:
-    """If kitty's launch returns but Sway never registers the window (e.g.
-    Wayland event lost, kitty failed silently), poll times out and we surface
-    the failure instead of hanging."""
-    sway = StubSwayAdapter()
-    factory = TransportFactory()  # on_launch deliberately does not add a window
-
-    adapter = make_adapter(
-        sway=sway,
-        factory=factory,
-        ready_timeout_seconds=0.05,
-        ready_poll_interval_seconds=0.01,
-    )
-
-    from hop.editor import NeovimCommandError
-
-    with pytest.raises(NeovimCommandError, match="Sway did not register"):
-        adapter.focus(build_session())

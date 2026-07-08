@@ -32,14 +32,6 @@ def _window(
     )
 
 
-def test_reconciler_clears_editor_mark_when_window_left_session_workspace() -> None:
-    sway = StubSwayAdapter([_window(42, workspace_name="p:other", marks=("_hop_editor:demo",))])
-
-    reconcile_marks(sway)
-
-    assert sway.unmarked == [(42, "_hop_editor:demo")]
-
-
 def test_reconciler_clears_browser_mark_when_window_left_session_workspace() -> None:
     sway = StubSwayAdapter([_window(99, workspace_name="2", marks=("_hop_browser:demo",))])
 
@@ -51,8 +43,8 @@ def test_reconciler_clears_browser_mark_when_window_left_session_workspace() -> 
 def test_reconciler_is_a_noop_when_marks_match_their_session_workspace() -> None:
     sway = StubSwayAdapter(
         [
-            _window(1, workspace_name="p:demo", marks=("_hop_editor:demo",)),
-            _window(2, workspace_name="p:demo", marks=("_hop_browser:demo",)),
+            _window(1, workspace_name="p:demo", marks=("_hop_browser:demo",)),
+            _window(2, workspace_name="p:other", marks=("_hop_browser:other",)),
         ]
     )
 
@@ -64,8 +56,8 @@ def test_reconciler_is_a_noop_when_marks_match_their_session_workspace() -> None
 def test_reconciler_handles_multiple_sessions_independently() -> None:
     sway = StubSwayAdapter(
         [
-            _window(1, workspace_name="p:demo", marks=("_hop_editor:demo",)),  # placed correctly
-            _window(2, workspace_name="p:other", marks=("_hop_editor:demo",)),  # drifted
+            _window(1, workspace_name="p:demo", marks=("_hop_browser:demo",)),  # placed correctly
+            _window(2, workspace_name="p:other", marks=("_hop_browser:demo",)),  # drifted
             _window(3, workspace_name="p:other", marks=("_hop_browser:other",)),  # placed correctly
             _window(4, workspace_name="p:demo", marks=("_hop_browser:other",)),  # drifted
         ]
@@ -73,7 +65,7 @@ def test_reconciler_handles_multiple_sessions_independently() -> None:
 
     reconcile_marks(sway)
 
-    assert sorted(sway.unmarked) == [(2, "_hop_editor:demo"), (4, "_hop_browser:other")]
+    assert sorted(sway.unmarked) == [(2, "_hop_browser:demo"), (4, "_hop_browser:other")]
 
 
 def test_reconciler_leaves_unrelated_marks_alone() -> None:
@@ -97,11 +89,11 @@ def test_reconciler_clears_only_session_marks_on_a_mixed_window() -> None:
             _window(
                 42,
                 workspace_name="p:other",
-                marks=("_hop_editor:demo", "user-favorite"),
+                marks=("_hop_browser:demo", "user-favorite"),
             )
         ]
     )
 
     reconcile_marks(sway)
 
-    assert sway.unmarked == [(42, "_hop_editor:demo")]
+    assert sway.unmarked == [(42, "_hop_browser:demo")]
