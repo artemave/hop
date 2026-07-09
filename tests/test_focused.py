@@ -33,6 +33,10 @@ class _FakeBackend:
         return ""
 
     @property
+    def integration_shell(self) -> str:
+        return ""
+
+    @property
     def prepare_command(self) -> tuple[str, ...] | None:
         return None
 

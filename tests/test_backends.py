@@ -12,6 +12,7 @@ from typing import Sequence
 import pytest
 
 from hop.backends import (
+    INTEGRATION_SHELL,
     CommandBackend,
     SessionBackendError,
     UnknownBackendError,
@@ -147,6 +148,31 @@ def test_host_backend_read_file_raises_backend_file_not_found_for_missing_path(t
 
 
 # --- CommandBackend wrap / inline ----------------------------------------
+
+
+def test_integration_shell_is_empty_for_the_in_place_local_host() -> None:
+    # No prefix + no ssh host → kitty spawns and integrates the shell itself.
+    assert host_backend().integration_shell == ""
+
+
+def test_integration_shell_is_the_snippet_for_a_container() -> None:
+    backend = CommandBackend(name="dc", interactive_prefix="podman exec dc", noninteractive_prefix="podman exec -T dc")
+    assert backend.integration_shell == INTEGRATION_SHELL
+
+
+def test_integration_shell_is_the_snippet_for_a_remote_host() -> None:
+    # A remote host has no prefix but is still behind ssh — it needs the snippet.
+    backend = CommandBackend(name="remote", interactive_prefix="", noninteractive_prefix="", host="devbox")
+    assert backend.integration_shell == INTEGRATION_SHELL
+
+
+def test_container_launches_the_integration_snippet_login_wrapped(tmp_path: Path) -> None:
+    backend = CommandBackend(name="dc", interactive_prefix="podman exec dc", noninteractive_prefix="podman exec -T dc")
+
+    args = backend.wrap(backend.integration_shell, build_session(tmp_path))
+
+    assert args[2].startswith("podman exec dc sh -c ")
+    assert _login_inner(args[2]) == INTEGRATION_SHELL
 
 
 def test_command_backend_wrap_login_wraps_command_in_container(tmp_path: Path) -> None:

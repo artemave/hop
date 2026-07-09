@@ -35,6 +35,18 @@ LOCALHOST_HOSTS = frozenset({"localhost", "127.0.0.1", "0.0.0.0"})
 # environment (the typical case for container-backed dev setups).
 SHELL_FALLBACK = "${SHELL:-sh}"
 
+# Implicit shell for a non-host role window. Kitty's shell integration (OSC 133
+# prompt marks) doesn't cross a ``podman exec`` / ssh boundary, so behind one we
+# run ``kitten run-shell`` to re-enable it — or degrade to a plain shell with an
+# in-window warning when ``kitten`` isn't installed. The check and the fallback
+# live in the shell itself, so no bootstrap probe is needed; the login-wrap runs
+# this under ``$SHELL -lc``, so the degraded ``exec "$SHELL"`` inherits the login
+# environment.
+INTEGRATION_SHELL = (
+    "command -v kitten >/dev/null 2>&1 && exec kitten run-shell "
+    "|| { printf 'hop: kitten not found — shell integration off; install it in prepare\\n' >&2; exec \"$SHELL\"; }"
+)
+
 # Sentinel exit code used by ``CommandBackend.read_file`` to signal
 # "path doesn't exist" from inside the shell script (so the caller can
 # distinguish missing-file from other cat failures by exit code alone).
@@ -64,6 +76,9 @@ class SessionBackend(Protocol):
 
     @property
     def interactive_prefix(self) -> str: ...
+
+    @property
+    def integration_shell(self) -> str: ...
 
     @property
     def prepare_command(self) -> tuple[str, ...] | None: ...
@@ -491,6 +506,17 @@ class CommandBackend:
         # ``hop ssh`` but ``LOCAL_HOSTNAME={host}`` / ``host_translate = "echo
         # {host}"`` want ``devbox.local`` (the name a browser or the app uses).
         return _substitution_host(self.host)
+
+    @property
+    def integration_shell(self) -> str:
+        # The implicit shell a role window launches when nothing overrides it.
+        # The in-place local host (no prefix, no ssh) gets kitty's native login
+        # shell (empty → ``wrap`` returns ``()``); every other backend sits
+        # behind a boundary kitty's integration env can't cross, so it runs the
+        # ``kitten run-shell``-or-degrade snippet.
+        if not self.interactive_prefix and self.host is None:
+            return ""
+        return INTEGRATION_SHELL
 
     def wrap(self, command: str, session: ProjectSession) -> Sequence[str]:
         if not command and not self.interactive_prefix:

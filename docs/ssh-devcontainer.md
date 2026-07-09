@@ -52,7 +52,7 @@ prepare = [
   "ssh -o ControlMaster=auto -o ControlPath=~/.ssh/cm-%r@%h:%p -o ControlPersist=600 -o ServerAliveInterval=60 admin@devbox.local 'touch $XDG_RUNTIME_DIR/hop-wayland-stub; PATH=/home/linuxbrew/.linuxbrew/bin:$PATH SSH_AUTH_SOCK=$XDG_RUNTIME_DIR/gcr/ssh WAYLAND_DISPLAY=hop-wayland-stub podman-compose -f ~/projects/thonon-les-pains/docker-compose.dev.yml up -d --wait devcontainer'",
   # 2. Reverse-forward the hopd bridge socket onto the master.
   "ssh -O cancel -o ControlPath=~/.ssh/cm-%r@%h:%p -R /run/user/1001/hop.sock:$XDG_RUNTIME_DIR/hop/api.sock admin@devbox.local 2>/dev/null; ssh -o ControlPath=~/.ssh/cm-%r@%h:%p admin@devbox.local 'rm -f /run/user/1001/hop.sock'; ssh -O forward -o ControlPath=~/.ssh/cm-%r@%h:%p -R /run/user/1001/hop.sock:$XDG_RUNTIME_DIR/hop/api.sock admin@devbox.local",
-  # 3. Install kitten (for `kitten run-shell` windows).
+  # 3. Install kitten so hop's implicit shell integration works (see §7).
   "curl -fsSL https://github.com/kovidgoyal/kitty/releases/latest/download/kitten-linux-amd64 | ssh -o ControlPath=~/.ssh/cm-%r@%h:%p admin@devbox.local 'PATH=/home/linuxbrew/.linuxbrew/bin:$PATH SSH_AUTH_SOCK=$XDG_RUNTIME_DIR/gcr/ssh podman-compose -f ~/projects/thonon-les-pains/docker-compose.dev.yml exec -T devcontainer sudo install -m 755 /dev/stdin /usr/local/bin/kitten'",
   # 4. Install the hop bridge shim as in-container `hop`.
   "hop bridge shim --socket /run/user/1001/hop.sock | ssh -o ControlPath=~/.ssh/cm-%r@%h:%p admin@devbox.local 'PATH=/home/linuxbrew/.linuxbrew/bin:$PATH SSH_AUTH_SOCK=$XDG_RUNTIME_DIR/gcr/ssh podman-compose -f ~/projects/thonon-les-pains/docker-compose.dev.yml exec -T devcontainer sudo install -m 755 /dev/stdin /usr/local/bin/hop'",
@@ -159,10 +159,13 @@ literal: `ssh -R` can't expand a remote env var in the bind path.
 
 ### 7. kitten
 
-If your shell/editor windows use `kitten run-shell` (for OSC 133 prompt marks),
-`kitten` must exist in the container — install it in `prepare`, same as the
-[devcontainer bridge setup](devcontainer.md). Without it every shell window's
-command fails.
+hop runs `kitten run-shell` implicitly inside the container to enable Kitty
+shell integration (OSC 133 prompt marks, which `hop tail` depends on), so
+`kitten` must exist in the container — install it in `prepare` (step 3 above),
+same as the [devcontainer bridge setup](devcontainer.md). Without it the shell
+still opens, but integration is off and it prints a one-line warning. (This is
+the ssh→*container* case; a plain remote *host* gets kitten copied over by
+`hop ssh` automatically.)
 
 ### 8. Clipboard
 

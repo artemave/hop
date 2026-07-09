@@ -269,6 +269,8 @@ def test_bootstrap_runs_backend_prepare_by_default() -> None:
     prepared: list[ProjectSession] = []
 
     class RecordingBackend:
+        integration_shell = ""
+
         def wrap(self, command: str, _session: ProjectSession) -> Sequence[str]:
             return ("sh", "-c", command or "${SHELL:-sh}")
 
@@ -303,6 +305,8 @@ def test_bootstrap_skips_backend_prepare_when_already_prepared() -> None:
     prepared: list[ProjectSession] = []
 
     class RecordingBackend:
+        integration_shell = ""
+
         def wrap(self, command: str, _session: ProjectSession) -> Sequence[str]:
             return ("sh", "-c", command or "${SHELL:-sh}")
 
@@ -580,6 +584,8 @@ def test_non_shell_role_launches_shell_then_sends_command() -> None:
 
     class FakeBackend:
         # No prefix → inline is identity-substituted; matches a host backend.
+        integration_shell = ""
+
         def compose(self, command: str) -> Sequence[str]:
             return ("sh", "-c", command)
 
@@ -632,6 +638,8 @@ def test_non_shell_role_command_is_sent_raw_into_the_prefixed_shell() -> None:
     from hop.layouts import WindowSpec
 
     class FakeBackend:
+        integration_shell = ""
+
         def compose(self, command: str) -> Sequence[str]:
             return ("sh", "-c", command)
 
@@ -730,6 +738,9 @@ def test_shell_role_empty_command_does_not_self_inherit() -> None:
     from hop.layouts import WindowSpec
 
     class FakeBackend:
+        # Mirrors the in-place local host: no implicit integration shell.
+        integration_shell = ""
+
         def compose(self, command: str) -> Sequence[str]:
             return ("sh", "-c", command)
 

@@ -105,6 +105,15 @@ A remote session needs **no local directory and no local `.hop.toml`**. It is a 
 
 The transport reuses one ssh ControlMaster per host (`ControlMaster=auto` + `ControlPersist`), so a session survives a laptop-sleep / connection drop and redials lazily on the next command. The composed command is base64-encoded behind a fixed decode wrapper so ssh's argv-flattening can't corrupt it and stdin stays free for piped data (the `paths_exist`/`read_file` script-over-stdin path); the decoded command runs under a remote login shell so the remote user's normal PATH resolves with no extra config. See *Remote session setup (`hop ssh`)* for how a session is created.
 
+### Shell integration
+
+Kitty's shell integration (OSC 133 prompt marks) is what `hop tail` and other prompt-aware features depend on. hop enables it implicitly per backend — there is no shell-role config to write:
+
+- **In-place local host** (no `interactive_prefix`, no ssh host): the shell is kitty's direct child, which kitty integrates natively. The implicit shell is empty, so `wrap("")` returns empty argv and kitty spawns the user's login shell.
+- **Every other backend** (a container, or a shell over ssh): kitty's integration env doesn't cross the `podman exec` / ssh boundary, so the implicit shell is a snippet that runs `kitten run-shell` when `kitten` is on the backend's PATH, and otherwise opens a plain shell after printing a one-line "integration off" warning to stderr. The check and the degrade live inside the launched shell (no bootstrap probe), and the login-wrap runs the snippet under `$SHELL -lc`, so even the degraded shell has the login environment.
+
+Making `kitten` available is the user's step: an install command in the backend's `prepare` for a container, or — for a remote *host* — `hop ssh`, which best-effort-copies the host's own `kitten` binary onto the remote (a portable kitty release runs on any same-arch glibc target; a musl or cross-arch remote just falls through to the warning). An explicit `[windows.shell].command` overrides the implicit shell on any backend.
+
 ### Workspace layout
 
 Top-level `workspace_layout` (string, optional) — sway workspace layout mode hop applies to a session's workspace at first entry. Accepts only `splith`, `splitv`, `stacking`, `tabbed`. Omitted ⇒ sway's default layout. Re-entry from another workspace does not re-apply it (the user may have changed the layout deliberately during the session).
@@ -122,7 +131,7 @@ Per-role launch commands live outside the backend, in two top-level config secti
 
 Each window declaration carries:
 
-- `command` (string) — the role command. **No backend wrap inside this string** — the active backend's `interactive_prefix` is prepended at launch time. For built-in roles, hop ships a default; the user can override. Every terminal role's window is launched as the **shell role's** command, so a wrap configured on the shell role (e.g. `kitten run-shell` to enable OSC 133 inside a backend) applies to every role uniformly. The role's own command, if non-empty, is then typed into that shell via kitty `send-text` — so it lands in shell history, runs with the interactive shell's environment (no per-command wrapping, shell syntax works as typed), and leaves a usable shell when it exits. A non-shell role with `command = ""` (e.g. `[layouts.rails.windows.test]`) is just that bare shell with nothing typed in. The shell role's own empty command is the host-default sentinel (kitty's platform default on host; `${SHELL:-sh}` inside a backend prefix).
+- `command` (string) — the role command. **No backend wrap inside this string** — the active backend's `interactive_prefix` is prepended at launch time. For built-in roles, hop ships a default; the user can override. Every terminal role's window is launched as the session shell, resolved as: an explicit `[windows.shell].command` override → the backend's implicit integration shell → empty. The implicit integration shell is empty for the in-place local host (kitty spawns and integrates its native login shell, so `wrap("")` returns empty argv), and a `kitten run-shell`-or-degrade snippet for any non-host backend (see *Shell integration*). The role's own command, if non-empty, is then typed into that shell via kitty `send-text` — so it lands in shell history, runs with the interactive shell's environment (no per-command wrapping, shell syntax works as typed), and leaves a usable shell when it exits. A non-shell role with `command = ""` (e.g. `[layouts.rails.windows.test]`) is just that bare shell with nothing typed in.
 - `activate` (`"true"` or `"false"`, optional) — opt-in / opt-out only. No probe at the per-window level; the gate is whatever the window's container decides:
   - **Built-in window** (shell / editor / browser) with no top-level override: hop's default (active for shell/editor, inactive for browser).
   - **Top-level window**: defaults active unless the entry sets `activate = "false"`.

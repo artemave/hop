@@ -216,7 +216,7 @@ The active backend's `interactive_prefix` wraps each window's `command` at launc
 
 Per-window fields:
 
-- `command` (string) - the role command, **without** any backend wrap. The active backend's `interactive_prefix` is prepended at launch. An empty string on a non-shell role (e.g. `[layouts.rails.windows.test] command = ""`) is the "just an empty shell" sentinel: hop substitutes the **shell role's** command at launch so any wrap configured on the shell role propagates uniformly. Non-shell roles with a non-empty primary command compose as `<primary>; <shell-role-command>` so the kitty window survives the primary process exiting.
+- `command` (string) - the role command, **without** any backend wrap. Every terminal role launches the session shell (kitty-native on the host, `kitten run-shell` in a non-host backend - see below); the role's `command`, if any, is then typed into that shell via `send-text`, so it lands in shell history and the window stays a usable shell after it exits. An empty string (e.g. `[layouts.rails.windows.test] command = ""`) is just that bare shell.
 - `activate` (string, optional) - shell probe; the window auto-launches when it exits 0. Defaults to `"true"`.
 
 Built-in roles `shell`, `editor`, and `browser` ship with hop defaults:
@@ -229,15 +229,7 @@ Built-in roles `shell`, `editor`, and `browser` ship with hop defaults:
 
 To change a built-in, declare it as a top-level window: `[windows.editor] activate = "false"` opts out of the editor for this config; `[windows.browser] activate = "true"` activates the browser; `[windows.shell] command = "/usr/bin/zsh"` overrides the shell.
 
-To enable Kitty shell integration end-to-end inside a non-host backend (so `hop tail` and other OSC-133-dependent features work for in-container / over-ssh shells), wrap the shell role with kitty's recommended mechanism - `kitten run-shell` for container-style backends, `kitten ssh` as the prefix for ssh backends. Every terminal role's window is launched as the shell role's command, so every role in the same session picks up the same wrap automatically:
-
-```toml
-[layouts.rails.windows.shell]
-command = "kitten run-shell"  # kitten auto-detects $SHELL / passwd
-
-[layouts.rails.windows.test]
-command = ""  # a bare shell — same kitten wrap as every role
-```
+Kitty shell integration (OSC 133 prompt marks, which power `hop tail` and other OSC-133-dependent features) is **automatic** - no shell-role config needed. On the host, kitty integrates the shell it spawns directly. Inside a non-host backend (a container, or a shell over ssh) kitty's integration can't reach across the boundary, so hop runs `kitten run-shell` for you when `kitten` is available in that backend; if it isn't, the shell still opens but prints a one-line warning that integration is off. Make `kitten` available with an install step in the backend's `prepare` (see [devcontainer](docs/devcontainer.md)); for a remote *host*, `hop ssh` best-effort-copies your own kitten over. To use a different shell, override the built-in: `[windows.shell] command = "/usr/bin/fish"` (kitty/kitten still auto-detect it).
 
 Multiple matching layouts compose: a Rails project that also has `vite.config.ts` activates both layouts and gets their windows.
 

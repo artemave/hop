@@ -440,7 +440,7 @@ class KittyRemoteControlAdapter:
         # process needs at least one window. Resolve the shell command from
         # the active layout/windows config (built-in default is "" → kitty's
         # platform-default shell on host).
-        shell_command = self._shell_command(session)
+        shell_command = self._shell_command(session, backend)
         shell_argv = list(backend.wrap(shell_command, session))
         if shell_argv:
             kitty_args.append("--")
@@ -607,15 +607,18 @@ class KittyRemoteControlAdapter:
         # that shell afterward via ``send-text`` (see ``_role_command_to_send``),
         # so it lands in shell history and runs with the interactive shell's
         # environment rather than being baked into the launch argv.
-        return backend.wrap(self._shell_command(session), session)
+        return backend.wrap(self._shell_command(session, backend), session)
 
-    def _shell_command(self, session: ProjectSession) -> str:
-        # The shell-role command drives every terminal window's launch. Empty
-        # (the built-in default on host) means "let kitty pick the platform
-        # shell"; a backend/user override (e.g. ``kitten run-shell``) applies to
-        # every role uniformly.
+    def _shell_command(self, session: ProjectSession, backend: SessionBackend) -> str:
+        # The shell every terminal window launches. An explicit
+        # ``[windows.shell].command`` wins; otherwise the backend supplies its
+        # implicit integration shell — ``kitten run-shell`` (or a degrade) for a
+        # non-host backend, ``""`` for the in-place local host so kitty picks its
+        # native login shell.
         spec = find_window(self._session_windows_for(session), SHELL_ROLE)
-        return spec.command if spec is not None and spec.command else ""
+        if spec is not None and spec.command:
+            return spec.command
+        return backend.integration_shell
 
     def _role_command_to_send(self, session: ProjectSession, role: str) -> str:
         # The command typed into a freshly-launched role window. Shell-like
