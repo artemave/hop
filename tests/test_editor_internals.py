@@ -13,6 +13,7 @@ from hop.editor import (
     SharedNeovimEditorAdapter,
     _build_open_keystrokes,
     _coerce_ls_payload,
+    _default_editor_respawn,
     _split_target,
 )
 from hop.kitty import session_socket_address
@@ -105,17 +106,91 @@ def _marked_editor(window_id: int) -> SwayWindow:
 # --- open_target error paths ----------------------------------------------
 
 
+class _NoopTerminals:
+    def ensure_terminal(self, session: ProjectSession, *, role: str, already_prepared: bool = False) -> None:
+        del session, role, already_prepared
+
+
 def test_open_target_raises_when_no_editor_kitty_window() -> None:
-    """If no editor kitty window exists, the send step raises rather than
-    silently dropping the keystrokes."""
+    """CLI path: the editor was ensured but kitty's ``ls`` doesn't show it yet
+    (a launch race); the send step raises rather than silently dropping the
+    keystrokes."""
     factory = TransportFactory()  # `ls` returns no editor window
     adapter = SharedNeovimEditorAdapter(
         sway=StubSwayAdapter(),
         kitty_io=IpcKittyEditorIO(transport_factory=factory),
+        terminals=_NoopTerminals(),
     )
 
     with pytest.raises(NeovimCommandError, match="No editor kitty window"):
         adapter.open_target(build_session(), target="README.md")
+
+
+# --- default editor respawn (detached `hop open`) -------------------------
+
+
+def _fake_hop_recording(bindir: Path, marker: Path) -> None:
+    """Install a fake ``hop`` on PATH that records ``$1|$2|$PWD|$HOP_REMOTE_HOST|$HOP_REMOTE_CWD``."""
+    bindir.mkdir()
+    fake = bindir / "hop"
+    fake.write_text(
+        '#!/bin/sh\nprintf "%s|%s|%s|%s|%s" '
+        f'"$1" "$2" "$PWD" "${{HOP_REMOTE_HOST:-}}" "${{HOP_REMOTE_CWD:-}}" > {marker}\n'
+    )
+    fake.chmod(0o755)
+
+
+def _await_marker(marker: Path) -> str:
+    import time
+
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline and not marker.exists():
+        time.sleep(0.02)
+    return marker.read_text()
+
+
+def test_default_editor_respawn_local_runs_hop_open_in_session_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A local session's editor is re-spawned by ``hop open <target>`` run in
+    the session root — the fresh ``hop`` resolves the session from its cwd."""
+    import os
+
+    bindir = tmp_path / "bin"
+    marker = tmp_path / "rec"
+    _fake_hop_recording(bindir, marker)
+    monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
+    session_root = tmp_path / "proj"
+    session_root.mkdir()
+    session = ProjectSession(session_root=session_root, session_name="proj", workspace_name="p:proj")
+
+    _default_editor_respawn(session, "app/models/user.rb:42")
+
+    # open|<target>|<cwd=session_root>|<no remote host>|<no remote cwd>
+    assert _await_marker(marker) == f"open|app/models/user.rb:42|{session_root}||"
+
+
+def test_default_editor_respawn_remote_passes_identity_via_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A remote session's root is a remote path, useless as a local cwd — so
+    identity rides in ``HOP_REMOTE_HOST`` / ``HOP_REMOTE_CWD`` instead, which is
+    what an in-session ``hop`` reads."""
+    import os
+
+    bindir = tmp_path / "bin"
+    marker = tmp_path / "rec"
+    _fake_hop_recording(bindir, marker)
+    monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
+    session = ProjectSession(
+        session_root=Path("/remote/proj"),
+        session_name="proj",
+        workspace_name="p:proj",
+        host="devbox",
+    )
+
+    _default_editor_respawn(session, "lib/foo.py")
+
+    # cwd is inherited (remote root is not local), identity via env.
+    assert _await_marker(marker) == f"open|lib/foo.py|{os.getcwd()}|devbox|/remote/proj"
 
 
 # --- keystroke building ---------------------------------------------------

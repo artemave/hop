@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import subprocess
 from typing import Any, Callable, Mapping, Protocol, Sequence, cast
 
 from hop.config import EDITOR_ROLE as _EDITOR_ROLE_CONST
@@ -182,13 +184,18 @@ class SharedNeovimEditorAdapter:
         terminals: EditorTerminalAdapter | None = None,
         sway: EditorSwayAdapter | None = None,
         session_windows_for: SessionWindowsFactory | None = None,
+        editor_respawn: Callable[[ProjectSession, str], None] | None = None,
     ) -> None:
         self._kitty_io: KittyEditorIO = kitty_io or IpcKittyEditorIO()
         # The terminal adapter that launches/focuses role windows. ``None``
         # inside the kitty boss (kitten) — there we can't launch without
-        # blocking the loop, so the editor must already be running and
-        # ``send_text_to_editor`` raises a clear error if it isn't.
+        # blocking the loop, so a missing editor is re-spawned out of process
+        # via ``editor_respawn`` instead.
         self._terminals: EditorTerminalAdapter | None = terminals
+        # Brings a missing editor up on the boss (kitten) path — a detached
+        # ``hop open`` that re-spawns the editor and opens the file in its own
+        # process, sidestepping the boss-loop deadlock.
+        self._editor_respawn: Callable[[ProjectSession, str], None] = editor_respawn or _default_editor_respawn
         self._sway: EditorSwayAdapter = sway or SwayIpcAdapter()
         # Resolves the session's window list so ``open_target`` can pick up a
         # user override for the editor's ``open_keys``. Default returns no
@@ -203,6 +210,12 @@ class SharedNeovimEditorAdapter:
         if self._terminals is not None:
             # CLI path: bring the editor up like any role terminal if it's gone.
             self._terminals.ensure_terminal(session, role=EDITOR_ROLE)
+        elif not self._editor_candidates(session):
+            # Boss (kitten) path with no editor: we can't launch synchronously
+            # without deadlocking the boss loop, so hand the open to a detached
+            # ``hop open`` that re-spawns the editor and opens the file itself.
+            self._editor_respawn(session, target)
+            return
         self._focus_editor(session)
         path_text, line_number = _split_target(target)
         editor_spec = find_window(self._session_windows_for(session), EDITOR_ROLE)
@@ -223,17 +236,52 @@ class SharedNeovimEditorAdapter:
     def _focus_editor(self, session: ProjectSession) -> None:
         # Sway-driven focus (rather than Kitty's `focus-window`) so opening a
         # file from another workspace escalates to a workspace switch — e.g.
-        # when the kitten dispatches a file from a terminal session. The editor
-        # is a role window on `p:<session>`, matched by app_id exactly like
-        # every other role (see term.py's `_find_role_window`).
-        candidates = [
+        # when the kitten dispatches a file from a terminal session.
+        candidates = self._editor_candidates(session)
+        if candidates:
+            self._sway.focus_window(min(candidates, key=lambda window: window.id).id)
+
+    def _editor_candidates(self, session: ProjectSession) -> list[SwayWindow]:
+        # The session's editor role window(s) on `p:<session>`, matched by
+        # app_id exactly like every other role (see term.py's
+        # `_find_role_window`). Empty means the editor is gone.
+        return [
             window
             for window in self._sway.list_windows()
             if (window.app_id == EDITOR_OS_WINDOW_NAME or window.window_class == EDITOR_OS_WINDOW_NAME)
             and window.workspace_name == session.workspace_name
         ]
-        if candidates:
-            self._sway.focus_window(min(candidates, key=lambda window: window.id).id)
+
+
+def _default_editor_respawn(session: ProjectSession, target: str) -> None:
+    """Re-spawn a missing editor and open ``target`` in it via a detached
+    ``hop open`` — the boss (kitten) path can't launch synchronously without
+    deadlocking the kitty loop. Fire-and-forget, like ``SubprocessHostOpener``:
+    a fresh ``hop`` re-spawns the editor role terminal and buffers the open
+    keystrokes until nvim is up. ``hop`` is on PATH in the kitty/Sway env.
+
+    Identity is handed to the child the way an in-session ``hop`` resolves it:
+    a local session through its ``cwd``, a remote one through the
+    ``HOP_REMOTE_HOST`` / ``HOP_REMOTE_CWD`` env vars (``session_root`` is a
+    remote path, meaningless as a local ``cwd``) — see ``remote_session_from_env``.
+    """
+    env = dict(os.environ)
+    cwd: str | None
+    if session.host is None:
+        cwd = str(session.session_root)
+    else:
+        cwd = None
+        env["HOP_REMOTE_HOST"] = session.host
+        env["HOP_REMOTE_CWD"] = str(session.session_root)
+    subprocess.Popen(  # noqa: S603
+        ["hop", "open", target],  # noqa: S607
+        cwd=cwd,
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
 
 
 def _coerce_ls_payload(response: object) -> Sequence[object]:

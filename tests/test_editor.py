@@ -97,16 +97,29 @@ def make_ls_response(*, kitty_window_id: int) -> list[dict[str, object]]:
     ]
 
 
+class RecordingRespawn:
+    """Records the detached ``hop open`` re-spawns the boss path would fire,
+    so tests exercise the respawn decision without launching a real ``hop``."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    def __call__(self, session: ProjectSession, target: str) -> None:
+        self.calls.append((session.session_name, target))
+
+
 def make_adapter(
     *,
     sway: StubSwayAdapter,
     factory: TransportFactory,
     terminals: StubTerminalAdapter | None = None,
+    editor_respawn: RecordingRespawn | None = None,
 ) -> SharedNeovimEditorAdapter:
     return SharedNeovimEditorAdapter(
         kitty_io=IpcKittyEditorIO(transport_factory=factory),
         terminals=terminals,
         sway=sway,
+        editor_respawn=editor_respawn,
     )
 
 
@@ -160,12 +173,16 @@ def test_open_target_without_a_terminal_adapter_does_not_launch() -> None:
 
 
 def test_open_target_skips_sway_focus_when_no_editor_window_visible() -> None:
+    # CLI path: the editor was just ensured but sway's list doesn't show it
+    # yet — focus is skipped, the keystrokes still go in via kitty.
     factory = TransportFactory(ls_response=make_ls_response(kitty_window_id=77))
     sway = StubSwayAdapter([])
-    adapter = make_adapter(sway=sway, factory=factory)
+    adapter = make_adapter(sway=sway, factory=factory, terminals=StubTerminalAdapter())
 
     adapter.open_target(build_session(), target="app/models/user.rb")
 
+    transport = factory.for_session("demo")
+    assert [name for name, _ in transport.commands] == ["ls", "send-text"]
     assert sway.focused == []
 
 
@@ -173,11 +190,43 @@ def test_open_target_ignores_editor_windows_on_other_workspaces() -> None:
     factory = TransportFactory(ls_response=make_ls_response(kitty_window_id=77))
     other = SwayWindow(id=31, workspace_name="p:other", app_id="hop:editor", window_class=None)
     sway = StubSwayAdapter([other])
-    adapter = make_adapter(sway=sway, factory=factory)
+    adapter = make_adapter(sway=sway, factory=factory, terminals=StubTerminalAdapter())
 
     adapter.open_target(build_session(), target="app/models/user.rb")
 
     assert sway.focused == []
+
+
+def test_open_target_respawns_editor_on_boss_path_when_editor_is_gone() -> None:
+    """Boss (kitten) path with no editor on the session workspace: rather than
+    fail, hand the open to a detached ``hop open`` that re-spawns the editor
+    and opens the file in its own process. No inline focus/send happens."""
+    factory = TransportFactory(ls_response=make_ls_response(kitty_window_id=77))
+    sway = StubSwayAdapter([])
+    respawn = RecordingRespawn()
+    adapter = make_adapter(sway=sway, factory=factory, terminals=None, editor_respawn=respawn)
+
+    adapter.open_target(build_session(), target="app/models/user.rb:42")
+
+    assert respawn.calls == [("demo", "app/models/user.rb:42")]
+    # No inline drive of a (nonexistent) editor: no kitty IPC at all.
+    assert factory.transports == {}
+    assert sway.focused == []
+
+
+def test_open_target_does_not_respawn_on_boss_path_when_editor_is_present() -> None:
+    """Boss path with the editor up: drive it inline (focus + send), never
+    re-spawn."""
+    factory = TransportFactory(ls_response=make_ls_response(kitty_window_id=77))
+    sway = StubSwayAdapter([build_editor_window(31)])
+    respawn = RecordingRespawn()
+    adapter = make_adapter(sway=sway, factory=factory, terminals=None, editor_respawn=respawn)
+
+    adapter.open_target(build_session(), target="app/models/user.rb")
+
+    assert respawn.calls == []
+    assert [name for name, _ in factory.for_session("demo").commands] == ["ls", "send-text"]
+    assert sway.focused == [31]
 
 
 def test_open_target_matches_editor_via_x11_window_class_fallback() -> None:
