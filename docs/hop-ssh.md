@@ -10,6 +10,12 @@ laptop, the shells/editor/container on the remote box — driven by the project'
   hopd's bridge socket onto the remote, installs the `hop` shim on the remote's
   PATH, and drops you into a remote login shell. That's all it does — no session
   is created.
+- It also **best-effort-copies your own `kitten` binary** onto the remote (into
+  `~/.local/bin`, if the remote doesn't already have one), so a remote-*host*
+  session gets Kitty shell integration with no manual setup. This is best-effort:
+  a musl or cross-arch remote just falls through to hop's plain-shell + warning.
+  It reaches only the remote host — a container behind an ssh→container backend
+  still installs `kitten` in its own `prepare` step.
 - In that shell, **`cd <project> && hop`**. The remote `hop` is the shim; it
   reports `(host, cwd)` to hopd, which starts the session: kitty windows open on
   your laptop, each window's shell running on the remote over the same ssh

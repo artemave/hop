@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import shlex
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Callable
@@ -25,6 +26,10 @@ from hop.errors import HopError
 # Where the shim is installed on the remote. ``$HOME`` is expanded by the remote
 # shell at install time.
 REMOTE_SHIM_PATH = "$HOME/.local/bin/hop"
+
+# Where a copied ``kitten`` lands on the remote — same no-sudo ``~/.local/bin``
+# as the shim, so a login shell's PATH finds it.
+REMOTE_KITTEN_PATH = "$HOME/.local/bin/kitten"
 
 # Fallback when the remote has no ``XDG_RUNTIME_DIR`` (no logind session).
 _FALLBACK_REMOTE_RUNTIME = "/tmp"
@@ -77,6 +82,45 @@ def ssh_install_argv(host: str) -> tuple[str, ...]:
         host,
         f'mkdir -p "$(dirname {REMOTE_SHIM_PATH})" && install -m 755 /dev/stdin {REMOTE_SHIM_PATH}',
     )
+
+
+def ssh_install_kitten_argv(host: str) -> tuple[str, ...]:
+    """ssh argv that installs a piped ``kitten`` binary on the remote.
+
+    Mirrors ``ssh_install_argv``: the local binary is piped to stdin and written
+    by ``install`` reading ``/dev/stdin``, into the same no-sudo ``~/.local/bin``.
+    """
+
+    return ssh_remote_argv(
+        host,
+        f'mkdir -p "$(dirname {REMOTE_KITTEN_PATH})" && install -m 755 /dev/stdin {REMOTE_KITTEN_PATH}',
+    )
+
+
+def _ensure_remote_kitten(host: str, *, runner: SubprocessRunner) -> None:
+    """Best-effort: copy the host's ``kitten`` onto the remote host.
+
+    Under implicit shell integration a remote-host role window runs
+    ``kitten run-shell``; copying the host's binary (a portable kitty release
+    needing only an ancient glibc) makes that work with no manual setup. This
+    never raises: a musl / mismatched-arch remote, a missing local ``kitten``,
+    or an already-present remote one all just leave the remote to degrade + warn
+    at the shell. It reaches only the remote *host* — a container behind an
+    ssh→container backend still installs kitten in its ``prepare`` step.
+    """
+
+    probe = runner(
+        ssh_remote_argv(host, "command -v kitten >/dev/null 2>&1"),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if probe.returncode == 0:
+        return
+    local = shutil.which("kitten")
+    if local is None:
+        return
+    runner(ssh_install_kitten_argv(host), input=Path(local).read_bytes(), capture_output=True, check=False)
 
 
 def ssh_unlink_argv(host: str, remote_socket: str) -> tuple[str, ...]:
@@ -169,5 +213,8 @@ def run_hop_ssh(
     )
     if forward.returncode != 0:
         raise HopError(_setup_error(host, forward, "reverse-forward"))
+
+    # Best-effort — never blocks the drop-in shell (unlike the shim above).
+    _ensure_remote_kitten(host, runner=runner)
 
     exec_("ssh", ssh_shell_argv(host))

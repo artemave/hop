@@ -26,10 +26,13 @@ from hop.backends import (
 )
 from hop.bridge import dispatch_remote
 from hop.commands.ssh import (
+    REMOTE_KITTEN_PATH,
+    _ensure_remote_kitten,  # pyright: ignore[reportPrivateUsage]
     remote_bridge_socket,
     run_hop_ssh,
     ssh_forward_argv,
     ssh_install_argv,
+    ssh_install_kitten_argv,
     ssh_shell_argv,
 )
 from hop.config import HopConfig, parse_project_config_text
@@ -494,3 +497,85 @@ def test_run_hop_ssh_raises_when_forward_fails(tmp_path: Path) -> None:
 
     # The forward failed before the shell could launch.
     assert execs == []
+
+
+def _is_kitten_probe(args: Sequence[str]) -> bool:
+    return args[-1] == "command -v kitten >/dev/null 2>&1"
+
+
+def _fake_local_kitten(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, content: bytes = b"KITTENBIN") -> None:
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    kitten = bindir / "kitten"
+    kitten.write_bytes(content)
+    kitten.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bindir))
+
+
+def test_ensure_remote_kitten_skips_when_already_present() -> None:
+    runs: list[Sequence[str]] = []
+
+    def runner(args: Sequence[str], **kwargs: object) -> CompletedProcess[str]:
+        runs.append(args)
+        return CompletedProcess(args=list(args), returncode=0, stdout="", stderr="")  # probe → present
+
+    _ensure_remote_kitten("devbox", runner=runner)
+
+    assert len(runs) == 1  # only the probe; nothing installed
+    assert _is_kitten_probe(runs[0])
+
+
+def test_ensure_remote_kitten_copies_local_binary_when_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_local_kitten(tmp_path, monkeypatch)
+    runs: list[Sequence[str]] = []
+    install_kwargs: dict[str, object] = {}
+
+    def runner(args: Sequence[str], **kwargs: object) -> CompletedProcess[str]:
+        runs.append(args)
+        if "install -m 755 /dev/stdin" in args[-1]:
+            install_kwargs.update(kwargs)
+        code = 1 if _is_kitten_probe(args) else 0  # probe → absent
+        return CompletedProcess(args=list(args), returncode=code, stdout="", stderr="")
+
+    _ensure_remote_kitten("devbox", runner=runner)
+
+    assert _is_kitten_probe(runs[0])
+    assert runs[1] == ssh_install_kitten_argv("devbox")
+    assert install_kwargs["input"] == b"KITTENBIN"  # the local binary's bytes, piped over ssh
+
+
+def test_ensure_remote_kitten_skips_when_no_local_kitten(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    monkeypatch.setenv("PATH", str(empty))
+    runs: list[Sequence[str]] = []
+
+    def runner(args: Sequence[str], **kwargs: object) -> CompletedProcess[str]:
+        runs.append(args)
+        return CompletedProcess(args=list(args), returncode=1, stdout="", stderr="")  # probe → absent
+
+    _ensure_remote_kitten("devbox", runner=runner)
+
+    assert len(runs) == 1  # probed, but no local kitten to copy → nothing installed
+    assert _is_kitten_probe(runs[0])
+
+
+def test_run_hop_ssh_execs_even_when_kitten_install_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_local_kitten(tmp_path, monkeypatch)
+    socket = tmp_path / "api.sock"
+    socket.touch()
+    execs: list[object] = []
+
+    def runner(args: Sequence[str], **kwargs: object) -> CompletedProcess[str]:
+        if _is_runtime_query(args):
+            return CompletedProcess(args=list(args), returncode=0, stdout="/run/user/1001", stderr="")
+        if _is_kitten_probe(args):
+            return CompletedProcess(args=list(args), returncode=1, stdout="", stderr="")  # absent
+        if REMOTE_KITTEN_PATH in args[-1]:
+            return CompletedProcess(args=list(args), returncode=1, stdout="", stderr="mismatched arch")  # install fails
+        return CompletedProcess(args=list(args), returncode=0, stdout="", stderr="")
+
+    run_hop_ssh("devbox", api_socket=socket, runner=runner, exec_=lambda f, a: execs.append((f, a)))
+
+    # Kitten install is best-effort — its failure must not block the drop-in shell.
+    assert execs == [("ssh", ssh_shell_argv("devbox"))]
