@@ -296,35 +296,19 @@ The flag is only valid on bare `hop` (or `hop term` without `--role`, which is t
 
 ## Tools-managed `$PATH` inside the container (mise / asdf / rbenv / nvm / direnv)
 
-`compose exec devcontainer <cmd>` runs `<cmd>` in a **non-login, non-interactive** shell — `.bashrc`, `.profile`, mise/asdf hooks, and direnv hooks do **not** fire. Anything those normally inject into `$PATH` (`gem`, `rake`, `bundle`, `node`, `npm`, language SDKs, `direnv`-exported env vars, etc.) is missing.
+hop launches the container shell as a **login** shell — the shell command is login-wrapped (`sh -c 'exec "$SHELL" -lc …'`), the same way the ssh transport runs a remote login shell. Role commands are then *typed into* that interactive shell rather than exec'd directly, so by the time `bin/dev` runs, the login profile (`.zprofile` / `.bash_profile`) and interactive rc (`.zshrc` / `.bashrc`) have both sourced — mise/asdf/rbenv/nvm/direnv have activated, and everything they inject into `$PATH` (`gem`, `rake`, `bundle`, `node`, language SDKs, `direnv`-exported env, …) is present.
 
-Symptoms: a window declared as `command = "bin/dev"` prints `gem: command not found` / `exec: foreman: not found`, then drops into the post-exit shell where everything works because **that** shell is interactive and triggers the activation.
-
-Wrap any tool-dependent command in a login shell:
+So tool-dependent commands need no `bash -lc` / `$SHELL -lc` wrapping — declare them plainly:
 
 ```toml
 [layouts.rails.windows.server]
-command = "bash -lc bin/dev"
-```
-
-`bash -l` sources the container user's profile, mise/asdf activate, and `bin/dev` runs with the expected `$PATH`. For multi-word commands, single-quote the inner script so it stays one argument:
-
-```toml
-[layouts.rails.windows.console]
-command = "bash -lc 'bin/rails console'"
-```
-
-If you want to honor the container user's actual login shell instead of hard-coding bash, use `$SHELL` — but it must be expanded **inside** the container, not on the host. Wrap the inner command in single quotes so host sh keeps `$SHELL` literal:
-
-```toml
-[layouts.rails.windows.server]
-command = "sh -c '$SHELL -lc bin/dev'"
+command = "bin/dev"
 
 [layouts.rails.windows.console]
-command = "sh -c '$SHELL -lc \"bin/rails console\"'"
+command = "bin/rails console"
 ```
 
-The single-quote dance is mandatory — without it, `$SHELL` expands to the **host's** `$SHELL`, which usually doesn't exist at the same path inside the container. `$SHELL` in the container reflects the container user's `/etc/passwd` entry, so this only buys portability if the image was built with your preferred shell as the user's login shell. Otherwise `bash -lc` is just as accurate and avoids the quoting trap.
+The login wrap needs the container's `$SHELL` to resolve; the wrapper's `sh` sets it from `/etc/passwd` at startup, so an image whose `/bin/sh` doesn't provide it fails loudly — by design, no silent fallback.
 
 ## Terminal capabilities (`$TERM` / `$COLORTERM`)
 

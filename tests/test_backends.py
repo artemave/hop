@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import shlex
 import subprocess
 import threading
@@ -26,6 +27,19 @@ from hop.session import ProjectSession
 def host_backend() -> CommandBackend:
     """Construct hop's built-in 'host' backend instance for tests."""
     return CommandBackend(name="host", interactive_prefix="", noninteractive_prefix="")
+
+
+def _login_inner(wrapped: str) -> str:
+    """Recover the command inside a container login-wrap.
+
+    A container `inline`/`wrap` emits ``… sh -c 'exec "$SHELL" -lc "$(printf %s
+    <b64> | base64 -d)"'``; decode ``<b64>`` back to the original command so
+    assertions don't brittle-match the whole wrapper.
+    """
+    marker = "printf %s "
+    start = wrapped.index(marker) + len(marker)
+    end = wrapped.index(" | base64 -d", start)
+    return base64.b64decode(wrapped[start:end]).decode()
 
 
 def build_session(session_root: Path) -> ProjectSession:
@@ -135,12 +149,16 @@ def test_host_backend_read_file_raises_backend_file_not_found_for_missing_path(t
 # --- CommandBackend wrap / inline ----------------------------------------
 
 
-def test_command_backend_wrap_prepends_prefix_to_command(tmp_path: Path) -> None:
+def test_command_backend_wrap_login_wraps_command_in_container(tmp_path: Path) -> None:
+    """A container command is prefixed and login-wrapped so the shell it
+    launches sources the user's login profiles (parity with host/ssh)."""
     backend = backend_from_config(make_backend())
 
     args = backend.wrap("bin/dev", build_session(tmp_path))
 
-    assert args == ("sh", "-c", "compose exec devcontainer bin/dev")
+    assert args[:2] == ("sh", "-c")
+    assert args[2].startswith("compose exec devcontainer sh -c ")
+    assert _login_inner(args[2]) == "bin/dev"
 
 
 def test_command_backend_wrap_substitutes_session_root(tmp_path: Path) -> None:
@@ -148,23 +166,24 @@ def test_command_backend_wrap_substitutes_session_root(tmp_path: Path) -> None:
 
     args = backend.wrap("exec zsh", build_session(tmp_path))
 
-    assert args == (
-        "sh",
-        "-c",
-        f"ssh host cd {shlex.quote(str(tmp_path))} && exec zsh",
-    )
+    assert args[:2] == ("sh", "-c")
+    # `{session_root}` is substituted in the prefix; the command is login-wrapped.
+    assert args[2].startswith(f"ssh host cd {shlex.quote(str(tmp_path))} && sh -c ")
+    assert _login_inner(args[2]) == "exec zsh"
 
 
 def test_command_backend_wrap_empty_falls_back_to_shell_via_prefix(tmp_path: Path) -> None:
     """Empty command on a prefix backend can't produce empty kitty args
     (kitty would launch its host default, escaping the backend). Wrap
     `${SHELL:-sh}` so the exec lands inside the backend with whatever
-    shell binary exists there."""
+    shell binary exists there — login-wrapped like every container command."""
     backend = backend_from_config(make_backend())
 
     args = backend.wrap("", build_session(tmp_path))
 
-    assert args == ("sh", "-c", "compose exec devcontainer ${SHELL:-sh}")
+    assert args[:2] == ("sh", "-c")
+    assert args[2].startswith("compose exec devcontainer sh -c ")
+    assert _login_inner(args[2]) == "${SHELL:-sh}"
 
 
 def test_command_backend_wrap_with_empty_prefix_returns_substituted_command(tmp_path: Path) -> None:
@@ -175,15 +194,26 @@ def test_command_backend_wrap_with_empty_prefix_returns_substituted_command(tmp_
     assert args == ("sh", "-c", "nvim")
 
 
-def test_command_backend_inline_returns_prefix_plus_command(tmp_path: Path) -> None:
-    """inline() is used by the editor adapter to compose `<editor>; <shell>`
-    inside a single sh -c — each piece must be wrapped by the prefix
-    individually so the ; runs each one as its own backend exec."""
+def test_command_backend_inline_login_wraps_command_in_container(tmp_path: Path) -> None:
+    """A container `inline` prefixes and login-wraps the command so the shell it
+    launches sources the user's login profiles (parity with host/ssh). The
+    command is base64-encoded behind a fixed decode wrapper."""
     backend = backend_from_config(make_backend())
 
     inlined = backend.inline("nvim", build_session(tmp_path))
 
-    assert inlined == "compose exec devcontainer nvim"
+    assert inlined.startswith("compose exec devcontainer sh -c ")
+    assert _login_inner(inlined) == "nvim"
+
+
+def test_command_backend_inline_round_trips_metacharacters(tmp_path: Path) -> None:
+    """base64 makes the login-wrap immune to shell metacharacters: a multi-command
+    line with quotes and `;` survives to the decoded inner verbatim."""
+    backend = backend_from_config(make_backend())
+
+    inlined = backend.inline("pkill -f '[f]oreman'; bin/dev", build_session(tmp_path))
+
+    assert _login_inner(inlined) == "pkill -f '[f]oreman'; bin/dev"
 
 
 def test_command_backend_inline_with_empty_prefix_is_identity_substituted(tmp_path: Path) -> None:

@@ -223,7 +223,7 @@ Built-in roles `shell`, `editor`, and `browser` ship with hop defaults:
 
 | role    | command default                         | activate default |
 |---------|-----------------------------------------|------------------|
-| shell   | platform default (kitty's login shell on host; `${SHELL:-sh}` falls back inside a `interactive_prefix`) | active     |
+| shell   | login shell — kitty's native login shell on host; a base64 `$SHELL -lc` login-wrap inside a backend `interactive_prefix` (container / ssh) | active     |
 | editor  | `nvim`                                  | active           |
 | browser | xdg-detected default browser            | inactive         |
 

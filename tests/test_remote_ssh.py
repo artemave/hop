@@ -108,6 +108,29 @@ def test_ssh_transport_payload_runs_a_stdin_script_through_a_real_shell(tmp_path
     assert "present" in result.stdout.splitlines()
 
 
+def test_ssh_to_container_wrap_nests_both_login_wraps() -> None:
+    """An ssh→container backend login-wraps twice: ``SshTransport`` wraps the
+    whole command for a login shell on the remote host, and the container prefix
+    login-wraps it again inside ``podman exec`` for a login shell in the
+    container. Both are base64 layers; the innermost decoded command is the
+    original, uncorrupted."""
+    backend = CommandBackend(
+        name="dc",
+        interactive_prefix="podman exec dc",
+        noninteractive_prefix="podman exec -T dc",
+        transport=SshTransport("devbox", "/remote/proj", interactive=True),
+        noninteractive_transport=SshTransport("devbox", "/remote/proj", interactive=False),
+        host="devbox",
+    )
+
+    argv = backend.wrap("kitten run-shell", _remote_session())
+
+    assert argv[0] == "ssh"
+    ssh_inner = _decode_remote(argv[-1])
+    assert ssh_inner.startswith("cd /remote/proj && podman exec dc sh -c ")
+    assert _decode_remote(ssh_inner) == "kitten run-shell"
+
+
 def test_default_ssh_options_multiplex_and_persist(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
 

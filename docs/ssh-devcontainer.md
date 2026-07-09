@@ -94,15 +94,13 @@ that socket lives on the laptop.
 shell re-parses it. One quote level is lost in transit. This breaks any command
 that relies on nested quoting.
 
-- **Window commands.** The global devcontainer recipe uses
-  `sh -c '$SHELL -lc bin/dev'`. Over ssh that flattens to `sh -c $SHELL -lc bin/dev`,
-  so the container runs `sh -c $SHELL` — a bare interactive shell; `bin/dev` never
-  runs. The ssh-safe form is `zsh -lc "'<cmd>'"`: the outer `"` strip on the host,
-  the inner `'` survive the flatten and are stripped by the remote login shell, so
-  the container's login zsh gets `<cmd>` intact (mise/asdf active). Hardcode `zsh`
-  rather than `$SHELL` — `$SHELL` would need another in-container shell to expand,
-  reintroducing the nesting. (This exact form only works *with* the ssh layer; a
-  same-host devcontainer needs the un-nested `sh -c '$SHELL -lc ...'`.)
+- **Window commands.** No longer a hazard. Role commands are typed into the shell
+  (not composed into the launch), and hop launches the shell login-wrapped with a
+  base64 `exec "$SHELL" -lc "$(… base64 -d)"` — a single flatten-safe token that
+  nests cleanly inside the ssh transport's own base64 wrapper (a login shell on the
+  remote host, then a login shell in the container, mise/asdf active). So
+  `command = "bin/dev"` just works over ssh — no manual `$SHELL -lc` / `zsh -lc "'…'"`
+  quoting dance.
 - **Hop's own path checks.** `paths_exist`/`read_file` used to compose
   `<noninteractive_prefix> sh -c '<script>'`, which hit the same wall — the
   open-selection kitten failed with `zsh:1: parse error near 'do'`. Hop now pipes

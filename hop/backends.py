@@ -400,9 +400,31 @@ class SshTransport:
     def __call__(self, command: str) -> tuple[str, ...]:
         inner = f"cd {shlex.quote(self.remote_cwd)} && {command}"
         encoded = base64.b64encode(inner.encode()).decode("ascii")
-        remote = f'exec "${{SHELL:-/bin/sh}}" -lc "$(printf %s {encoded} | base64 -d)"'
+        # No ``:-`` fallback on ``$SHELL``: sshd sets it from the remote user's
+        # passwd, so it's reliably present; a setup where it isn't fails loudly.
+        remote = f'exec "$SHELL" -lc "$(printf %s {encoded} | base64 -d)"'
         tty = ("-tt",) if self.interactive else ()
         return ("ssh", *tty, *self.options, self.host, remote)
+
+
+def _login_wrap(inner: str) -> str:
+    """Wrap ``inner`` so it runs under the user's login shell inside a backend prefix.
+
+    ``podman exec`` provides no implicit login shell the way ``sshd`` does, so a
+    container command would otherwise run non-login and skip ``.zprofile`` /
+    ``.zlogin``. A throwaway ``sh`` execs the user's shell as a login shell,
+    which execs the decoded command — the container analogue of what
+    ``SshTransport`` does for ssh. ``inner`` is base64-encoded behind a fixed
+    decode wrapper (the same trick), so no quoting or shell metacharacters can
+    corrupt a multi-word command.
+
+    ``$SHELL`` has no ``:-`` fallback on purpose: ``podman exec`` doesn't inherit
+    it, but the wrapper's ``sh`` (bash as ``/bin/sh``) sets it from ``/etc/passwd``
+    at startup. An image whose ``/bin/sh`` doesn't fails loudly, as intended.
+    """
+
+    encoded = base64.b64encode(inner.encode()).decode("ascii")
+    return f'sh -c \'exec "$SHELL" -lc "$(printf %s {encoded} | base64 -d)"\''
 
 
 @dataclass(frozen=True, slots=True)
@@ -496,18 +518,18 @@ class CommandBackend:
     def inline(self, command: str, session: ProjectSession) -> str:
         """Build the substituted, prefix-wrapped command string (no transport).
 
-        Used when the caller composes multiple commands (e.g. the editor
-        adapter's ``<editor>; <shell>`` post-exit drop) before a single
-        outer transport wraps the script. Each piece must be wrapped by
-        the prefix individually so the ``;`` separator runs each piece
-        as its own backend exec, preserving today's two-call behavior.
+        For a backend with an ``interactive_prefix`` (a container), the command
+        is login-wrapped (``_login_wrap``) so the shell it launches sources the
+        user's login profiles — parity with the host's native login shell and
+        the ssh transport's ``$SHELL -lc``. The host backend (empty prefix)
+        returns the substituted command unchanged.
         """
 
         substituted = substitute(command, session=session, host=self._host)
         if not self.interactive_prefix:
             return substituted
         substituted_prefix = substitute(self.interactive_prefix, session=session, host=self._host)
-        return f"{substituted_prefix} {substituted}"
+        return f"{substituted_prefix} {_login_wrap(substituted)}"
 
     def translate_localhost_url(self, session: ProjectSession, url: str) -> str:
         if self.host_translate_command is None and self.port_translate_command is None:
