@@ -166,13 +166,40 @@ class SessionBrowserAdapter:
         session_mark = _session_browser_mark(session)
         windows = [window for window in self._sway.list_windows() if session_mark in window.marks]
         if not windows:
-            return None
+            return self._adopt_workspace_browser_window(session)
 
         workspace_windows = [window for window in windows if window.workspace_name == session.workspace_name]
         if workspace_windows:
             return min(workspace_windows, key=lambda window: window.id)
 
         return min(windows, key=lambda window: window.id)
+
+    def _adopt_workspace_browser_window(self, session: ProjectSession) -> SwayWindow | None:
+        """Promote a browser window already sitting on `p:<session>` to the session browser.
+
+        Launching a second browser window on a workspace that already shows one
+        is never what the user wants, so an unclaimed one there is marked and
+        reused instead. Scoped to the session workspace on purpose: a browser
+        window elsewhere is the user's, and yanking it here would be theft.
+        Windows already marked for a session (this one or another) are excluded
+        — the marked lookup above covers ours, and another session's browser
+        stays that session's.
+        """
+
+        browser_spec = self._browser_spec_for_session(session)
+        candidates = [
+            window
+            for window in self._sway.list_windows()
+            if window.workspace_name == session.workspace_name
+            and not any(mark.startswith(DEFAULT_BROWSER_MARK_PREFIX) for mark in window.marks)
+            and _is_browser_window(window, browser_spec)
+        ]
+        if not candidates:
+            return None
+
+        window = min(candidates, key=lambda window: window.id)
+        self._sway.mark_window(window.id, _session_browser_mark(session))
+        return window
 
     def _browser_spec_for_session(self, session: ProjectSession) -> BrowserLaunchSpec:
         if self._browser_spec is not None:
@@ -361,6 +388,57 @@ def _build_browser_command(
         command.append(DEFAULT_BLANK_BROWSER_URL)
 
     return tuple(command)
+
+
+def _is_browser_window(window: SwayWindow, browser_spec: BrowserLaunchSpec) -> bool:
+    """Decide whether a Sway window belongs to the browser hop would launch.
+
+    Two independent signals, because neither covers every browser:
+
+    - **Name.** `app_id` / `class` against the identifiers derived from the
+      desktop entry. Catches browsers launched through a wrapper script, whose
+      window name matches the entry but whose process is some other binary
+      (`/usr/bin/brave-browser` execs `/opt/brave.com/brave/brave`).
+    - **Process.** The window's owning executable against the launch command.
+      Catches the reverse: a generated `userapp-*.desktop` entry with no
+      `StartupWMClass` yields no usable name, but the binary still matches
+      (Firefox Developer Edition sets `app_id=firefox-dev` while both the entry
+      and the executable say `firefox-bin`).
+    """
+
+    if _matches_browser_identifiers(window, browser_spec.window_identifiers):
+        return True
+    return _matches_browser_executable(window, browser_spec.command)
+
+
+def _matches_browser_identifiers(window: SwayWindow, identifiers: frozenset[str]) -> bool:
+    variants = _identifier_variants(window.app_id) | _identifier_variants(window.window_class)
+    return bool(variants & identifiers)
+
+
+def _matches_browser_executable(window: SwayWindow, command: Sequence[str]) -> bool:
+    if window.pid is None:
+        return False
+    executable = _actual_browser_executable(command)
+    if executable is None:
+        return False
+    window_executable = _executable_for_pid(window.pid)
+    if window_executable is None:
+        return False
+    # Compare resolved paths when the command carries one, and bare names
+    # otherwise — a desktop entry's `Exec` is as often `firefox` as it is an
+    # absolute path, and resolving a bare name would anchor it to the cwd.
+    return window_executable == Path(executable).resolve() or window_executable.name == Path(executable).name
+
+
+def _executable_for_pid(pid: int) -> Path | None:
+    try:
+        return Path(f"/proc/{pid}/exe").resolve(strict=True)
+    except OSError:
+        # The window's process can exit between the Sway query and this read,
+        # and sandboxed browsers (flatpak, snap) hide their exe. Both mean
+        # "no process signal" — the name signal above still applies.
+        return None
 
 
 def _session_browser_mark(session: ProjectSession) -> str:

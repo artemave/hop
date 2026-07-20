@@ -57,6 +57,10 @@ class SwayWindow:
     window_class: str | None
     marks: tuple[str, ...] = ()
     focused: bool = False
+    # Owning process, when sway reports one. Lets hop recognize a window by the
+    # binary behind it rather than by name — the only reliable signal for apps
+    # whose `app_id` matches neither their desktop entry nor their executable.
+    pid: int | None = None
 
 
 class SwayIpcTransport(Protocol):
@@ -273,6 +277,7 @@ def _collect_windows(
     window_class = _extract_window_class(node.get("window_properties"))
     marks = tuple(mark for mark in node.get("marks", ()) if isinstance(mark, str))
     focused = bool(node.get("focused", False))
+    pid = node.get("pid") if isinstance(node.get("pid"), int) else None
 
     if isinstance(window_id, int) and (app_id is not None or window_class is not None):
         windows.append(
@@ -283,6 +288,7 @@ def _collect_windows(
                 window_class=window_class,
                 marks=marks,
                 focused=focused,
+                pid=pid,
             )
         )
 

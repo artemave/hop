@@ -184,6 +184,7 @@ Each session may have a browser window.
 - browser usage is scoped to the current session
 - `hop` reuses the user's default browser windowing model instead of a dedicated profile
 - the session browser is rediscovered through a session-specific Sway mark rather than by visible title alone
+- when no marked window exists, an unclaimed browser window already on `p:<session>` is promoted to the session browser (marked and reused) instead of launching a second one. A window counts as a browser window when its `app_id`/`class` matches the browser's window identifiers *or* its pid's executable matches the launch command — neither signal alone covers both wrapper-script launchers and desktop entries without a `StartupWMClass`. Windows carrying any session's browser mark are never promoted. Browser windows on other workspaces are the user's and are left alone
 - raw Sway moves of the browser off `p:<session>` clear that mark — `hopd` reconciles marks against current placement on every Sway `window` event. The window stops being the session's browser, and the next `hop browser` launches a fresh one
 - opening URLs should reuse or create a browser window within the session workspace
 

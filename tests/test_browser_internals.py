@@ -1,6 +1,8 @@
 # pyright: reportPrivateUsage=false, reportUnknownArgumentType=false
 
+import os
 import subprocess
+import sys
 from pathlib import Path
 from subprocess import CompletedProcess
 from typing import Sequence
@@ -16,6 +18,7 @@ from hop.browser import (
     _build_window_identifiers,
     _find_desktop_entry,
     _identifier_variants,
+    _matches_browser_executable,
     _parse_desktop_exec,
     _read_desktop_entry,
     _resolve_default_browser_spec,
@@ -400,3 +403,22 @@ def test_subprocess_runner_invokes_subprocess_run(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(subprocess, "run", fake_run)
 
     assert _SubprocessRunner().run(("firefox",)) == expected
+
+
+def test_matches_browser_executable_needs_a_pid_on_the_window() -> None:
+    window = SwayWindow(id=1, workspace_name="p:demo", app_id="firefox-dev", window_class=None)
+
+    assert _matches_browser_executable(window, (sys.executable,)) is False
+
+
+def test_matches_browser_executable_needs_an_executable_in_the_command() -> None:
+    # An `Exec` line of nothing but env assignments names no binary to compare.
+    window = SwayWindow(id=1, workspace_name="p:demo", app_id="firefox-dev", window_class=None, pid=os.getpid())
+
+    assert _matches_browser_executable(window, ("env", "MOZ_ENABLE_WAYLAND=1")) is False
+
+
+def test_matches_browser_executable_recognizes_the_running_process() -> None:
+    window = SwayWindow(id=1, workspace_name="p:demo", app_id="firefox-dev", window_class=None, pid=os.getpid())
+
+    assert _matches_browser_executable(window, (sys.executable,)) is True

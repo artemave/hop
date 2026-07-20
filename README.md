@@ -124,25 +124,7 @@ Configs live in `~/.config/hop/config.toml` or a project's `.hop.toml`.
 
 A session has a **backend** that decides what kind of environment its windows run in. The default is **host**. Other backends - docker container (devcontainer) or anything else describable as a chain of commands - are configured as named entries in the config file. Running a backend on a *remote* machine is a separate axis - the ssh transport (`hop ssh`, see [Remote sessions over ssh](#remote-sessions-over-ssh)) - not a backend of its own.
 
-Note, that nvim runs on the backend, not on the host (unless backend is the host).
-
-**System clipboard on non-host backends.** With nvim on a remote host or inside a container there's no local display for `wl-copy`/`xclip` to reach, so the system clipboard has to go through OSC 52, which Kitty relays back to your real clipboard over the terminal. Point nvim's clipboard provider at OSC 52 whenever no display is present:
-
-```vim
-if empty($WAYLAND_DISPLAY) && empty($DISPLAY)
-  let g:clipboard = 'osc52'
-endif
-```
-
-Naming the provider explicitly is required when `'clipboard'` is set to `unnamed`/`unnamedplus` - that otherwise suppresses nvim's automatic OSC 52 detection, leaving the clipboard with no provider at all.
-
-Copy works with that alone. **Paste** (`"+p`) issues an OSC 52 *read*, which Kitty gates behind `clipboard_control` - the default `read-clipboard-ask` prompts on every paste. Add `read-clipboard` to your host `kitty.conf` to silence it:
-
-```conf
-clipboard_control write-clipboard write-primary read-clipboard read-primary
-```
-
-Trade-off: any program in any Kitty window can then read the system clipboard.
+Every window runs on the backend, not on the host - the editor included (unless the backend *is* the host). The one exception is the browser, which is always a host GUI app; see [Special windows](#special-windows) for what that implies for both.
 
 ### Remote sessions over ssh
 
@@ -219,6 +201,8 @@ Per-window fields:
 - `command` (string) - the role command, **without** any backend wrap. Every terminal role launches the session shell (kitty-native on the host, `kitten run-shell` in a non-host backend - see below); the role's `command`, if any, is then typed into that shell via `send-text`, so it lands in shell history and the window stays a usable shell after it exits. An empty string (e.g. `[layouts.rails.windows.test] command = ""`) is just that bare shell.
 - `activate` (string, optional) - shell probe; the window auto-launches when it exits 0. Defaults to `"true"`.
 
+Activation runs at session creation, and "creation" means the session's kitty is unreachable - not that hop has no record of the session. So a session that outlived its windows, after `hop kill` or a crash or a reboot, activates everything again on the next `hop` rather than coming back half-empty.
+
 Built-in roles `shell`, `editor`, and `browser` ship with hop defaults:
 
 | role    | command default                         | activate default |
@@ -227,7 +211,7 @@ Built-in roles `shell`, `editor`, and `browser` ship with hop defaults:
 | editor  | `nvim`                                  | active           |
 | browser | xdg-detected default browser            | inactive         |
 
-To change a built-in, declare it as a top-level window: `[windows.editor] activate = "false"` opts out of the editor for this config; `[windows.browser] activate = "true"` activates the browser; `[windows.shell] command = "/usr/bin/zsh"` overrides the shell.
+To change a built-in, declare it as a top-level window: `[windows.editor] activate = "false"` opts out of the editor for this config; `[windows.browser] activate = "true"` activates the browser; `[windows.shell] command = "/usr/bin/zsh"` overrides the shell. The editor and the browser carry extra fields and behavior of their own - see [Special windows](#special-windows).
 
 Kitty shell integration (OSC 133 prompt marks, which power `hop tail` and other OSC-133-dependent features) is **automatic** - no shell-role config needed. On the host, kitty integrates the shell it spawns directly. Inside a non-host backend (a container, or a shell over ssh) kitty's integration can't reach across the boundary, so hop runs `kitten run-shell` for you when `kitten` is available in that backend; if it isn't, the shell still opens but prints a one-line warning that integration is off. Make `kitten` available with an install step in the backend's `prepare` (see [devcontainer](docs/devcontainer.md)); for a remote *host*, `hop ssh` best-effort-copies your own kitten over. To use a different shell, override the built-in: `[windows.shell] command = "/usr/bin/fish"` (kitty/kitten still auto-detect it).
 
@@ -242,7 +226,46 @@ command = "fuser -k 3000/tcp 2>/dev/null; bin/dev"
 
 The command runs in the role's interactive shell, in the same namespace as the session - inside the container for a devcontainer backend, on the remote over ssh - so the cleanup clears an instance that outlived the previous window before `bin/dev` rebinds the port. Use whatever the image has: `pkill -f bin/dev`, `lsof -ti:3000 | xargs -r kill`, etc.
 
-### Editor keystroke templates
+### Per-invocation override
+
+```bash
+hop --backend <name>
+```
+
+Forces a backend at session creation regardless of auto-detect. Use `hop --backend host` to keep the host backend in a project that would otherwise auto-activate something else. The choice is persisted for the session's lifetime.
+
+## Special windows
+
+Most roles are interchangeable - a kitty window running the session shell with the role's `command` typed into it. Two are not. The editor and the browser are dispatch *targets*: `hop open` and the Kitty kitten route what they find to one or the other, so hop has to track which window is which, and each has a lifecycle the generic role machinery doesn't cover.
+
+### Editor
+
+A session has exactly one editor window, shared by everything that opens a file into it. It's still an ordinary role terminal underneath - a shell with `nvim` typed in - so `hop term --role editor` creates it on first use and focuses it afterwards.
+
+- **Active by default.** `[windows.editor] activate = "false"` opts out for a config.
+- **Any TUI editor works.** `[windows.editor] command = "helix"` swaps it - along with the [keystroke templates](#keystroke-templates) that drive file-open dispatch, which are written for vim by default.
+- **It's the target for every file-shaped dispatch** - `hop open <file>[:<line>]`, a Rails `Controller#action` ref, and any file token picked by the [Kitty kitten](#open-visible-output-targets-from-kitty). Binary files are the exception: they open on the host, see [Binary files open on the host](#binary-files-open-on-the-host).
+- **It runs on the backend**, inside the container or on the remote host - which is what makes the clipboard need help.
+
+**System clipboard on non-host backends.** With nvim on a remote host or inside a container there's no local display for `wl-copy`/`xclip` to reach, so the system clipboard has to go through OSC 52, which Kitty relays back to your real clipboard over the terminal. Point nvim's clipboard provider at OSC 52 whenever no display is present:
+
+```vim
+if empty($WAYLAND_DISPLAY) && empty($DISPLAY)
+  let g:clipboard = 'osc52'
+endif
+```
+
+Naming the provider explicitly is required when `'clipboard'` is set to `unnamed`/`unnamedplus` - that otherwise suppresses nvim's automatic OSC 52 detection, leaving the clipboard with no provider at all.
+
+Copy works with that alone. **Paste** (`"+p`) issues an OSC 52 *read*, which Kitty gates behind `clipboard_control` - the default `read-clipboard-ask` prompts on every paste. Add `read-clipboard` to your host `kitty.conf` to silence it:
+
+```conf
+clipboard_control write-clipboard write-primary read-clipboard read-primary
+```
+
+Trade-off: any program in any Kitty window can then read the system clipboard.
+
+#### Keystroke templates
 
 `hop open <file>[:<line>]` and the `kitten/hints` dispatch path drive the editor by writing raw bytes into its kitty window. Two `[windows.editor]` fields let you swap the byte sequence for any TUI editor:
 
@@ -273,13 +296,25 @@ The substitution layer doubles literal single quotes in `{path}` before formatti
 
 One semantic caveat: vim's `:drop` reuses an existing buffer when the file is already open; not every editor has that equivalent. Templates targeting editors without a "reuse" command may open a new buffer per call.
 
-### Per-invocation override
+### Browser
 
-```bash
-hop --backend <name>
-```
+The browser is the one window that isn't a kitty terminal. hop doesn't own the process - it launches (or adopts) a window of your existing default browser and tracks it with a Sway mark, so tabs, profile, and extensions are the ones you already have.
 
-Forces a backend at session creation regardless of auto-detect. Use `hop --backend host` to keep the host backend in a project that would otherwise auto-activate something else. The choice is persisted for the session's lifetime.
+- **Inactive by default** - the only built-in role that is. `[windows.browser] activate = "true"` turns it on for a config.
+- **The default command is xdg-detected**: hop reads the default browser's desktop entry for its `Exec` line and `StartupWMClass`. `[windows.browser] command = "..."` overrides the detection.
+- **Recognizing a browser window** uses both the name (`app_id` / `class` against those desktop-entry identifiers) and the owning process (the window's pid resolved through `/proc`, against the launch command). Either signal alone misses real browsers: wrapper-script launchers run a differently-named binary, and generated `userapp-*.desktop` entries carry no `StartupWMClass` to match a name against.
+- **It always runs on the host**, even when the session's backend is a container or a remote machine. That's why a URL printed inside a container can't be handed over as-is: `hop open <url>` runs it through the backend's [`port_translate` / `host_translate`](#backend-example) first, so `http://localhost:3000` inside the container becomes the host-reachable address.
+- **`hop browser [<url>]`** focuses the session's browser window, creating it if there is none, and moves it back onto `p:<session>` if it drifted. With a URL, the URL goes to that window.
+
+#### When the browser restarts
+
+The mark lives on the window, so it survives the window being moved around - but not the window going away. A browser restart (relaunching after an update, or a reboot) destroys every window and takes the marks with it. The browser's own session restore brings your tabs back, but as ordinary windows with no hop affiliation.
+
+hop picks them back up: when a session has no marked browser window, `hop browser` promotes an unclaimed browser window that's already on `p:<session>` instead of launching a second one next to your restored tabs. After a restart, move the restored window onto the session's workspace (or just run the session where it already landed) and `hop browser` adopts it - marks it, focuses it, and dispatches any URL to it from then on.
+
+Only the session's own workspace is searched, and a window already marked for some session is never taken - so a browser window sitting on another workspace stays yours.
+
+The same promotion covers the reverse case: moving the session browser off `p:<session>` by raw Sway means clears its mark (`hopd` reconciles marks against placement on every Sway `window` event), and moving it back re-adopts it on the next `hop browser`.
 
 ## Automation
 
@@ -312,9 +347,9 @@ Prompt detection uses Kitty's shell integration (OSC 133), which is on by defaul
 - `hop list` - print active Sway workspaces whose names start with `p:`.
 - `hop switch <name>` - focus the Sway workspace `p:<name>`.
 - `hop move <name>` - move the currently focused Sway window onto `p:<name>` and switch to that workspace.
-- `hop open <target>` - route the target to the right place: a URL goes to the session browser (with the backend's localhost translation applied), a binary file (image, PDF, archive, ...) opens on the host with `xdg-open`, a Rails `Controller#action` ref or `path[:line]` goes to the shared Neovim. See [Binary files open on the host](#binary-files-open-on-the-host). The kitten under [Open visible-output targets from Kitty](#open-visible-output-targets-from-kitty) uses the same parser.
-- `hop term --role <name>` - focus or create the window for the given role. The editor is a plain role terminal too: `hop term --role editor` launches the session's shared Neovim on first use (a shell with `nvim` typed in) and focuses it when it's already running.
-- `hop browser [<url>]` - reuse or create a session-owned browser window. If the window was moved to another workspace, it's moved back before being focused.
+- `hop open <target>` - route the target to the right place: a URL goes to the session [browser](#browser) (with the backend's localhost translation applied), a binary file (image, PDF, archive, ...) opens on the host with `xdg-open`, a Rails `Controller#action` ref or `path[:line]` goes to the session [editor](#editor). See [Binary files open on the host](#binary-files-open-on-the-host). The kitten under [Open visible-output targets from Kitty](#open-visible-output-targets-from-kitty) uses the same parser.
+- `hop term --role <name>` - focus or create the window for the given role, [editor](#editor) included.
+- `hop browser [<url>]` - focus or create the session's [browser](#browser) window, and send it a URL if given.
 - `hop kill` - close every Sway/Kitty window owned by the session, remove its workspace, and run the backend's `teardown`. Run from the session root.
 
 ## Troubleshooting

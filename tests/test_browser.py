@@ -1,3 +1,5 @@
+import os
+import sys
 from pathlib import Path
 from subprocess import CompletedProcess
 from typing import Callable, Sequence
@@ -167,6 +169,246 @@ def test_ensure_browser_opens_url_in_existing_session_window() -> None:
 
     assert sway.focused_window_ids == [23]
     assert launcher.commands == [(("brave-browser", "https://example.com"), build_session().session_root)]
+
+
+def test_ensure_browser_promotes_an_unclaimed_browser_window_on_the_session_workspace() -> None:
+    sway = StubSwayAdapter(
+        [
+            SwayWindow(
+                id=17,
+                workspace_name="p:demo",
+                app_id="brave-browser",
+                window_class=None,
+                marks=(),
+            )
+        ]
+    )
+    launcher = StubBrowserLauncher()
+    adapter = SessionBrowserAdapter(
+        sway=sway,
+        launcher=launcher,
+        browser_spec=build_browser_spec(),
+    )
+
+    adapter.ensure_browser(build_session(), url=None)
+
+    assert launcher.commands == []
+    assert sway.marks == [(17, "_hop_browser:demo")]
+    assert sway.moves == []
+    assert sway.focused_window_ids == [17]
+
+
+def test_ensure_browser_ignores_browser_windows_on_other_workspaces() -> None:
+    sway = StubSwayAdapter(
+        [
+            SwayWindow(
+                id=17,
+                workspace_name="scratch",
+                app_id="brave-browser",
+                window_class=None,
+                marks=(),
+            )
+        ]
+    )
+
+    def add_new_window(_command: tuple[str, ...]) -> None:
+        sway.windows.append(
+            SwayWindow(
+                id=41,
+                workspace_name="p:demo",
+                app_id="brave-browser",
+                window_class=None,
+                marks=(),
+            )
+        )
+
+    launcher = StubBrowserLauncher(on_launch=add_new_window)
+    adapter = SessionBrowserAdapter(
+        sway=sway,
+        launcher=launcher,
+        browser_spec=build_browser_spec(),
+    )
+
+    adapter.ensure_browser(build_session(), url=None)
+
+    assert sway.marks == [(41, "_hop_browser:demo")]
+    assert sway.focused_window_ids == [41]
+
+
+def test_ensure_browser_does_not_promote_another_sessions_browser_window() -> None:
+    sway = StubSwayAdapter(
+        [
+            SwayWindow(
+                id=17,
+                workspace_name="p:demo",
+                app_id="brave-browser",
+                window_class=None,
+                marks=("_hop_browser:other",),
+            )
+        ]
+    )
+
+    def add_new_window(_command: tuple[str, ...]) -> None:
+        sway.windows.append(
+            SwayWindow(
+                id=41,
+                workspace_name="p:demo",
+                app_id="brave-browser",
+                window_class=None,
+                marks=(),
+            )
+        )
+
+    launcher = StubBrowserLauncher(on_launch=add_new_window)
+    adapter = SessionBrowserAdapter(
+        sway=sway,
+        launcher=launcher,
+        browser_spec=build_browser_spec(),
+    )
+
+    adapter.ensure_browser(build_session(), url=None)
+
+    assert sway.marks == [(41, "_hop_browser:demo")]
+    assert sway.focused_window_ids == [41]
+
+
+def test_ensure_browser_promotes_a_window_whose_process_matches_but_name_does_not() -> None:
+    # Firefox Developer Edition's generated `userapp-*.desktop` entry carries no
+    # StartupWMClass, so the derived identifiers say `firefox-bin` while the
+    # window says `app_id=firefox-dev`. Nothing matches by name - the owning
+    # process is the only signal that the window is the browser hop launches.
+    sway = StubSwayAdapter(
+        [
+            SwayWindow(
+                id=17,
+                workspace_name="p:demo",
+                app_id="firefox-dev",
+                window_class=None,
+                marks=(),
+                pid=os.getpid(),
+            )
+        ]
+    )
+    launcher = StubBrowserLauncher()
+    adapter = SessionBrowserAdapter(
+        sway=sway,
+        launcher=launcher,
+        browser_spec=BrowserLaunchSpec(
+            command=(sys.executable,),
+            window_identifiers=frozenset({"firefox-bin"}),
+            new_window_flag="--new-window",
+        ),
+    )
+
+    adapter.ensure_browser(build_session(), url=None)
+
+    assert launcher.commands == []
+    assert sway.marks == [(17, "_hop_browser:demo")]
+    assert sway.focused_window_ids == [17]
+
+
+def test_ensure_browser_does_not_promote_a_window_whose_process_is_unreadable() -> None:
+    # pid 0 has no /proc entry - the same shape as a window whose process exited
+    # between the Sway query and the lookup, or a sandboxed browser that hides
+    # its exe. With no name match either, hop launches rather than guesses.
+    sway = StubSwayAdapter(
+        [
+            SwayWindow(
+                id=17,
+                workspace_name="p:demo",
+                app_id="firefox-dev",
+                window_class=None,
+                marks=(),
+                pid=0,
+            )
+        ]
+    )
+
+    def add_new_window(_command: tuple[str, ...]) -> None:
+        sway.windows.append(
+            SwayWindow(
+                id=41,
+                workspace_name="p:demo",
+                app_id="brave-browser",
+                window_class=None,
+                marks=(),
+            )
+        )
+
+    launcher = StubBrowserLauncher(on_launch=add_new_window)
+    adapter = SessionBrowserAdapter(
+        sway=sway,
+        launcher=launcher,
+        browser_spec=build_browser_spec(),
+    )
+
+    adapter.ensure_browser(build_session(), url=None)
+
+    assert sway.marks == [(41, "_hop_browser:demo")]
+
+
+def test_ensure_browser_does_not_promote_a_non_browser_window() -> None:
+    sway = StubSwayAdapter(
+        [
+            SwayWindow(
+                id=17,
+                workspace_name="p:demo",
+                app_id="hop:shell",
+                window_class=None,
+                marks=(),
+                pid=os.getpid(),
+            )
+        ]
+    )
+
+    def add_new_window(_command: tuple[str, ...]) -> None:
+        sway.windows.append(
+            SwayWindow(
+                id=41,
+                workspace_name="p:demo",
+                app_id="brave-browser",
+                window_class=None,
+                marks=(),
+            )
+        )
+
+    launcher = StubBrowserLauncher(on_launch=add_new_window)
+    adapter = SessionBrowserAdapter(
+        sway=sway,
+        launcher=launcher,
+        browser_spec=build_browser_spec(),
+    )
+
+    adapter.ensure_browser(build_session(), url=None)
+
+    assert sway.marks == [(41, "_hop_browser:demo")]
+
+
+def test_ensure_browser_promotes_by_window_class_and_opens_the_url() -> None:
+    sway = StubSwayAdapter(
+        [
+            SwayWindow(
+                id=17,
+                workspace_name="p:demo",
+                app_id=None,
+                window_class="Brave-browser",
+                marks=(),
+            )
+        ]
+    )
+    launcher = StubBrowserLauncher()
+    adapter = SessionBrowserAdapter(
+        sway=sway,
+        launcher=launcher,
+        browser_spec=build_browser_spec(),
+    )
+
+    adapter.ensure_browser(build_session(), url="https://example.com")
+
+    assert sway.marks == [(17, "_hop_browser:demo")]
+    assert launcher.commands == [
+        (("brave-browser", "https://example.com"), build_session().session_root),
+    ]
 
 
 def test_ensure_browser_launches_new_window_marks_it_and_focuses_it() -> None:
