@@ -39,6 +39,9 @@ class StubSwayTransport:
         self.requests.append((message_type, payload))
         return self.responses[message_type]
 
+    def socket_path(self) -> str:
+        return "/run/user/1000/sway-ipc.stub.sock"
+
     def subscribe(self, payload: bytes) -> Iterator[bytes]:
         self.subscribe_payloads.append(payload)
         if self._subscribe_ack is not None:
@@ -252,6 +255,27 @@ def test_remove_workspace_switches_focus_to_trigger_sway_cleanup() -> None:
     assert transport.requests == [
         (SwayMessageType.RUN_COMMAND, b"workspace back_and_forth"),
     ]
+
+
+def test_socket_path_delegates_to_the_transport() -> None:
+    """hopd asks the adapter for the socket it's talking to so it can bake it
+    into the vicinae scripts it generates."""
+    transport = StubSwayTransport()
+    sway = SwayIpcAdapter(transport=transport)
+
+    assert sway.socket_path() == "/run/user/1000/sway-ipc.stub.sock"
+
+
+def test_default_transport_resolves_socket_path_from_swaysock() -> None:
+    original_value = os.environ.get("SWAYSOCK")
+    os.environ["SWAYSOCK"] = "/run/user/1000/sway-ipc.1000.7.sock"
+    try:
+        assert UnixSocketSwayIpcTransport().socket_path() == "/run/user/1000/sway-ipc.1000.7.sock"
+    finally:
+        if original_value is None:
+            os.environ.pop("SWAYSOCK", None)
+        else:
+            os.environ["SWAYSOCK"] = original_value
 
 
 def test_default_transport_requires_swaysock() -> None:

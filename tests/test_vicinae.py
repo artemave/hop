@@ -23,6 +23,9 @@ from hop.vicinae import (
 # they render verbatim (no `shlex.quote` wrapping) in content assertions.
 HOP_BIN = "/opt/hop/bin/hop"
 HOPD_BIN = "/opt/hop/bin/hopd"
+# The Sway socket hopd bakes into every generated script. No shell-special
+# characters so it renders verbatim in content assertions.
+SWAY_SOCKET = "/run/user/1000/sway-ipc.1000.42.sock"
 
 
 class StubSway:
@@ -53,7 +56,9 @@ def _targets(
     set, filenames, and headers are right — so they go through here and let
     the absolute-path behavior be asserted once, explicitly, below.
     """
-    return compute_target_scripts(focused_workspace, sessions, windows_for=windows_for, hop_bin=HOP_BIN)
+    return compute_target_scripts(
+        focused_workspace, sessions, windows_for=windows_for, hop_bin=HOP_BIN, sway_socket=SWAY_SOCKET
+    )
 
 
 def test_focused_session_emits_window_kill_and_other_session_switch_scripts() -> None:
@@ -452,6 +457,7 @@ def test_regenerate_wires_focused_workspace_sessions_and_windows_resolver(tmp_pa
         scripts_dir=tmp_path,
         windows_for=lambda _: windows,
         hop_bin=HOP_BIN,
+        sway_socket=SWAY_SOCKET,
     )
 
     assert (tmp_path / "hop-window-shell").exists()
@@ -502,6 +508,7 @@ def test_every_script_invokes_hop_by_absolute_shell_quoted_path() -> None:
         sessions,
         windows_for=lambda _: _windows(("editor", "nvim"), ("browser", "")),
         hop_bin=hop_bin,
+        sway_socket=SWAY_SOCKET,
     )
     by_filename = {s.filename: s.content for s in scripts}
 
@@ -562,13 +569,67 @@ def test_kill_script_exports_source_before_detaching() -> None:
     assert export_at < setsid_at
 
 
+def test_every_dispatching_script_exports_the_sway_socket() -> None:
+    """Vicinae runs these scripts under whatever environment it inherited. A
+    vicinae server launched as a systemd user service never gets SWAYSOCK, so
+    a bare `hop switch` (nothing but a Sway IPC call) can't reach Sway. hopd
+    holds the live socket, so every generated script exports it."""
+    sessions = (
+        SessionListing(name="rails", workspace="p:rails", session_root=Path("/tmp/rails")),
+        SessionListing(name="other", workspace="p:other", session_root=Path("/tmp/other")),
+    )
+
+    scripts = _targets(
+        "p:rails",
+        sessions,
+        windows_for=lambda _: _windows(("editor", "nvim")),
+    )
+
+    for script in scripts:
+        assert f"export SWAYSOCK={SWAY_SOCKET}\n" in script.content
+
+
+def test_switch_script_exports_the_sway_socket_before_dispatching() -> None:
+    """Regression: a vicinae `hop switch` with no SWAYSOCK failed on its first
+    Sway IPC call and did nothing. The export must land before the dispatch so
+    the switch reaches Sway."""
+    sessions = (SessionListing(name="other", workspace="p:other", session_root=Path("/tmp/other")),)
+
+    scripts = _targets("scratch", sessions, windows_for=lambda _: ())
+    switch = next(s for s in scripts if s.filename == "hop-switch-other")
+
+    export_at = switch.content.index(f"export SWAYSOCK={SWAY_SOCKET}\n")
+    dispatch_at = switch.content.index(f"exec setsid -f {HOP_BIN} switch other\n")
+    assert export_at < dispatch_at
+
+
+def test_sway_socket_export_is_shell_quoted() -> None:
+    """A socket path with shell-special characters must be quoted, never left
+    to word-split when the script `export`s it."""
+    socket = "/run/user/1000/sway ipc.sock"
+    sessions = (SessionListing(name="other", workspace="p:other", session_root=Path("/tmp/other")),)
+
+    scripts = compute_target_scripts(
+        "scratch",
+        sessions,
+        windows_for=lambda _: (),
+        hop_bin=HOP_BIN,
+        sway_socket=socket,
+    )
+    switch = next(s for s in scripts if s.filename == "hop-switch-other")
+
+    assert f"export SWAYSOCK={shlex.quote(socket)}\n" in switch.content
+
+
 # --- write_daemon_down_script ---------------------------------------------
 
 
 def test_write_daemon_down_script_writes_single_restart_entry(tmp_path: Path) -> None:
     from hop.vicinae import DAEMON_DOWN_FILENAME, write_daemon_down_script
 
-    write_daemon_down_script(tmp_path, hopd_bin=HOPD_BIN, error=RuntimeError("the daemon died"))
+    write_daemon_down_script(
+        tmp_path, hopd_bin=HOPD_BIN, error=RuntimeError("the daemon died"), sway_socket=SWAY_SOCKET
+    )
 
     entries = [p.name for p in tmp_path.iterdir()]
     assert entries == [DAEMON_DOWN_FILENAME]
@@ -580,6 +641,10 @@ def test_write_daemon_down_script_writes_single_restart_entry(tmp_path: Path) ->
     # take the new daemon down with it — by absolute path, since vicinae's
     # PATH need not contain hop's install dir.
     assert f"setsid -f {HOPD_BIN}" in content
+    # The revived hopd inherits vicinae's (systemd) environment, which lacks
+    # SWAYSOCK — so the restart entry exports it, before launching hopd.
+    export_at = content.index(f"export SWAYSOCK={SWAY_SOCKET}\n")
+    assert export_at < content.index(f"setsid -f {HOPD_BIN}")
 
 
 def test_write_daemon_down_script_shell_quotes_the_hopd_path(tmp_path: Path) -> None:
@@ -588,7 +653,7 @@ def test_write_daemon_down_script_shell_quotes_the_hopd_path(tmp_path: Path) -> 
     from hop.vicinae import DAEMON_DOWN_FILENAME, write_daemon_down_script
 
     hopd_bin = "/opt/my hop/bin/hopd"
-    write_daemon_down_script(tmp_path, hopd_bin=hopd_bin, error=RuntimeError("x"))
+    write_daemon_down_script(tmp_path, hopd_bin=hopd_bin, error=RuntimeError("x"), sway_socket=SWAY_SOCKET)
 
     content = (tmp_path / DAEMON_DOWN_FILENAME).read_text()
     assert f"exec setsid -f {shlex.quote(hopd_bin)} </dev/null" in content
@@ -601,7 +666,7 @@ def test_write_daemon_down_script_advertises_the_hop_icon(tmp_path: Path) -> Non
     the vicinae result list rather than reading as some unrelated tool."""
     from hop.vicinae import DAEMON_DOWN_FILENAME, write_daemon_down_script
 
-    write_daemon_down_script(tmp_path, hopd_bin=HOPD_BIN, error=RuntimeError("x"))
+    write_daemon_down_script(tmp_path, hopd_bin=HOPD_BIN, error=RuntimeError("x"), sway_socket=SWAY_SOCKET)
 
     content = (tmp_path / DAEMON_DOWN_FILENAME).read_text()
     icon_line = next(line for line in content.splitlines() if line.startswith("# @vicinae.icon "))
@@ -619,7 +684,7 @@ def test_write_daemon_down_script_clears_existing_hop_scripts(tmp_path: Path) ->
     (tmp_path / "hop-switch-rails").write_text("stale")
     (tmp_path / "hop-window-shell").write_text("stale")
 
-    write_daemon_down_script(tmp_path, hopd_bin=HOPD_BIN, error=RuntimeError("boom"))
+    write_daemon_down_script(tmp_path, hopd_bin=HOPD_BIN, error=RuntimeError("boom"), sway_socket=SWAY_SOCKET)
 
     remaining = sorted(p.name for p in tmp_path.iterdir())
     assert remaining == ["hop-_daemon-down"]
@@ -633,7 +698,7 @@ def test_write_daemon_down_script_preserves_non_hop_files(tmp_path: Path) -> Non
     (tmp_path / "unrelated-script").write_text("not hop")
     (tmp_path / "hop-switch-foo").write_text("hop")
 
-    write_daemon_down_script(tmp_path, hopd_bin=HOPD_BIN, error=RuntimeError("boom"))
+    write_daemon_down_script(tmp_path, hopd_bin=HOPD_BIN, error=RuntimeError("boom"), sway_socket=SWAY_SOCKET)
 
     remaining = sorted(p.name for p in tmp_path.iterdir())
     assert remaining == ["hop-_daemon-down", "unrelated-script"]
@@ -648,7 +713,7 @@ def test_write_daemon_down_script_creates_scripts_dir(tmp_path: Path) -> None:
     target = tmp_path / "vicinae" / "scripts"
     assert not target.exists()
 
-    write_daemon_down_script(target, hopd_bin=HOPD_BIN, error=RuntimeError("boom"))
+    write_daemon_down_script(target, hopd_bin=HOPD_BIN, error=RuntimeError("boom"), sway_socket=SWAY_SOCKET)
 
     assert target.is_dir()
     assert (target / "hop-_daemon-down").exists()
@@ -660,7 +725,9 @@ def test_write_daemon_down_script_collapses_multiline_errors(tmp_path: Path) -> 
     single line."""
     from hop.vicinae import write_daemon_down_script
 
-    write_daemon_down_script(tmp_path, hopd_bin=HOPD_BIN, error=RuntimeError("first line\nsecond line\nthird"))
+    write_daemon_down_script(
+        tmp_path, hopd_bin=HOPD_BIN, error=RuntimeError("first line\nsecond line\nthird"), sway_socket=SWAY_SOCKET
+    )
 
     content = (tmp_path / "hop-_daemon-down").read_text()
     # Every @vicinae.* header sits on its own line; description must not
@@ -675,7 +742,7 @@ def test_write_daemon_down_script_truncates_long_descriptions(tmp_path: Path) ->
     from hop.vicinae import write_daemon_down_script
 
     long_message = "x" * 5000
-    write_daemon_down_script(tmp_path, hopd_bin=HOPD_BIN, error=RuntimeError(long_message))
+    write_daemon_down_script(tmp_path, hopd_bin=HOPD_BIN, error=RuntimeError(long_message), sway_socket=SWAY_SOCKET)
 
     description_line = next(
         line

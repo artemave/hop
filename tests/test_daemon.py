@@ -18,6 +18,10 @@ def isolate_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
     # Lock + status file live under XDG_RUNTIME_DIR/hop/. Point it at
     # tmp_path so daemon-main tests don't collide with a real hopd.
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "runtime"))
+    # hopd resolves its Sway socket up-front (to bake into generated scripts).
+    # Pin it so tests that use the real SwayIpcAdapter — the config-load
+    # failure paths — don't depend on the ambient SWAYSOCK.
+    monkeypatch.setenv("SWAYSOCK", str(tmp_path / "sway-ipc.sock"))
 
 
 @pytest.fixture(autouse=True)
@@ -68,6 +72,9 @@ class StubSubscribingSway:
 
     def get_focused_workspace(self) -> str:
         return ""
+
+    def socket_path(self) -> str:
+        return "/run/user/1000/sway-ipc.test.sock"
 
     def list_session_workspaces(self, *, prefix: str = "p:") -> tuple[str, ...]:
         del prefix
@@ -521,8 +528,8 @@ def test_daemon_swallows_daemon_down_write_errors(
     def boom(**_kwargs: Any) -> None:
         raise RuntimeError("original failure")
 
-    def raise_on_write(scripts_dir: Path, *, error: BaseException, hopd_bin: str) -> None:
-        del scripts_dir, error, hopd_bin
+    def raise_on_write(scripts_dir: Path, *, error: BaseException, hopd_bin: str, sway_socket: str) -> None:
+        del scripts_dir, error, hopd_bin, sway_socket
         raise OSError("read-only filesystem")
 
     monkeypatch.setattr(daemon, "regenerate", boom)

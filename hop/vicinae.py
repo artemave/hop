@@ -28,6 +28,20 @@ from hop.session import ProjectSession
 # are tagged as coming from vicinae in the debug log (see debug.log_invocation).
 _SOURCE_EXPORT = f"export {SOURCE_ENV_VAR}=vicinae\n"
 
+
+def _env_exports(sway_socket: str) -> str:
+    """The env every dispatching script sets before invoking ``hop``.
+
+    ``HOP_SOURCE`` tags the invocation as vicinae's in the debug log.
+    ``SWAYSOCK`` is baked in because vicinae runs these scripts under
+    whatever environment it inherited — a vicinae server started as a
+    systemd user service never gets ``SWAYSOCK``, so a bare ``hop switch``
+    (nothing but a Sway IPC call) would fail to reach Sway. ``hopd`` always
+    holds the live socket, so it stamps it into every script it generates.
+    """
+    return f"{_SOURCE_EXPORT}export SWAYSOCK={shlex.quote(sway_socket)}\n"
+
+
 SCRIPT_FILENAME_PREFIX = "hop-"
 WINDOW_FILENAME_PREFIX = "hop-window-"
 SWITCH_FILENAME_PREFIX = "hop-switch-"
@@ -70,6 +84,7 @@ def compute_target_scripts(
     *,
     windows_for: WindowsResolver,
     hop_bin: str,
+    sway_socket: str,
 ) -> tuple[GeneratedScript, ...]:
     """Compute the desired vicinae script set for the current state.
 
@@ -99,8 +114,10 @@ def compute_target_scripts(
         )
         windows = windows_for(project_session)
         for window in windows:
-            scripts.append(_window_script(window, project_session, hop_bin=hop_bin, used=used_filenames))
-        scripts.append(_kill_script(project_session, hop_bin=hop_bin, used=used_filenames))
+            scripts.append(
+                _window_script(window, project_session, hop_bin=hop_bin, sway_socket=sway_socket, used=used_filenames)
+            )
+        scripts.append(_kill_script(project_session, hop_bin=hop_bin, sway_socket=sway_socket, used=used_filenames))
 
     other_sessions: Iterable[SessionListing]
     if focused_session is not None:
@@ -108,10 +125,10 @@ def compute_target_scripts(
     else:
         other_sessions = sessions
     for session in other_sessions:
-        scripts.append(_switch_script(session, hop_bin=hop_bin, used=used_filenames))
+        scripts.append(_switch_script(session, hop_bin=hop_bin, sway_socket=sway_socket, used=used_filenames))
 
-    scripts.append(_create_script(hop_bin=hop_bin))
-    scripts.append(_move_script(hop_bin=hop_bin))
+    scripts.append(_create_script(hop_bin=hop_bin, sway_socket=sway_socket))
+    scripts.append(_move_script(hop_bin=hop_bin, sway_socket=sway_socket))
 
     return tuple(scripts)
 
@@ -152,12 +169,14 @@ def regenerate(
     scripts_dir: Path,
     windows_for: WindowsResolver,
     hop_bin: str,
+    sway_socket: str,
 ) -> None:
     target = compute_target_scripts(
         sway.get_focused_workspace(),
         sessions_loader(),
         windows_for=windows_for,
         hop_bin=hop_bin,
+        sway_socket=sway_socket,
     )
     reconcile(target, scripts_dir=scripts_dir)
 
@@ -176,6 +195,7 @@ def _window_script(
     session: ProjectSession,
     *,
     hop_bin: str,
+    sway_socket: str,
     used: set[str],
 ) -> GeneratedScript:
     role = window.role
@@ -203,11 +223,12 @@ def _window_script(
         session_root=session.session_root,
         host=session.host,
         body=body,
+        sway_socket=sway_socket,
     )
     return GeneratedScript(filename=filename, content=content)
 
 
-def _kill_script(session: ProjectSession, *, hop_bin: str, used: set[str]) -> GeneratedScript:
+def _kill_script(session: ProjectSession, *, hop_bin: str, sway_socket: str, used: set[str]) -> GeneratedScript:
     filename = _unique(KILL_FILENAME, used=used)
     title = "Hop kill"
     description = f"Kill the {session.session_name!r} hop session."
@@ -218,11 +239,12 @@ def _kill_script(session: ProjectSession, *, hop_bin: str, used: set[str]) -> Ge
         session_root=session.session_root,
         host=session.host,
         hop_bin=hop_bin,
+        sway_socket=sway_socket,
     )
     return GeneratedScript(filename=filename, content=content)
 
 
-def _create_script(*, hop_bin: str) -> GeneratedScript:
+def _create_script(*, hop_bin: str, sway_socket: str) -> GeneratedScript:
     # The candidate set (every directory under $HOME, modulo dot-dirs and
     # well-known build noise) is far too big for static enumeration as
     # vicinae root entries, so this script falls through to a second
@@ -254,7 +276,7 @@ def _create_script(*, hop_bin: str) -> GeneratedScript:
             "# @vicinae.mode silent\n"
             "\n"
             "set -euo pipefail\n"
-            f"{_SOURCE_EXPORT}"
+            f"{_env_exports(sway_socket)}"
             "\n"
             'candidates=$(find "$HOME" -mindepth 1 -maxdepth 3 \\\n'
             "    \\( -name '.*' -o -name 'node_modules' -o -name 'target' "
@@ -284,7 +306,7 @@ def _create_script(*, hop_bin: str) -> GeneratedScript:
     )
 
 
-def _move_script(*, hop_bin: str) -> GeneratedScript:
+def _move_script(*, hop_bin: str, sway_socket: str) -> GeneratedScript:
     # Single entry that delegates the destination pick to `vicinae dmenu`
     # over `hop list` output, mirroring `_create_script`'s pattern. Setting
     # the destination per session would require one entry per session (the
@@ -302,7 +324,7 @@ def _move_script(*, hop_bin: str) -> GeneratedScript:
             "# @vicinae.mode silent\n"
             "\n"
             "set -euo pipefail\n"
-            f"{_SOURCE_EXPORT}"
+            f"{_env_exports(sway_socket)}"
             "\n"
             f"candidates=$({shlex.quote(hop_bin)} list)\n"
             'if [ -z "$candidates" ]; then\n'
@@ -326,7 +348,7 @@ def _move_script(*, hop_bin: str) -> GeneratedScript:
     )
 
 
-def _switch_script(session: SessionListing, *, hop_bin: str, used: set[str]) -> GeneratedScript:
+def _switch_script(session: SessionListing, *, hop_bin: str, sway_socket: str, used: set[str]) -> GeneratedScript:
     filename = _unique(SWITCH_FILENAME_PREFIX + _sanitize(session.name), used=used)
     title = f"Hop switch to {session.name}"
     description = f"Switch focus to the {session.name!r} hop session's workspace."
@@ -341,6 +363,7 @@ def _switch_script(session: SessionListing, *, hop_bin: str, used: set[str]) -> 
         description=description,
         package_name="",
         body=body,
+        sway_socket=sway_socket,
     )
     return GeneratedScript(filename=filename, content=content)
 
@@ -359,7 +382,16 @@ def _session_setup(session_root: Path, host: str | None, *, indent: str = "") ->
     return f"{indent}export HOP_REMOTE_HOST={shlex.quote(host)} HOP_REMOTE_CWD={shlex.quote(str(session_root))}\n"
 
 
-def _render(*, title: str, description: str, package_name: str, session_root: Path, host: str | None, body: str) -> str:
+def _render(
+    *,
+    title: str,
+    description: str,
+    package_name: str,
+    session_root: Path,
+    host: str | None,
+    body: str,
+    sway_socket: str,
+) -> str:
     return (
         "#!/usr/bin/env bash\n"
         "# @vicinae.schemaVersion 1\n"
@@ -370,13 +402,13 @@ def _render(*, title: str, description: str, package_name: str, session_root: Pa
         "# @vicinae.mode silent\n"
         "\n"
         "set -euo pipefail\n"
-        f"{_SOURCE_EXPORT}"
+        f"{_env_exports(sway_socket)}"
         f"{_session_setup(session_root, host)}"
         f"{body}"
     )
 
 
-def _render_no_cd(*, title: str, description: str, package_name: str, body: str) -> str:
+def _render_no_cd(*, title: str, description: str, package_name: str, body: str, sway_socket: str) -> str:
     return (
         "#!/usr/bin/env bash\n"
         "# @vicinae.schemaVersion 1\n"
@@ -387,13 +419,20 @@ def _render_no_cd(*, title: str, description: str, package_name: str, body: str)
         "# @vicinae.mode silent\n"
         "\n"
         "set -euo pipefail\n"
-        f"{_SOURCE_EXPORT}"
+        f"{_env_exports(sway_socket)}"
         f"{body}"
     )
 
 
 def _render_kill(
-    *, title: str, description: str, package_name: str, session_root: Path, host: str | None, hop_bin: str
+    *,
+    title: str,
+    description: str,
+    package_name: str,
+    session_root: Path,
+    host: str | None,
+    hop_bin: str,
+    sway_socket: str,
 ) -> str:
     # `hop kill` from inside a vicinae action gets SIGTERMed when vicinae
     # closes the UI before teardown completes (devcontainer left in
@@ -412,7 +451,7 @@ def _render_kill(
         f"# @vicinae.icon {_ICON_PATH}\n"
         "# @vicinae.mode silent\n"
         "\n"
-        f"{_SOURCE_EXPORT}"
+        f"{_env_exports(sway_socket)}"
         "exec setsid -f bash -c '\n"
         "    set -e\n"
         "    vicinae close || true\n"
@@ -422,7 +461,7 @@ def _render_kill(
     )
 
 
-def write_daemon_down_script(scripts_dir: Path, *, error: BaseException, hopd_bin: str) -> None:
+def write_daemon_down_script(scripts_dir: Path, *, error: BaseException, hopd_bin: str, sway_socket: str) -> None:
     """Replace the hop-* script set with a single "daemon stopped" entry.
 
     Called from ``hopd``'s exception handler so the user sees a clear
@@ -433,7 +472,11 @@ def write_daemon_down_script(scripts_dir: Path, *, error: BaseException, hopd_bi
     daemon process. ``hopd_bin`` is an absolute path because the action
     runs under vicinae's inherited PATH, which need not contain hop's
     install dir — a bare ``hopd`` would not resolve, leaving the restart
-    entry as dead as the daemon it's meant to revive.
+    entry as dead as the daemon it's meant to revive. ``SWAYSOCK`` is
+    exported for the same reason ``_env_exports`` bakes it into the other
+    scripts: the revived ``hopd`` inherits vicinae's environment, which
+    (under a systemd-launched vicinae server) never had ``SWAYSOCK`` — so
+    without it the restart would crash on its first Sway IPC call.
     """
 
     scripts_dir.mkdir(parents=True, exist_ok=True)
@@ -452,6 +495,7 @@ def write_daemon_down_script(scripts_dir: Path, *, error: BaseException, hopd_bi
         f"# @vicinae.icon {_ICON_PATH}\n"
         "# @vicinae.mode silent\n"
         "\n"
+        f"export SWAYSOCK={shlex.quote(sway_socket)}\n"
         f"exec setsid -f {shlex.quote(hopd_bin)} </dev/null >/dev/null 2>&1\n"
     )
     _atomic_write(scripts_dir / DAEMON_DOWN_FILENAME, content)

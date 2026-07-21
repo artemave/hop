@@ -185,6 +185,13 @@ def _spawn_detached_hopd() -> None:
 
 
 def _run_main_loop(scripts_dir: Path, *, hop_bin: str, hopd_bin: str) -> int:
+    sway = SwayIpcAdapter()
+    # The socket hopd is talking to, baked into every generated vicinae script
+    # (and the daemon-down restart entry) so they reach Sway even though
+    # vicinae's own environment may lack SWAYSOCK. Resolved up-front so the
+    # config-load failure path below can still emit a working restart entry.
+    sway_socket = sway.socket_path()
+
     try:
         debug.configure(load_global_config().debug_log)
     except HopError as error:
@@ -193,11 +200,10 @@ def _run_main_loop(scripts_dir: Path, *, hop_bin: str, hopd_bin: str) -> int:
         # configure() call had succeeded.
         debug.log(f"hopd: failed to load config: {error}")
         print(f"hopd: failed to load config: {error}", file=sys.stderr)
-        _signal_daemon_down(scripts_dir, error, hopd_bin=hopd_bin)
+        _signal_daemon_down(scripts_dir, error, hopd_bin=hopd_bin, sway_socket=sway_socket)
         return 1
 
     debug.log("hopd: starting")
-    sway = SwayIpcAdapter()
     registry = SessionBackendRegistry()
     _start_bridge_acceptor(sway)
     _start_mark_reconciler(sway)
@@ -216,6 +222,7 @@ def _run_main_loop(scripts_dir: Path, *, hop_bin: str, hopd_bin: str) -> int:
             scripts_dir=scripts_dir,
             windows_for=windows_for,
             hop_bin=hop_bin,
+            sway_socket=sway_socket,
         )
         debug.log("hopd: subscribed to workspace events")
         for _event in sway.subscribe_to_workspace_events():
@@ -226,11 +233,12 @@ def _run_main_loop(scripts_dir: Path, *, hop_bin: str, hopd_bin: str) -> int:
                 scripts_dir=scripts_dir,
                 windows_for=windows_for,
                 hop_bin=hop_bin,
+                sway_socket=sway_socket,
             )
     except HopError as error:
         debug.log(f"hopd: {error}")
         print(str(error), file=sys.stderr)
-        _signal_daemon_down(scripts_dir, error, hopd_bin=hopd_bin)
+        _signal_daemon_down(scripts_dir, error, hopd_bin=hopd_bin, sway_socket=sway_socket)
         return 1
     except Exception as error:
         # Unhandled exceptions otherwise vanish into sway's stderr (often
@@ -239,16 +247,18 @@ def _run_main_loop(scripts_dir: Path, *, hop_bin: str, hopd_bin: str) -> int:
         # $XDG_RUNTIME_DIR/hop/debug.log` shows what happened.
         debug.log(f"hopd: unhandled exception\n{traceback.format_exc()}")
         traceback.print_exc()
-        _signal_daemon_down(scripts_dir, error, hopd_bin=hopd_bin)
+        _signal_daemon_down(scripts_dir, error, hopd_bin=hopd_bin, sway_socket=sway_socket)
         return 1
 
     debug.log("hopd: Sway IPC subscription ended")
     print("hopd: Sway IPC subscription ended", file=sys.stderr)
-    _signal_daemon_down(scripts_dir, RuntimeError("Sway IPC subscription ended"), hopd_bin=hopd_bin)
+    _signal_daemon_down(
+        scripts_dir, RuntimeError("Sway IPC subscription ended"), hopd_bin=hopd_bin, sway_socket=sway_socket
+    )
     return 1
 
 
-def _signal_daemon_down(scripts_dir: Path, error: BaseException, *, hopd_bin: str) -> None:
+def _signal_daemon_down(scripts_dir: Path, error: BaseException, *, hopd_bin: str, sway_socket: str) -> None:
     """Best-effort: surface the crash through the vicinae script set.
 
     Replaces every ``hop-*`` entry with a single "daemon stopped — restart"
@@ -258,7 +268,7 @@ def _signal_daemon_down(scripts_dir: Path, error: BaseException, *, hopd_bin: st
     """
 
     try:
-        write_daemon_down_script(scripts_dir, error=error, hopd_bin=hopd_bin)
+        write_daemon_down_script(scripts_dir, error=error, hopd_bin=hopd_bin, sway_socket=sway_socket)
     except OSError as write_err:
         debug.log(f"hopd: failed to write daemon-down entry: {write_err}")
 

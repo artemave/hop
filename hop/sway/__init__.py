@@ -68,6 +68,8 @@ class SwayIpcTransport(Protocol):
 
     def subscribe(self, payload: bytes) -> Iterator[bytes]: ...
 
+    def socket_path(self) -> str: ...
+
 
 class UnixSocketSwayIpcTransport:
     def __init__(self, socket_path: Path | str | None = None) -> None:
@@ -124,6 +126,9 @@ class UnixSocketSwayIpcTransport:
         finally:
             client.close()
 
+    def socket_path(self) -> str:
+        return self._resolve_socket_path()
+
     def _resolve_socket_path(self) -> str:
         if self._socket_path is not None:
             return str(Path(self._socket_path))
@@ -166,6 +171,17 @@ class SwayIpcAdapter:
 
     def switch_to_workspace(self, workspace_name: str) -> None:
         self.run_command(f"workspace {json.dumps(workspace_name)}")
+
+    def socket_path(self) -> str:
+        """The Sway IPC socket path this adapter talks to.
+
+        ``hopd`` bakes this into the vicinae scripts it generates so those
+        scripts reach Sway even when vicinae's environment never inherited
+        ``SWAYSOCK`` — a vicinae server launched as a systemd user service
+        gets ``WAYLAND_DISPLAY`` but not ``SWAYSOCK``, which leaves a bare
+        ``hop switch`` (pure Sway IPC) unable to find Sway.
+        """
+        return self._transport.socket_path()
 
     def set_workspace_layout(self, workspace_name: str, layout: str) -> None:
         # `layout <mode>` operates on the focused container. Caller is
