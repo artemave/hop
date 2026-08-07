@@ -12,7 +12,9 @@ from typing import Sequence
 import pytest
 
 from hop.backends import (
-    INTEGRATION_SHELL,
+    CONTAINER_INTEGRATION_SHELL,
+    REMOTE_INTEGRATION_SHELL,
+    REMOTE_KITTEN_PATH,
     CommandBackend,
     SessionBackendError,
     UnknownBackendError,
@@ -155,15 +157,31 @@ def test_integration_shell_is_empty_for_the_in_place_local_host() -> None:
     assert host_backend().integration_shell == ""
 
 
-def test_integration_shell_is_the_snippet_for_a_container() -> None:
+def test_integration_shell_is_the_degrading_snippet_for_a_container() -> None:
+    # A container's kitten comes from the recipe's `prepare` — hop can't install
+    # it, so the snippet probes PATH and degrades with a warning if it's absent.
     backend = CommandBackend(name="dc", interactive_prefix="podman exec dc", noninteractive_prefix="podman exec -T dc")
-    assert backend.integration_shell == INTEGRATION_SHELL
+    assert backend.integration_shell == CONTAINER_INTEGRATION_SHELL
 
 
-def test_integration_shell_is_the_snippet_for_a_remote_host() -> None:
-    # A remote host has no prefix but is still behind ssh — it needs the snippet.
+def test_integration_shell_execs_hops_own_kitten_for_a_remote_host() -> None:
+    # `hop ssh` installs this exact path and fails loudly if it can't, so the
+    # remote-host shell needs neither a PATH probe nor a degrade path.
     backend = CommandBackend(name="remote", interactive_prefix="", noninteractive_prefix="", host="devbox")
-    assert backend.integration_shell == INTEGRATION_SHELL
+    assert backend.integration_shell == REMOTE_INTEGRATION_SHELL
+    assert REMOTE_KITTEN_PATH in backend.integration_shell
+
+
+def test_integration_shell_is_the_container_snippet_for_a_container_behind_ssh() -> None:
+    # The shell lands *inside the container*, where the remote host's own cache
+    # isn't visible — so it's the container's kitten that matters, not hop's.
+    backend = CommandBackend(
+        name="dc",
+        interactive_prefix="podman exec dc",
+        noninteractive_prefix="podman exec -T dc",
+        host="devbox",
+    )
+    assert backend.integration_shell == CONTAINER_INTEGRATION_SHELL
 
 
 def test_container_launches_the_integration_snippet_login_wrapped(tmp_path: Path) -> None:
@@ -172,7 +190,7 @@ def test_container_launches_the_integration_snippet_login_wrapped(tmp_path: Path
     args = backend.wrap(backend.integration_shell, build_session(tmp_path))
 
     assert args[2].startswith("podman exec dc sh -c ")
-    assert _login_inner(args[2]) == INTEGRATION_SHELL
+    assert _login_inner(args[2]) == CONTAINER_INTEGRATION_SHELL
 
 
 def test_command_backend_wrap_login_wraps_command_in_container(tmp_path: Path) -> None:

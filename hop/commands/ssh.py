@@ -2,8 +2,9 @@
 
 Opens an ssh ControlMaster to ``<host>``, reverse-forwards hopd's bridge API
 socket onto the remote, installs the host-aware ``hop`` shim on the remote's
-PATH, and drops into a remote login shell. From there ``cd <project> && hop``
-starts a hop session on the host driven over that ssh connection.
+PATH and the ``kitten`` matching the host's kitty into the remote's cache, and
+drops into a remote login shell. From there ``cd <project> && hop`` starts a hop
+session on the host driven over that ssh connection.
 
 The command does *only* transport setup — it neither creates a session nor
 touches any container. Session creation happens when the user runs ``hop`` on
@@ -14,25 +15,29 @@ from __future__ import annotations
 
 import os
 import shlex
-import shutil
 import subprocess
 from pathlib import Path
 from typing import Callable
 
-from hop.backends import default_ssh_options
+from hop import debug
+from hop.backends import REMOTE_KITTEN_PATH, default_ssh_options
 from hop.bridge import default_api_socket_path, render_bridge_shim
 from hop.errors import HopError
 
 # Where the shim is installed on the remote. ``$HOME`` is expanded by the remote
-# shell at install time.
+# shell at install time. Permanent by necessity: the user *types* ``hop`` in
+# whatever remote shell they happen to be in, so it has to sit on a PATH hop
+# doesn't control (``docs/hop-ssh.md`` lists ``~/.local/bin`` as a requirement).
 REMOTE_SHIM_PATH = "$HOME/.local/bin/hop"
-
-# Where a copied ``kitten`` lands on the remote — same no-sudo ``~/.local/bin``
-# as the shim, so a login shell's PATH finds it.
-REMOTE_KITTEN_PATH = "$HOME/.local/bin/kitten"
 
 # Fallback when the remote has no ``XDG_RUNTIME_DIR`` (no logind session).
 _FALLBACK_REMOTE_RUNTIME = "/tmp"
+
+# Per-release, per-platform ``kitten`` builds. Pinning the tag to the *host's*
+# kitty version is the point of fetching rather than copying the host's own
+# binary: the remote gets the matching kitten built for its own OS/arch, rather
+# than version parity only when the two platforms happen to coincide.
+KITTEN_RELEASE_URL = "https://github.com/kovidgoyal/kitty/releases/download/v{version}/kitten-$os-$arch"
 
 SubprocessRunner = Callable[..., "subprocess.CompletedProcess[str]"]
 # Return type ``None`` (not ``NoReturn``) so a test can inject a fake that
@@ -84,43 +89,89 @@ def ssh_install_argv(host: str) -> tuple[str, ...]:
     )
 
 
-def ssh_install_kitten_argv(host: str) -> tuple[str, ...]:
-    """ssh argv that installs a piped ``kitten`` binary on the remote.
+def host_kitty_version(*, runner: SubprocessRunner) -> str:
+    """The host kitty's version (e.g. ``0.47.2``) — the tag pinned for the remote.
 
-    Mirrors ``ssh_install_argv``: the local binary is piped to stdin and written
-    by ``install`` reading ``/dev/stdin``, into the same no-sudo ``~/.local/bin``.
+    ``kitty --version`` prints ``kitty <version> created by …``. hop drives kitty,
+    so a host that can't answer this is broken in a way worth reporting rather
+    than working around.
     """
 
-    return ssh_remote_argv(
-        host,
-        f'mkdir -p "$(dirname {REMOTE_KITTEN_PATH})" && install -m 755 /dev/stdin {REMOTE_KITTEN_PATH}',
-    )
+    result = runner(("kitty", "--version"), text=True, capture_output=True, check=False)
+    fields = (result.stdout or "").split()
+    if result.returncode != 0 or len(fields) < 2:
+        detail = (result.stderr or "").strip() or f"exit {result.returncode}"
+        msg = f"could not read the host kitty version to pin the remote's kitten (`kitty --version`: {detail})"
+        raise HopError(msg)
+    return fields[1]
 
 
-def _ensure_remote_kitten(host: str, *, runner: SubprocessRunner) -> None:
-    """Best-effort: copy the host's ``kitten`` onto the remote host.
+def remote_kitten_install_script(version: str) -> str:
+    """Shell script that puts kitty ``version``'s ``kitten`` on the remote.
 
-    Under implicit shell integration a remote-host role window runs
-    ``kitten run-shell``; copying the host's binary (a portable kitty release
-    needing only an ancient glibc) makes that work with no manual setup. This
-    never raises: a musl / mismatched-arch remote, a missing local ``kitten``,
-    or an already-present remote one all just leave the remote to degrade + warn
-    at the shell. It reaches only the remote *host* — a container behind an
-    ssh→container backend still installs kitten in its ``prepare`` step.
+    Runs entirely on the remote — the binary comes down from GitHub over the
+    *remote's* link, not back through the host's uplink — and no-ops when the
+    cached copy already reports ``version``, so it's one fetch per kitty upgrade
+    rather than one per login.
+
+    The download is verified by running it (``run-shell --help`` proves both
+    that the platform build executes here and that the subcommand exists) and
+    only then moved into place, so a truncated or wrong-platform fetch can never
+    leave a broken binary at the path every remote window execs.
     """
 
-    probe = runner(
-        ssh_remote_argv(host, "command -v kitten >/dev/null 2>&1"),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if probe.returncode == 0:
-        return
-    local = shutil.which("kitten")
-    if local is None:
-        return
-    runner(ssh_install_kitten_argv(host), input=Path(local).read_bytes(), capture_output=True, check=False)
+    url = KITTEN_RELEASE_URL.format(version=version)
+    return f"""set -e
+K={REMOTE_KITTEN_PATH}
+case "$("$K" --version 2>/dev/null || true)" in
+"kitten {version} "*) exit 0 ;;
+esac
+case "$(uname -s)" in
+Linux) os=linux ;;
+Darwin) os=darwin ;;
+FreeBSD) os=freebsd ;;
+NetBSD) os=netbsd ;;
+OpenBSD) os=openbsd ;;
+DragonFly) os=dragonfly ;;
+*) echo "no kitten build published for $(uname -s)" >&2; exit 1 ;;
+esac
+case "$(uname -m)" in
+x86_64|amd64) arch=amd64 ;;
+aarch64|arm64) arch=arm64 ;;
+i386|i686) arch=386 ;;
+arm*) arch=arm ;;
+*) echo "no kitten build published for $(uname -m)" >&2; exit 1 ;;
+esac
+mkdir -p "$(dirname "$K")"
+curl -fsSL "{url}" -o "$K.tmp"
+chmod 755 "$K.tmp"
+"$K.tmp" run-shell --help >/dev/null 2>&1 || {{
+  rm -f "$K.tmp"
+  echo "downloaded kitten-$os-$arch does not run on this host" >&2
+  exit 1
+}}
+mv "$K.tmp" "$K"
+"""
+
+
+def _install_remote_kitten(host: str, version: str, *, runner: SubprocessRunner) -> None:
+    """Install the remote's own-platform ``kitten`` for the host's kitty version.
+
+    Piped to a bare ``sh`` over stdin rather than passed as an argument: the
+    script is multi-line with quoting ssh's argv-flattening would mangle, and a
+    remote login shell that isn't POSIX (fish, csh) would reject it outright.
+
+    Raises on failure. The remote-host integration shell execs this path with no
+    PATH lookup and no degrade, so a session whose kitten never landed opens
+    dead windows — failing here is what turns that into a message the user can
+    act on while they're still at a prompt.
+    """
+
+    script = remote_kitten_install_script(version)
+    result = runner(ssh_remote_argv(host, "sh"), input=script, text=True, capture_output=True, check=False)
+    debug.log(f"kitten {version} install on {host}: exit {result.returncode} {(result.stderr or '').strip()}")
+    if result.returncode != 0:
+        raise HopError(_setup_error(host, result, f"kitten {version} install"))
 
 
 def ssh_unlink_argv(host: str, remote_socket: str) -> tuple[str, ...]:
@@ -214,7 +265,6 @@ def run_hop_ssh(
     if forward.returncode != 0:
         raise HopError(_setup_error(host, forward, "reverse-forward"))
 
-    # Best-effort — never blocks the drop-in shell (unlike the shim above).
-    _ensure_remote_kitten(host, runner=runner)
+    _install_remote_kitten(host, host_kitty_version(runner=runner), runner=runner)
 
     exec_("ssh", ssh_shell_argv(host))

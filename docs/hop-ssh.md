@@ -10,12 +10,16 @@ laptop, the shells/editor/container on the remote box — driven by the project'
   hopd's bridge socket onto the remote, installs the `hop` shim on the remote's
   PATH, and drops you into a remote login shell. That's all it does — no session
   is created.
-- It also **best-effort-copies your own `kitten` binary** onto the remote (into
-  `~/.local/bin`, if the remote doesn't already have one), so a remote-*host*
-  session gets Kitty shell integration with no manual setup. This is best-effort:
-  a musl or cross-arch remote just falls through to hop's plain-shell + warning.
-  It reaches only the remote host — a container behind an ssh→container backend
-  still installs `kitten` in its own `prepare` step.
+- It also **installs the `kitten` matching your kitty version** on the remote, so
+  a remote-*host* session gets Kitty shell integration with no manual setup. The
+  remote downloads it itself from kitty's GitHub releases — pinned to the tag
+  your host kitty reports, built for the remote's own OS/arch — into
+  `~/.cache/hop/kitten`, and skips the fetch when that file already reports the
+  right version. If it can't (no network, no `curl`, a platform kitty doesn't
+  publish), `hop ssh` **fails with the reason** rather than dropping you into a
+  shell whose session would open dead windows. It reaches only the remote host —
+  a container behind an ssh→container backend still installs `kitten` in its own
+  `prepare` step.
 - In that shell, **`cd <project> && hop`**. The remote `hop` is the shim; it
   reports `(host, cwd)` to hopd, which starts the session: kitty windows open on
   your laptop, each window's shell running on the remote over the same ssh
@@ -67,6 +71,28 @@ host_translate        = "echo {host}"   # so localhost URLs open against the rem
 - **`~/.local/bin` on PATH** — where `hop ssh` installs the shim.
 - **Your editor stack on the remote.** nvim, plugins, LSPs, treesitter parsers
   run on the remote (that's where the editor process is). Sync your dotfiles.
+
+## What `hop ssh` leaves on the remote
+
+Two files, both replaced in place rather than accumulating:
+
+- **`~/.local/bin/hop`** — the shim. It needs a PATH hop doesn't control, since
+  you type `hop` in whatever shell you happen to be in. Every run rewrites it, so
+  it never goes stale.
+- **`~/.cache/hop/kitten`** (~25M) — one binary, re-fetched only when your host
+  kitty's version changes. Never on PATH: the remote-host integration shell execs
+  it by absolute path, so it implies no profile change on the remote, and a
+  remote with its own `kitten` elsewhere is left entirely alone.
+
+Both are safe to `rm` when you're done with a box; the next `hop ssh` puts them
+back. `$XDG_CACHE_HOME` is honoured if set.
+
+Deliberately, neither the shim nor the kitten has a fallback: the integration
+shell execs hop's own kitten with no PATH lookup and no degrade-to-plain-shell.
+That's what keeps a remote session's terminal behaviour identical to your
+laptop's rather than varying with whatever kitty the remote happens to have —
+and it's why a failed install stops `hop ssh` with an error instead of being
+best-effort.
 
 ## Editor plugins inside a container
 

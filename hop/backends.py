@@ -35,17 +35,36 @@ LOCALHOST_HOSTS = frozenset({"localhost", "127.0.0.1", "0.0.0.0"})
 # environment (the typical case for container-backed dev setups).
 SHELL_FALLBACK = "${SHELL:-sh}"
 
-# Implicit shell for a non-host role window. Kitty's shell integration (OSC 133
-# prompt marks) doesn't cross a ``podman exec`` / ssh boundary, so behind one we
+# Where ``hop ssh`` installs the ``kitten`` it fetches for a remote *host*.
+# A shell-expanded string rather than a concrete path: unlike the bridge socket
+# — whose literal path ``ssh -R`` has to bind, forcing a host-side probe —
+# nothing here needs resolving before the remote shell sees it. Unversioned, so
+# a host kitty upgrade replaces the binary instead of accumulating one per
+# version, and under ``~/.cache`` because that's the one place a leftover is
+# expected and safe to delete.
+REMOTE_KITTEN_PATH = '"${XDG_CACHE_HOME:-$HOME/.cache}/hop/kitten"'
+
+# Implicit shell for a *container* role window. Kitty's shell integration (OSC
+# 133 prompt marks) doesn't cross a ``podman exec`` boundary, so behind one we
 # run ``kitten run-shell`` to re-enable it — or degrade to a plain shell with an
-# in-window warning when ``kitten`` isn't installed. The check and the fallback
-# live in the shell itself, so no bootstrap probe is needed; the login-wrap runs
-# this under ``$SHELL -lc``, so the degraded ``exec "$SHELL"`` inherits the login
-# environment.
-INTEGRATION_SHELL = (
+# in-window warning when ``kitten`` isn't installed. Providing it is the user's
+# job here (an install step in the recipe's ``prepare``), which is why this one
+# degrades rather than failing: hop has no way to put it there itself. The check
+# and the fallback live in the shell itself, so no bootstrap probe is needed;
+# the login-wrap runs this under ``$SHELL -lc``, so the degraded
+# ``exec "$SHELL"`` inherits the login environment.
+CONTAINER_INTEGRATION_SHELL = (
     "command -v kitten >/dev/null 2>&1 && exec kitten run-shell "
     "|| { printf 'hop: kitten not found — shell integration off; install it in prepare\\n' >&2; exec \"$SHELL\"; }"
 )
+
+# Implicit shell for a remote *host* role window. No probe and no degrade: hop
+# installs this exact path itself in ``hop ssh``, which fails loudly if it
+# can't, so by the time a window launches the binary is either there or the user
+# was already told why it isn't. A PATH lookup would only reintroduce the
+# question of *which* kitten is running — the remote's version is precisely what
+# the fetch exists to pin.
+REMOTE_INTEGRATION_SHELL = f"exec {REMOTE_KITTEN_PATH} run-shell"
 
 # Sentinel exit code used by ``CommandBackend.read_file`` to signal
 # "path doesn't exist" from inside the shell script (so the caller can
@@ -512,11 +531,17 @@ class CommandBackend:
         # The implicit shell a role window launches when nothing overrides it.
         # The in-place local host (no prefix, no ssh) gets kitty's native login
         # shell (empty → ``wrap`` returns ``()``); every other backend sits
-        # behind a boundary kitty's integration env can't cross, so it runs the
-        # ``kitten run-shell``-or-degrade snippet.
-        if not self.interactive_prefix and self.host is None:
-            return ""
-        return INTEGRATION_SHELL
+        # behind a boundary kitty's integration env can't cross and needs
+        # ``kitten run-shell`` re-run inside it. Which snippet depends on who
+        # owns the kitten: a prefix means the shell lands in a *container*,
+        # whose kitten comes from the recipe's ``prepare`` (PATH lookup, degrade
+        # if absent) — including a container behind ssh, where the remote host's
+        # own cache isn't visible. A bare ssh host is hop's own install.
+        if self.interactive_prefix:
+            return CONTAINER_INTEGRATION_SHELL
+        if self.host is not None:
+            return REMOTE_INTEGRATION_SHELL
+        return ""
 
     def wrap(self, command: str, session: ProjectSession) -> Sequence[str]:
         if not command and not self.interactive_prefix:

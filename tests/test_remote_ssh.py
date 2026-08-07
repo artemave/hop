@@ -7,6 +7,7 @@ No mocks: fake runners/exec are injected (the established style), and the
 from __future__ import annotations
 
 import base64
+import os
 import subprocess
 from pathlib import Path
 from subprocess import CompletedProcess
@@ -19,6 +20,7 @@ from hop.app import (
     backend_from_record,
 )
 from hop.backends import (
+    REMOTE_KITTEN_PATH,
     CommandBackend,
     SshTransport,
     default_ssh_options,
@@ -26,13 +28,14 @@ from hop.backends import (
 )
 from hop.bridge import dispatch_remote
 from hop.commands.ssh import (
-    REMOTE_KITTEN_PATH,
-    _ensure_remote_kitten,  # pyright: ignore[reportPrivateUsage]
+    _install_remote_kitten,  # pyright: ignore[reportPrivateUsage]
+    host_kitty_version,
     remote_bridge_socket,
+    remote_kitten_install_script,
     run_hop_ssh,
     ssh_forward_argv,
     ssh_install_argv,
-    ssh_install_kitten_argv,
+    ssh_remote_argv,
     ssh_shell_argv,
 )
 from hop.config import HopConfig, parse_project_config_text
@@ -366,8 +369,24 @@ def test_dispatch_remote_passes_identity_and_argv_via_environment() -> None:
 # --- hop ssh -----------------------------------------------------------------
 
 
+_HOST_KITTY_VERSION = "0.47.2"
+
+
 def _is_runtime_query(args: Sequence[str]) -> bool:
     return bool(args) and "XDG_RUNTIME_DIR" in args[-1]
+
+
+def _is_kitty_version_query(args: Sequence[str]) -> bool:
+    return tuple(args) == ("kitty", "--version")
+
+
+def _stdout_for(args: Sequence[str]) -> str:
+    """What a stand-in runner should print for the two queries `hop ssh` makes."""
+    if _is_kitty_version_query(args):
+        return f"kitty {_HOST_KITTY_VERSION} created by Kovid Goyal"
+    if _is_runtime_query(args):
+        return "/run/user/1001"
+    return ""
 
 
 def test_remote_bridge_socket_forwards_under_the_remote_runtime_dir() -> None:
@@ -440,8 +459,7 @@ def test_run_hop_ssh_installs_shim_refreshes_forward_then_execs(tmp_path: Path) 
         runs.append(args)
         if "install -m 755 /dev/stdin" in args[-1]:
             install_kwargs.update(kwargs)
-        stdout = "/run/user/1001" if _is_runtime_query(args) else ""
-        return CompletedProcess(args=list(args), returncode=0, stdout=stdout, stderr="")
+        return CompletedProcess(args=list(args), returncode=0, stdout=_stdout_for(args), stderr="")
 
     def fake_exec(file: str, args: tuple[str, ...]) -> None:
         execs.append((file, args))
@@ -499,83 +517,203 @@ def test_run_hop_ssh_raises_when_forward_fails(tmp_path: Path) -> None:
     assert execs == []
 
 
-def _is_kitten_probe(args: Sequence[str]) -> bool:
-    return args[-1] == "command -v kitten >/dev/null 2>&1"
+def test_host_kitty_version_reads_the_version_hop_pins_to() -> None:
+    def runner(args: Sequence[str], **kwargs: object) -> CompletedProcess[str]:
+        return CompletedProcess(args=list(args), returncode=0, stdout=_stdout_for(args), stderr="")
+
+    assert host_kitty_version(runner=runner) == _HOST_KITTY_VERSION
 
 
-def _fake_local_kitten(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, content: bytes = b"KITTENBIN") -> None:
-    bindir = tmp_path / "bin"
-    bindir.mkdir()
-    kitten = bindir / "kitten"
-    kitten.write_bytes(content)
-    kitten.chmod(0o755)
-    monkeypatch.setenv("PATH", str(bindir))
+def test_host_kitty_version_raises_when_kitty_cannot_answer() -> None:
+    def runner(args: Sequence[str], **kwargs: object) -> CompletedProcess[str]:
+        return CompletedProcess(args=list(args), returncode=127, stdout="", stderr="kitty: not found")
+
+    with pytest.raises(HopError, match="could not read the host kitty version.*kitty: not found"):
+        host_kitty_version(runner=runner)
 
 
-def test_ensure_remote_kitten_skips_when_already_present() -> None:
+def test_remote_kitten_install_script_pins_the_hosts_version() -> None:
+    script = remote_kitten_install_script(_HOST_KITTY_VERSION)
+
+    # The release tag — not `latest` — is what makes the remote's kitten match
+    # the host's kitty, and `$os`/`$arch` stay unexpanded for the remote to fill.
+    assert f"/releases/download/v{_HOST_KITTY_VERSION}/kitten-$os-$arch" in script
+    assert REMOTE_KITTEN_PATH in script
+
+
+# The install script is shell, so the tests below run it as shell. `curl` is
+# stubbed on PATH — the one dependency that would otherwise pull 25M over the
+# network per test — mirroring how this file already plants fake binaries on
+# PATH. Everything else (uname, the version check, the verify-then-move) is the
+# real thing.
+_FAKE_KITTEN = """#!/bin/sh
+case "$1" in
+--version) echo "kitten {version} created by Kovid Goyal" ;;
+run-shell) exit 0 ;;
+esac
+"""
+
+
+def _stub_bin(directory: Path, name: str, body: str) -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    stub = directory / name
+    stub.write_text(body)
+    stub.chmod(0o755)
+
+
+def _stub_curl(directory: Path, *, writes: str, log: Path | None = None) -> None:
+    """A `curl` that writes `writes` to its `-o` target instead of fetching."""
+    record = f'echo "$@" >> {log}\n' if log is not None else ""
+    body = (
+        "#!/bin/sh\n"
+        f"{record}"
+        "while [ $# -gt 0 ]; do\n"
+        '  if [ "$1" = "-o" ]; then shift; cat > "$1" <<\'PAYLOAD\'\n'
+        f"{writes}"
+        "PAYLOAD\n"
+        "    exit 0\n"
+        "  fi\n"
+        "  shift\n"
+        "done\n"
+    )
+    _stub_bin(directory, "curl", body)
+
+
+def _run_install(script: str, *, cache: Path, stubs: Path) -> CompletedProcess[str]:
+    env = {**os.environ, "PATH": f"{stubs}:{os.environ['PATH']}", "XDG_CACHE_HOME": str(cache)}
+    return subprocess.run(  # noqa: S603
+        ["/bin/sh", "-s"], input=script, text=True, capture_output=True, env=env, check=False
+    )
+
+
+def _cached_kitten(cache: Path) -> Path:
+    return cache / "hop" / "kitten"
+
+
+def test_install_script_downloads_kitten_into_the_cache(tmp_path: Path) -> None:
+    stubs, cache = tmp_path / "stubs", tmp_path / "cache"
+    _stub_curl(stubs, writes=_FAKE_KITTEN.format(version=_HOST_KITTY_VERSION))
+
+    result = _run_install(remote_kitten_install_script(_HOST_KITTY_VERSION), cache=cache, stubs=stubs)
+
+    assert result.returncode == 0, result.stderr
+    assert _cached_kitten(cache).is_file()
+    assert os.access(_cached_kitten(cache), os.X_OK)
+
+
+def test_install_script_is_a_no_op_when_the_cached_version_matches(tmp_path: Path) -> None:
+    stubs, cache = tmp_path / "stubs", tmp_path / "cache"
+    calls = tmp_path / "curl-calls"
+    _stub_curl(stubs, writes=_FAKE_KITTEN.format(version=_HOST_KITTY_VERSION), log=calls)
+    script = remote_kitten_install_script(_HOST_KITTY_VERSION)
+
+    assert _run_install(script, cache=cache, stubs=stubs).returncode == 0
+    assert _run_install(script, cache=cache, stubs=stubs).returncode == 0
+
+    # One fetch per kitty version, not one per `hop ssh` — the second run saw a
+    # cached binary already reporting the pinned version and stopped.
+    assert calls.read_text().count("\n") == 1
+
+
+def test_install_script_refetches_when_the_cached_version_is_stale(tmp_path: Path) -> None:
+    stubs, cache = tmp_path / "stubs", tmp_path / "cache"
+    _stub_curl(stubs, writes=_FAKE_KITTEN.format(version="0.40.0"))
+    assert _run_install(remote_kitten_install_script("0.40.0"), cache=cache, stubs=stubs).returncode == 0
+
+    # Host kitty upgraded: the cached 0.40.0 no longer matches, so it's replaced
+    # in place rather than accumulating a second binary.
+    _stub_curl(stubs, writes=_FAKE_KITTEN.format(version="0.48.0"))
+    assert _run_install(remote_kitten_install_script("0.48.0"), cache=cache, stubs=stubs).returncode == 0
+
+    assert (
+        "0.48.0"
+        in subprocess.run(  # noqa: S603
+            [str(_cached_kitten(cache)), "--version"], capture_output=True, text=True, check=True
+        ).stdout
+    )
+    assert sorted(p.name for p in (cache / "hop").iterdir()) == ["kitten"]
+
+
+def test_install_script_rejects_a_download_that_does_not_run(tmp_path: Path) -> None:
+    stubs, cache = tmp_path / "stubs", tmp_path / "cache"
+    _stub_curl(stubs, writes="TRUNCATED-GARBAGE\n")
+
+    result = _run_install(remote_kitten_install_script(_HOST_KITTY_VERSION), cache=cache, stubs=stubs)
+
+    # Verified before it's moved into place: with no fallback in the remote
+    # integration shell, a broken binary here would open dead windows.
+    assert result.returncode != 0
+    assert "does not run on this host" in result.stderr
+    assert not _cached_kitten(cache).exists()
+    assert list((cache / "hop").iterdir()) == []
+
+
+def test_install_script_keeps_a_working_cached_kitten_when_a_refetch_fails(tmp_path: Path) -> None:
+    stubs, cache = tmp_path / "stubs", tmp_path / "cache"
+    _stub_curl(stubs, writes=_FAKE_KITTEN.format(version="0.40.0"))
+    assert _run_install(remote_kitten_install_script("0.40.0"), cache=cache, stubs=stubs).returncode == 0
+
+    _stub_curl(stubs, writes="TRUNCATED-GARBAGE\n")
+    assert _run_install(remote_kitten_install_script("0.48.0"), cache=cache, stubs=stubs).returncode != 0
+
+    assert (
+        "0.40.0"
+        in subprocess.run(  # noqa: S603
+            [str(_cached_kitten(cache)), "--version"], capture_output=True, text=True, check=True
+        ).stdout
+    )
+
+
+def test_install_script_reports_an_unsupported_platform(tmp_path: Path) -> None:
+    stubs, cache = tmp_path / "stubs", tmp_path / "cache"
+    _stub_curl(stubs, writes=_FAKE_KITTEN.format(version=_HOST_KITTY_VERSION))
+    _stub_bin(stubs, "uname", '#!/bin/sh\ncase "$1" in -s) echo Linux ;; -m) echo sparc64 ;; esac\n')
+
+    result = _run_install(remote_kitten_install_script(_HOST_KITTY_VERSION), cache=cache, stubs=stubs)
+
+    assert result.returncode != 0
+    assert "no kitten build published for sparc64" in result.stderr
+
+
+def test_install_remote_kitten_pipes_the_script_to_a_bare_remote_sh() -> None:
     runs: list[Sequence[str]] = []
+    kwargs_seen: dict[str, object] = {}
 
     def runner(args: Sequence[str], **kwargs: object) -> CompletedProcess[str]:
         runs.append(args)
-        return CompletedProcess(args=list(args), returncode=0, stdout="", stderr="")  # probe → present
+        kwargs_seen.update(kwargs)
+        return CompletedProcess(args=list(args), returncode=0, stdout="", stderr="")
 
-    _ensure_remote_kitten("devbox", runner=runner)
+    _install_remote_kitten("devbox", _HOST_KITTY_VERSION, runner=runner)
 
-    assert len(runs) == 1  # only the probe; nothing installed
-    assert _is_kitten_probe(runs[0])
+    # A bare `sh` is one token that survives ssh's argv-flattening, and the
+    # multi-line script rides stdin — so a non-POSIX remote login shell (fish,
+    # csh) never has to parse it.
+    assert runs[0] == ssh_remote_argv("devbox", "sh")
+    assert kwargs_seen["input"] == remote_kitten_install_script(_HOST_KITTY_VERSION)
 
 
-def test_ensure_remote_kitten_copies_local_binary_when_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _fake_local_kitten(tmp_path, monkeypatch)
-    runs: list[Sequence[str]] = []
-    install_kwargs: dict[str, object] = {}
-
+def test_install_remote_kitten_raises_with_the_remote_error(tmp_path: Path) -> None:
     def runner(args: Sequence[str], **kwargs: object) -> CompletedProcess[str]:
-        runs.append(args)
-        if "install -m 755 /dev/stdin" in args[-1]:
-            install_kwargs.update(kwargs)
-        code = 1 if _is_kitten_probe(args) else 0  # probe → absent
-        return CompletedProcess(args=list(args), returncode=code, stdout="", stderr="")
+        return CompletedProcess(args=list(args), returncode=1, stdout="", stderr="curl: not found")
 
-    _ensure_remote_kitten("devbox", runner=runner)
-
-    assert _is_kitten_probe(runs[0])
-    assert runs[1] == ssh_install_kitten_argv("devbox")
-    assert install_kwargs["input"] == b"KITTENBIN"  # the local binary's bytes, piped over ssh
+    with pytest.raises(HopError, match=f"kitten {_HOST_KITTY_VERSION} install failed: curl: not found"):
+        _install_remote_kitten("devbox", _HOST_KITTY_VERSION, runner=runner)
 
 
-def test_ensure_remote_kitten_skips_when_no_local_kitten(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    empty = tmp_path / "empty"
-    empty.mkdir()
-    monkeypatch.setenv("PATH", str(empty))
-    runs: list[Sequence[str]] = []
-
-    def runner(args: Sequence[str], **kwargs: object) -> CompletedProcess[str]:
-        runs.append(args)
-        return CompletedProcess(args=list(args), returncode=1, stdout="", stderr="")  # probe → absent
-
-    _ensure_remote_kitten("devbox", runner=runner)
-
-    assert len(runs) == 1  # probed, but no local kitten to copy → nothing installed
-    assert _is_kitten_probe(runs[0])
-
-
-def test_run_hop_ssh_execs_even_when_kitten_install_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _fake_local_kitten(tmp_path, monkeypatch)
+def test_run_hop_ssh_raises_instead_of_dropping_into_a_shell_without_kitten(tmp_path: Path) -> None:
     socket = tmp_path / "api.sock"
     socket.touch()
     execs: list[object] = []
 
     def runner(args: Sequence[str], **kwargs: object) -> CompletedProcess[str]:
-        if _is_runtime_query(args):
-            return CompletedProcess(args=list(args), returncode=0, stdout="/run/user/1001", stderr="")
-        if _is_kitten_probe(args):
-            return CompletedProcess(args=list(args), returncode=1, stdout="", stderr="")  # absent
-        if REMOTE_KITTEN_PATH in args[-1]:
-            return CompletedProcess(args=list(args), returncode=1, stdout="", stderr="mismatched arch")  # install fails
-        return CompletedProcess(args=list(args), returncode=0, stdout="", stderr="")
+        code = 1 if tuple(args) == ssh_remote_argv("devbox", "sh") else 0
+        stderr = "no kitten build published for sparc64" if code else ""
+        return CompletedProcess(args=list(args), returncode=code, stdout=_stdout_for(args), stderr=stderr)
 
-    run_hop_ssh("devbox", api_socket=socket, runner=runner, exec_=lambda f, a: execs.append((f, a)))
+    with pytest.raises(HopError, match="install failed: no kitten build published for sparc64"):
+        run_hop_ssh("devbox", api_socket=socket, runner=runner, exec_=lambda f, a: execs.append((f, a)))
 
-    # Kitten install is best-effort — its failure must not block the drop-in shell.
-    assert execs == [("ssh", ssh_shell_argv("devbox"))]
+    # Dropping into the shell anyway would hand back a session whose every
+    # window dies on `exec <cache>/kitten run-shell`.
+    assert execs == []
