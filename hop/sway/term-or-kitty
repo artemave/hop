@@ -25,14 +25,26 @@ hop=(env "PYTHONPATH=$root" python3 -m hop)
 
 ws=$(swaymsg -t get_workspaces | jq -r '.[] | select(.focused).name')
 session_root=""
+host=""
 
 if [[ $ws == p:* ]]; then
-    session_root=$("${hop[@]}" list --json 2>/dev/null | jq -r --arg s "${ws#p:}" '
-        .[] | select(.name == $s) | .session_root // empty
+    listing=$("${hop[@]}" list --json 2>/dev/null | jq -c --arg s "${ws#p:}" '
+        .[] | select(.name == $s)
     ' || true)
+    if [[ -n $listing ]]; then
+        session_root=$(jq -r '.session_root // empty' <<<"$listing")
+        host=$(jq -r '.host // empty' <<<"$listing")
+    fi
 fi
 
-if [[ -d $session_root ]]; then
+if [[ -n $host ]]; then
+    # A remote session's ``session_root`` is a path on ``host`` — never a
+    # local directory — so identity travels via env instead of `cd`, the
+    # same handoff the bridge uses to dispatch into a remote session.
+    export HOP_REMOTE_HOST=$host
+    export HOP_REMOTE_CWD=$session_root
+    exec "${hop[@]}" term
+elif [[ -d $session_root ]]; then
     cd "$session_root" && exec "${hop[@]}" term
 else
     exec "$fallback"

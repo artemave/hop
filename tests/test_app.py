@@ -610,7 +610,21 @@ def test_execute_command_lists_sessions_as_json_with_session_roots(
     monkeypatch.setenv("HOP_SESSIONS_DIR", str(tmp_path / "sessions"))
     sessions_dir = tmp_path / "sessions"
     sessions_dir.mkdir()
-    (sessions_dir / "alpha.json").write_text(json.dumps({"name": "alpha", "session_root": "/projects/alpha"}))
+    (sessions_dir / "alpha.json").write_text(
+        json.dumps(
+            {
+                "name": "alpha",
+                "session_root": "/projects/alpha",
+                "backend": {
+                    "type": "command",
+                    "name": "ssh",
+                    "interactive_prefix": "",
+                    "noninteractive_prefix": "",
+                    "transport_host": "devbox",
+                },
+            }
+        )
+    )
 
     services = build_services(workspaces=("p:zeta", "workspace", "p:alpha"))
     stdout = io.StringIO()
@@ -627,8 +641,8 @@ def test_execute_command_lists_sessions_as_json_with_session_roots(
 
     payload = json.loads(stdout.getvalue())
     assert payload == [
-        {"name": "alpha", "workspace": "p:alpha", "session_root": "/projects/alpha"},
-        {"name": "zeta", "workspace": "p:zeta", "session_root": None},
+        {"name": "alpha", "workspace": "p:alpha", "session_root": "/projects/alpha", "host": "devbox"},
+        {"name": "zeta", "workspace": "p:zeta", "session_root": None, "host": None},
     ]
 
 

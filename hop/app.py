@@ -460,6 +460,7 @@ def execute_command(
                         "name": listing.name,
                         "workspace": listing.workspace,
                         "session_root": str(listing.session_root) if listing.session_root else None,
+                        "host": listing.host,
                     }
                     for listing in listings
                 ]
