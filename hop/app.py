@@ -61,7 +61,13 @@ from hop.config import (
     parse_project_config_text,
 )
 from hop.editor import SharedNeovimEditorAdapter
-from hop.kitty import KittyRemoteControlAdapter, KittyWindow, KittyWindowContext, KittyWindowState
+from hop.kitty import (
+    KittyRemoteControlAdapter,
+    KittyWindow,
+    KittyWindowContext,
+    KittyWindowState,
+    session_kitty_overrides,
+)
 from hop.layouts import WindowSpec, resolve_windows
 from hop.popup import HopPopup, KittyHopPopup
 from hop.session import ProjectSession, remote_session_from_env, resolve_project_session
@@ -260,6 +266,9 @@ class SessionBackendRegistry:
 
     def workspace_layout_for_entry(self, session: ProjectSession) -> str | None:
         return self._merged_config(session).workspace_layout
+
+    def session_kitty_overrides_for_entry(self, session: ProjectSession) -> tuple[str, ...]:
+        return session_kitty_overrides(self._merged_config(session))
 
     def _merged_config(self, session: ProjectSession) -> HopConfig:
         global_config = self._global_config_loader()
@@ -548,6 +557,7 @@ def build_default_services() -> HopServices:
         session_windows_for=registry.resolve_windows_for_entry,
         on_session_bootstrap=_persist_bootstrap_record,
         sway=sway,
+        extra_overrides_for=registry.session_kitty_overrides_for_entry,
     )
     neovim = SharedNeovimEditorAdapter(
         terminals=kitty,
@@ -579,6 +589,7 @@ def build_kitten_services(boss: object) -> HopServices:
         session_windows_for=registry.resolve_windows_for_entry,
         on_session_bootstrap=_persist_bootstrap_record,
         sway=sway,
+        extra_overrides_for=registry.session_kitty_overrides_for_entry,
     )
     neovim = SharedNeovimEditorAdapter(
         kitty_io=BossKittyEditorIO(boss),

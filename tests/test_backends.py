@@ -728,6 +728,43 @@ def test_command_backend_read_file_raises_session_backend_error_on_other_failure
         backend.read_file(build_session(tmp_path), Path("/app/foo.rb"))
 
 
+def test_host_backend_write_file_writes_bytes_to_disk(tmp_path: Path) -> None:
+    target = tmp_path / "nested" / "shot.png"
+    payload = bytes(range(256))
+
+    host_backend().write_file(build_session(tmp_path), target, payload)
+
+    assert target.read_bytes() == payload
+
+
+def test_command_backend_write_file_pipes_base64_heredoc_through_prefix(tmp_path: Path) -> None:
+    runner = RecordingRunner()
+    backend = backend_from_config(
+        make_backend(noninteractive_prefix="compose exec -T devcontainer"),
+        runner=runner,
+    )
+
+    backend.write_file(build_session(tmp_path), Path("/tmp/hop-paste-1.png"), b"PNGBYTES")
+
+    assert len(runner.calls) == 1
+    argv, _cwd, stdin = runner.calls[0]
+    assert argv == ("sh", "-c", "compose exec -T devcontainer sh")
+    assert stdin is not None
+    assert "base64 -d > /tmp/hop-paste-1.png <<'HOP_EOF'" in stdin
+    assert base64.b64encode(b"PNGBYTES").decode() in stdin
+
+
+def test_command_backend_write_file_raises_session_backend_error_on_failure(tmp_path: Path) -> None:
+    runner = RecordingRunner(returncode=1, stderr="read-only filesystem")
+    backend = backend_from_config(
+        make_backend(noninteractive_prefix="compose exec -T devcontainer"),
+        runner=runner,
+    )
+
+    with pytest.raises(SessionBackendError, match="write_file failed"):
+        backend.write_file(build_session(tmp_path), Path("/tmp/x.png"), b"x")
+
+
 # --- is_binary_file: classify text (editor) vs binary (host viewer) ------
 
 

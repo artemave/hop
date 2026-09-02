@@ -181,8 +181,17 @@ Hop ships a small POSIX-sh client (no `socat`/`nc` dependency, just `curl`) that
 
 The host's bridge socket lives at `$XDG_RUNTIME_DIR/hop/api.sock`. Pick one of these patterns depending on what your compose already does:
 
-- **If your compose already bind-mounts `${XDG_RUNTIME_DIR}` into the container at the same path** (a common pattern when sharing Wayland / pipewire / ssh-agent sockets with the host), no compose change is needed — the bridge socket is already there.
-- **Otherwise**, add a single bind mount to the `devcontainer` service:
+- **Recommended: bind-mount the `hop` runtime dir**, which carries just the bridge socket:
+
+  ```yaml
+  services:
+    devcontainer:
+      volumes:
+        - "${XDG_RUNTIME_DIR}/hop:${XDG_RUNTIME_DIR}/hop"
+  ```
+
+  Then pass `--socket "$XDG_RUNTIME_DIR/hop/api.sock"` to `hop bridge shim` (see **c** below). A whole-`${XDG_RUNTIME_DIR}` mount also works but exposes far more than needed — and hop no longer needs the host Wayland socket in the container (image paste reads the clipboard host-side; see [the paste kitten](../README.md#special-windows)).
+- **Minimal: a single-file mount** of just the socket:
 
   ```yaml
   services:
@@ -191,7 +200,8 @@ The host's bridge socket lives at `$XDG_RUNTIME_DIR/hop/api.sock`. Pick one of t
         - "${XDG_RUNTIME_DIR}/hop/api.sock:/run/hop.sock"
   ```
 
-  The container-side path is your choice; `/run/hop.sock` happens to be the shim's built-in default so it needs zero extra config in the simple case.
+  `/run/hop.sock` is the shim's built-in default so it needs zero extra config. Caveat: a single-file bind mount pins an inode — if `hopd` restarts and recreates the socket, the container keeps looking at the dead one until it restarts too. The directory mount above survives a `hopd` restart.
+- **If your compose already bind-mounts all of `${XDG_RUNTIME_DIR}`**, the bridge socket is already there — no change needed.
 
 > `hopd` must be running when the container starts (`exec hopd` in sway config; see the spec). If the host socket doesn't exist at compose-up time, container runtimes will create a directory at that path instead, and the bridge won't work — start `hopd` first, then `hop` your session.
 

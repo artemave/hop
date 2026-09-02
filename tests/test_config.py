@@ -441,6 +441,146 @@ def test_merge_configs_debug_log_inherits_from_global() -> None:
     assert merge_configs(project, global_).debug_log is True
 
 
+# --- [keys].paste / [clipboard].allow_read -----------------------------
+
+
+def test_load_global_config_parses_keys_paste_list(tmp_path: Path) -> None:
+    config_file = write(tmp_path / "config.toml", '[keys]\npaste = ["ctrl+v", "ctrl+shift+v"]\n')
+
+    assert load_global_config(config_file).paste_keys == ("ctrl+v", "ctrl+shift+v")
+
+
+def test_load_global_config_normalizes_keys_paste_bare_string(tmp_path: Path) -> None:
+    config_file = write(tmp_path / "config.toml", '[keys]\npaste = "ctrl+y"\n')
+
+    assert load_global_config(config_file).paste_keys == ("ctrl+y",)
+
+
+def test_load_global_config_keys_paste_empty_string_disables(tmp_path: Path) -> None:
+    config_file = write(tmp_path / "config.toml", '[keys]\npaste = ""\n')
+
+    assert load_global_config(config_file).paste_keys == ()
+
+
+def test_load_global_config_keys_paste_empty_list_disables(tmp_path: Path) -> None:
+    config_file = write(tmp_path / "config.toml", "[keys]\npaste = []\n")
+
+    assert load_global_config(config_file).paste_keys == ()
+
+
+def test_load_global_config_keys_table_without_paste_is_none(tmp_path: Path) -> None:
+    config_file = write(tmp_path / "config.toml", "[keys]\n")
+
+    assert load_global_config(config_file).paste_keys is None
+
+
+def test_load_global_config_keys_paste_omitted_is_none(tmp_path: Path) -> None:
+    config_file = write(tmp_path / "config.toml", "# nothing\n")
+
+    assert load_global_config(config_file).paste_keys is None
+
+
+def test_load_global_config_rejects_non_table_keys(tmp_path: Path) -> None:
+    config_file = write(tmp_path / "config.toml", "keys = 'oops'\n")
+
+    with pytest.raises(HopConfigError, match="'keys' must be a table"):
+        load_global_config(config_file)
+
+
+def test_load_global_config_rejects_unknown_keys_field(tmp_path: Path) -> None:
+    config_file = write(tmp_path / "config.toml", '[keys]\nopen = "ctrl+o"\n')
+
+    with pytest.raises(HopConfigError, match="'keys' table has unknown field 'open'"):
+        load_global_config(config_file)
+
+
+def test_load_global_config_rejects_non_string_keys_paste_element(tmp_path: Path) -> None:
+    config_file = write(tmp_path / "config.toml", "[keys]\npaste = [42]\n")
+
+    with pytest.raises(HopConfigError, match="'keys.paste' element at index 0 must be a non-empty string"):
+        load_global_config(config_file)
+
+
+def test_load_global_config_rejects_empty_keys_paste_element(tmp_path: Path) -> None:
+    config_file = write(tmp_path / "config.toml", '[keys]\npaste = ["ctrl+v", ""]\n')
+
+    with pytest.raises(HopConfigError, match="'keys.paste' element at index 1 must be a non-empty string"):
+        load_global_config(config_file)
+
+
+def test_load_global_config_rejects_wrong_type_keys_paste(tmp_path: Path) -> None:
+    config_file = write(tmp_path / "config.toml", "[keys]\npaste = 42\n")
+
+    with pytest.raises(HopConfigError, match="'keys.paste' must be a string or list of strings"):
+        load_global_config(config_file)
+
+
+def test_merge_configs_paste_keys_project_wins_wholesale() -> None:
+    project = HopConfig(paste_keys=("ctrl+y",))
+    global_ = HopConfig(paste_keys=("ctrl+v", "ctrl+shift+v"))
+
+    assert merge_configs(project, global_).paste_keys == ("ctrl+y",)
+
+
+def test_merge_configs_paste_keys_inherits_from_global() -> None:
+    assert merge_configs(HopConfig(), HopConfig(paste_keys=("ctrl+v",))).paste_keys == ("ctrl+v",)
+
+
+def test_merge_configs_empty_paste_keys_still_overrides_global() -> None:
+    project = HopConfig(paste_keys=())
+    global_ = HopConfig(paste_keys=("ctrl+v",))
+
+    assert merge_configs(project, global_).paste_keys == ()
+
+
+def test_load_global_config_parses_clipboard_allow_read(tmp_path: Path) -> None:
+    config_file = write(tmp_path / "config.toml", "[clipboard]\nallow_read = false\n")
+
+    assert load_global_config(config_file).clipboard_allow_read is False
+
+
+def test_load_global_config_clipboard_table_without_allow_read_is_none(tmp_path: Path) -> None:
+    config_file = write(tmp_path / "config.toml", "[clipboard]\n")
+
+    assert load_global_config(config_file).clipboard_allow_read is None
+
+
+def test_load_global_config_clipboard_allow_read_omitted_is_none(tmp_path: Path) -> None:
+    config_file = write(tmp_path / "config.toml", "# nothing\n")
+
+    assert load_global_config(config_file).clipboard_allow_read is None
+
+
+def test_load_global_config_rejects_non_table_clipboard(tmp_path: Path) -> None:
+    config_file = write(tmp_path / "config.toml", "clipboard = 'oops'\n")
+
+    with pytest.raises(HopConfigError, match="'clipboard' must be a table"):
+        load_global_config(config_file)
+
+
+def test_load_global_config_rejects_unknown_clipboard_field(tmp_path: Path) -> None:
+    config_file = write(tmp_path / "config.toml", "[clipboard]\nmax_size = 1\n")
+
+    with pytest.raises(HopConfigError, match="'clipboard' table has unknown field 'max_size'"):
+        load_global_config(config_file)
+
+
+def test_load_global_config_rejects_non_bool_clipboard_allow_read(tmp_path: Path) -> None:
+    config_file = write(tmp_path / "config.toml", '[clipboard]\nallow_read = "yes"\n')
+
+    with pytest.raises(HopConfigError, match="'clipboard.allow_read' must be a boolean"):
+        load_global_config(config_file)
+
+
+def test_merge_configs_clipboard_allow_read_project_wins() -> None:
+    merged = merge_configs(HopConfig(clipboard_allow_read=False), HopConfig(clipboard_allow_read=True))
+    assert merged.clipboard_allow_read is False
+
+
+def test_merge_configs_clipboard_allow_read_inherits_from_global() -> None:
+    assert merge_configs(HopConfig(), HopConfig(clipboard_allow_read=False)).clipboard_allow_read is False
+
+
 def test_load_global_config_rejects_unknown_top_level_key(tmp_path: Path) -> None:
     config_file = write(
         tmp_path / "config.toml",

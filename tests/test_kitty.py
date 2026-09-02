@@ -3,12 +3,14 @@ from typing import Mapping, Sequence
 
 import pytest
 
+from hop.config import HopConfig
 from hop.kitty import (
     KittyCommandError,
     KittyConnectionError,
     KittyRemoteControlAdapter,
     KittyTransport,
     KittyWindowState,
+    session_kitty_overrides,
     session_socket_address,
 )
 from hop.session import ProjectSession
@@ -252,6 +254,93 @@ def test_ensure_terminal_bootstraps_session_kitty_when_socket_is_not_listening()
         "--override",
         "allow_remote_control=yes",
     )
+
+
+def test_session_kitty_overrides_default_binds_both_keys_and_clipboard_read() -> None:
+    overrides = session_kitty_overrides(HopConfig())
+
+    assert [o for o in overrides if o.startswith("map ")] == [
+        f"map ctrl+v kitten {_paste_kitten_path()}",
+        f"map ctrl+shift+v kitten {_paste_kitten_path()}",
+    ]
+    assert overrides[-1] == "clipboard_control write-clipboard write-primary read-clipboard read-primary"
+
+
+def test_session_kitty_overrides_honors_custom_key_list() -> None:
+    overrides = session_kitty_overrides(HopConfig(paste_keys=("ctrl+y", "f2")))
+
+    assert [o for o in overrides if o.startswith("map ")] == [
+        f"map ctrl+y kitten {_paste_kitten_path()}",
+        f"map f2 kitten {_paste_kitten_path()}",
+    ]
+
+
+def test_session_kitty_overrides_empty_key_list_binds_nothing() -> None:
+    overrides = session_kitty_overrides(HopConfig(paste_keys=()))
+
+    assert not any(o.startswith("map ") for o in overrides)
+    assert overrides == ("clipboard_control write-clipboard write-primary read-clipboard read-primary",)
+
+
+def test_session_kitty_overrides_allow_read_false_drops_clipboard_control() -> None:
+    overrides = session_kitty_overrides(HopConfig(paste_keys=(), clipboard_allow_read=False))
+
+    assert overrides == ()
+
+
+def _paste_kitten_path() -> Path:
+    import hop
+
+    return Path(hop.__file__).parent / "kitten" / "paste" / "main.py"
+
+
+def test_bootstrap_injects_extra_overrides_after_allow_remote_control() -> None:
+    factory = StubKittyFactory(
+        [
+            KittyConnectionError("no such socket"),
+            KittyConnectionError("still not listening"),
+            {"ok": True, "data": []},
+            {"ok": True},
+        ]
+    )
+    launcher = StubLauncher()
+    adapter = KittyRemoteControlAdapter(
+        transport_factory=factory,
+        launcher=launcher,
+        extra_overrides_for=lambda _session: ("map ctrl+v kitten /x/main.py", "clipboard_control read-clipboard"),
+        sleep=lambda _: None,
+    )
+
+    adapter.ensure_terminal(build_session(), role="shell")
+
+    args, _env = launcher.calls[0]
+    # allow_remote_control comes first, then the injected overrides, each as its
+    # own --override <value> pair.
+    tail = args[args.index("allow_remote_control=yes") + 1 :]
+    assert list(tail) == [
+        "--override",
+        "map ctrl+v kitten /x/main.py",
+        "--override",
+        "clipboard_control read-clipboard",
+    ]
+
+
+def test_bootstrap_with_no_extra_overrides_matches_plain_argv() -> None:
+    factory = StubKittyFactory(
+        [
+            KittyConnectionError("no such socket"),
+            KittyConnectionError("still not listening"),
+            {"ok": True, "data": []},
+            {"ok": True},
+        ]
+    )
+    launcher = StubLauncher()
+    adapter = KittyRemoteControlAdapter(transport_factory=factory, launcher=launcher, sleep=lambda _: None)
+
+    adapter.ensure_terminal(build_session(), role="shell")
+
+    args, _env = launcher.calls[0]
+    assert args[-2:] == ("--override", "allow_remote_control=yes")
 
 
 def test_bootstrap_runs_backend_prepare_by_default() -> None:

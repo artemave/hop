@@ -1221,6 +1221,20 @@ def _make_session(session_root: Path) -> ProjectSession:
     )
 
 
+def test_registry_session_kitty_overrides_for_entry_uses_merged_config(tmp_path: Path) -> None:
+    from hop.app import SessionBackendRegistry
+
+    registry = SessionBackendRegistry(
+        global_config_loader=lambda: HopConfig(paste_keys=("ctrl+y",), clipboard_allow_read=False),
+        sessions_loader=lambda: {},
+    )
+
+    overrides = registry.session_kitty_overrides_for_entry(_make_session(tmp_path))
+
+    assert any(o.startswith("map ctrl+y kitten ") and o.endswith("hop/kitten/paste/main.py") for o in overrides)
+    assert not any(o.startswith("clipboard_control") for o in overrides)
+
+
 def test_session_base_registry_falls_back_to_host_when_no_config(tmp_path: Path) -> None:
     from hop.app import SessionBackendRegistry
 

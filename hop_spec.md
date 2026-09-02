@@ -575,6 +575,15 @@ Kitty must be used to:
 
 This control path should use Kitty-native remote control surfaces such as the remote control protocol, Python APIs, or kittens rather than shelling out to `kitty @`.
 
+### Clipboard paste
+
+Each session's kitty binds `[keys].paste` (a kitty key spec or list; default `ctrl+v` and `ctrl+shift+v`, an empty value disables) to a bundled kitten, injected as a `--override map <key> kitten <path>` at bootstrap — no `kitty.conf` entry required. The kitten reads the **host** clipboard with `wl-paste` (hop runs in the host Sway session, so no display forwarding or socket mount is involved) and:
+
+- **image** — writes the bytes into the focused window's filesystem namespace via `backend.write_file` (a local write for a host session; a `base64` payload through `<noninteractive_prefix> sh` for a container/remote one) at `/tmp/hop-paste-<ns>.png`, then pastes that path with `send-text --bracketed-paste=auto`. Claude Code / Codex attach the file; a shell or editor receives the path.
+- **text, empty, or no focused hop session** — falls through to kitty's native `paste_from_clipboard`.
+
+`[clipboard].allow_read` (bool, default `true`) additionally injects `--override clipboard_control write-clipboard write-primary read-clipboard read-primary` so an in-container editor's OSC 52 paste (`"+p`) works without the per-paste permission prompt; `false` omits it and kitty's default prompt stands.
+
 ---
 
 ## Command routing (Neovim → terminal)

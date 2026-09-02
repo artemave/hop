@@ -142,6 +142,14 @@ class HopConfig:
     windows: tuple[WindowConfig, ...] = ()
     workspace_layout: str | None = None
     debug_log: bool | str | None = None
+    # ``[keys].paste`` — kitty key specs hop binds to the clipboard-paste
+    # kitten at session bootstrap. ``None`` ⇒ unset (consumer applies its
+    # default); an empty tuple ⇒ explicitly no binding.
+    paste_keys: tuple[str, ...] | None = None
+    # ``[clipboard].allow_read`` — whether hop injects a ``clipboard_control``
+    # override that permits OSC 52 clipboard reads without a per-paste prompt.
+    # ``None`` ⇒ unset (consumer defaults to enabled).
+    clipboard_allow_read: bool | None = None
 
 
 # Hop's built-in ``host`` backend — the implicit auto-detect fallback. Lives
@@ -196,6 +204,12 @@ def merge_configs(project: HopConfig, global_: HopConfig) -> HopConfig:
             project.workspace_layout if project.workspace_layout is not None else global_with_builtin.workspace_layout
         ),
         debug_log=(project.debug_log if project.debug_log is not None else global_with_builtin.debug_log),
+        paste_keys=(project.paste_keys if project.paste_keys is not None else global_with_builtin.paste_keys),
+        clipboard_allow_read=(
+            project.clipboard_allow_read
+            if project.clipboard_allow_read is not None
+            else global_with_builtin.clipboard_allow_read
+        ),
     )
 
 
@@ -226,6 +240,8 @@ def _layer_builtin_backends(global_: HopConfig) -> HopConfig:
         windows=global_.windows,
         workspace_layout=global_.workspace_layout,
         debug_log=global_.debug_log,
+        paste_keys=global_.paste_keys,
+        clipboard_allow_read=global_.clipboard_allow_read,
     )
 
 
@@ -356,7 +372,9 @@ _EDITOR_ONLY_WINDOW_FIELDS = ("open_keys", "open_keys_with_line")
 _LEGACY_FLAT_BACKEND_FIELDS = ("shell", "editor")
 _LEGACY_BACKEND_WINDOWS_FIELD = "windows"
 _LEGACY_WORKSPACE_FIELD = "workspace"
-_TOP_LEVEL_KEYS = ("backends", "layouts", "windows", "workspace_layout", "debug_log")
+_TOP_LEVEL_KEYS = ("backends", "layouts", "windows", "workspace_layout", "debug_log", "keys", "clipboard")
+_KEYS_FIELDS = ("paste",)
+_CLIPBOARD_FIELDS = ("allow_read",)
 
 
 def _load_config_file(path: Path) -> HopConfig:
@@ -391,13 +409,74 @@ def _parse_top_level(data: dict[str, Any], *, source: Path) -> HopConfig:
     windows = _parse_top_level_windows(data.get("windows"), source=source)
     workspace_layout = _parse_workspace_layout(data.get("workspace_layout"), source=source)
     debug_log = _parse_debug_log(data.get("debug_log"), source=source)
+    paste_keys = _parse_paste_keys(data.get("keys"), source=source)
+    clipboard_allow_read = _parse_clipboard_allow_read(data.get("clipboard"), source=source)
     return HopConfig(
         backends=backends,
         layouts=layouts,
         windows=windows,
         workspace_layout=workspace_layout,
         debug_log=debug_log,
+        paste_keys=paste_keys,
+        clipboard_allow_read=clipboard_allow_read,
     )
+
+
+def _parse_paste_keys(raw: object, *, source: Path) -> tuple[str, ...] | None:
+    """Parse ``[keys].paste`` — a kitty key spec or a list of them.
+
+    ``None`` when the ``[keys]`` table or its ``paste`` field is absent. An
+    empty string or empty list normalizes to an empty tuple, meaning "bind
+    nothing". A bare string becomes a one-element tuple.
+    """
+
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        msg = f"{source}: top-level 'keys' must be a table, got {type(raw).__name__}"
+        raise HopConfigError(msg)
+    table = cast(dict[str, Any], raw)
+    unknown = sorted(set(table) - set(_KEYS_FIELDS))
+    if unknown:
+        msg = f"{source}: 'keys' table has unknown field {unknown[0]!r}"
+        raise HopConfigError(msg)
+    if "paste" not in table:
+        return None
+    value = table["paste"]
+    if isinstance(value, str):
+        return (value,) if value else ()
+    if isinstance(value, list):
+        specs: list[str] = []
+        for index, element in enumerate(cast(list[object], value)):
+            if not isinstance(element, str) or not element:
+                msg = f"{source}: 'keys.paste' element at index {index} must be a non-empty string"
+                raise HopConfigError(msg)
+            specs.append(element)
+        return tuple(specs)
+    msg = f"{source}: 'keys.paste' must be a string or list of strings, got {type(value).__name__}"
+    raise HopConfigError(msg)
+
+
+def _parse_clipboard_allow_read(raw: object, *, source: Path) -> bool | None:
+    """Parse ``[clipboard].allow_read`` — a boolean, or ``None`` when absent."""
+
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        msg = f"{source}: top-level 'clipboard' must be a table, got {type(raw).__name__}"
+        raise HopConfigError(msg)
+    table = cast(dict[str, Any], raw)
+    unknown = sorted(set(table) - set(_CLIPBOARD_FIELDS))
+    if unknown:
+        msg = f"{source}: 'clipboard' table has unknown field {unknown[0]!r}"
+        raise HopConfigError(msg)
+    if "allow_read" not in table:
+        return None
+    value = table["allow_read"]
+    if not isinstance(value, bool):
+        msg = f"{source}: 'clipboard.allow_read' must be a boolean, got {type(value).__name__}"
+        raise HopConfigError(msg)
+    return value
 
 
 def _parse_debug_log(raw: object, *, source: Path) -> bool | str | None:

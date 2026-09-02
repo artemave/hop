@@ -19,6 +19,7 @@ from typing import Callable, Iterable
 
 from hop.backends import SessionBackend
 from hop.kitty import get_focused_window_cwd
+from hop.session import ProjectSession
 from hop.state import SessionState, load_sessions, session_from_state
 from hop.sway import SwayIpcAdapter
 from hop.targets import (
@@ -62,27 +63,17 @@ def paths_exist(
     if not candidate_list:
         return set()
 
-    workspace_fn = focused_workspace or _default_focused_workspace
-    sessions_fn = sessions_loader or load_sessions
     cwd_fn = cwd_loader or get_focused_window_cwd
-    backend_fn = backend_loader or _default_backend_loader
 
-    try:
-        workspace_name = workspace_fn()
-    except Exception:
+    resolved = _resolve_focused_session(
+        workspace_fn=focused_workspace or _default_focused_workspace,
+        sessions_fn=sessions_loader or load_sessions,
+        backend_fn=backend_loader or _default_backend_loader,
+    )
+    if resolved is None:
         return _local_fallback(candidate_list, base_cwd=Path.cwd())
-
-    session_name = _session_name_from_workspace(workspace_name)
-    if session_name is None:
-        return _local_fallback(candidate_list, base_cwd=Path.cwd())
-
-    state = sessions_fn().get(session_name)
-    if state is None:
-        return _local_fallback(candidate_list, base_cwd=Path.cwd())
-
-    backend = backend_fn(state)
-    if backend is None:
-        return _local_fallback(candidate_list, base_cwd=Path.cwd())
+    state, session, backend = resolved
+    session_name = session.session_name
 
     # Pick the base cwd against which relative candidates resolve. OSC 7
     # from the in-shell shell is the ground truth (cd-aware). If the shell
@@ -99,8 +90,6 @@ def paths_exist(
         base_cwd = Path(state.backend.workspace_path)
     else:
         base_cwd = state.session_root
-
-    session = session_from_state(state)
 
     # Two checks happen here. Plain file refs flow through ``backend.paths_exist``
     # in one batched call. Rails refs run through ``resolve_target``, which
@@ -127,6 +116,59 @@ def paths_exist(
             if path in existing_paths:
                 verified.add(candidate)
     return verified
+
+
+def _resolve_focused_session(
+    *,
+    workspace_fn: Callable[[], str],
+    sessions_fn: Callable[[], dict[str, SessionState]],
+    backend_fn: Callable[[SessionState], SessionBackend | None],
+) -> tuple[SessionState, ProjectSession, SessionBackend] | None:
+    """Resolve the focused hop session's state, session, and backend.
+
+    ``None`` when no hop session is focused, its state file is missing, or its
+    backend can't be reconstructed — the cases callers treat as "not in a
+    usable hop session".
+    """
+
+    try:
+        workspace_name = workspace_fn()
+    except Exception:
+        return None
+    session_name = _session_name_from_workspace(workspace_name)
+    if session_name is None:
+        return None
+    state = sessions_fn().get(session_name)
+    if state is None:
+        return None
+    backend = backend_fn(state)
+    if backend is None:
+        return None
+    return state, session_from_state(state), backend
+
+
+def focused_session_and_backend(
+    *,
+    focused_workspace: Callable[[], str] | None = None,
+    sessions_loader: Callable[[], dict[str, SessionState]] | None = None,
+    backend_loader: Callable[[SessionState], SessionBackend | None] | None = None,
+) -> tuple[ProjectSession, SessionBackend] | None:
+    """The focused hop session and its backend, or ``None`` outside one.
+
+    Shares the resolution ``paths_exist`` uses; the paste kitten calls this to
+    learn which backend's filesystem to write a clipboard image into. The
+    ``*_loader`` kwargs are test injection points.
+    """
+
+    resolved = _resolve_focused_session(
+        workspace_fn=focused_workspace or _default_focused_workspace,
+        sessions_fn=sessions_loader or load_sessions,
+        backend_fn=backend_loader or _default_backend_loader,
+    )
+    if resolved is None:
+        return None
+    _state, session, backend = resolved
+    return session, backend
 
 
 def _default_focused_workspace() -> str:
@@ -164,4 +206,4 @@ def _local_fallback(candidates: list[str], *, base_cwd: Path) -> set[str]:
     return surviving
 
 
-__all__ = ["paths_exist"]
+__all__ = ["focused_session_and_backend", "paths_exist"]

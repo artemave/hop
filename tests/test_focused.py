@@ -81,6 +81,9 @@ class _FakeBackend:
             raise BackendFileNotFoundError(f"fake: {path} not found")
         return content
 
+    def write_file(self, session: ProjectSession, path: Path, data: bytes) -> None:
+        del session, path, data
+
     def is_binary_file(self, session: ProjectSession, path: Path) -> bool:
         del session, path
         return False
@@ -433,3 +436,51 @@ def test_paths_exist_round_trips_through_command_backend_record(tmp_path: Path) 
     )
 
     assert result == {"foo.rb"}
+
+
+# --- focused_session_and_backend --------------------------------------------
+
+
+def test_focused_session_and_backend_returns_session_and_backend(tmp_path: Path) -> None:
+    from hop.focused import focused_session_and_backend
+
+    fake_backend = _FakeBackend()
+    session_root = (tmp_path / "demo").resolve()
+
+    result = focused_session_and_backend(
+        focused_workspace=lambda: "p:demo",
+        sessions_loader=lambda: {"demo": _state("demo", session_root)},
+        backend_loader=lambda _state: fake_backend,
+    )
+
+    assert result is not None
+    session, backend = result
+    assert session.session_name == "demo"
+    assert session.session_root == session_root
+    assert backend is fake_backend
+
+
+def test_focused_session_and_backend_none_outside_hop_session() -> None:
+    from hop.focused import focused_session_and_backend
+
+    assert (
+        focused_session_and_backend(
+            focused_workspace=lambda: "scratch",
+            sessions_loader=lambda: {},
+            backend_loader=lambda _state: None,
+        )
+        is None
+    )
+
+
+def test_focused_session_and_backend_none_when_backend_unresolvable(tmp_path: Path) -> None:
+    from hop.focused import focused_session_and_backend
+
+    assert (
+        focused_session_and_backend(
+            focused_workspace=lambda: "p:demo",
+            sessions_loader=lambda: {"demo": _state("demo", tmp_path)},
+            backend_loader=lambda _state: None,
+        )
+        is None
+    )

@@ -119,6 +119,8 @@ class SessionBackend(Protocol):
 
     def read_file(self, session: ProjectSession, path: Path) -> str: ...
 
+    def write_file(self, session: ProjectSession, path: Path, data: bytes) -> None: ...
+
     def is_binary_file(self, session: ProjectSession, path: Path) -> bool: ...
 
     def materialize_on_host(self, session: ProjectSession, path: Path) -> Path: ...
@@ -787,6 +789,31 @@ class CommandBackend:
             msg = f"backend {self.name!r} read_file failed for {path}: {stderr}"
             raise SessionBackendError(msg)
         return result.stdout
+
+    def write_file(self, session: ProjectSession, path: Path, data: bytes) -> None:
+        """Write ``data`` into this backend's filesystem at ``path``.
+
+        The inverse of ``materialize_on_host``: the bytes ride a ``base64``
+        payload embedded in the script piped to a bare ``sh`` (over stdin, so
+        it survives argv-flattening prefixes like ``ssh host …`` — see
+        ``read_file``). stdin already carries the script, so the payload is a
+        heredoc literal rather than a second pipe. Same code path for the host
+        backend (empty prefix, ``local_transport``) as for a container or
+        remote one.
+        """
+
+        substituted_prefix = substitute(self.noninteractive_prefix, session=session, host=self._host)
+        quoted = shlex.quote(str(path))
+        encoded = base64.b64encode(data).decode("ascii")
+        script = f"mkdir -p \"$(dirname {quoted})\" 2>/dev/null\nbase64 -d > {quoted} <<'HOP_EOF'\n{encoded}\nHOP_EOF\n"
+        composed = f"{substituted_prefix} sh".lstrip()
+        argv = self.noninteractive_transport(composed)
+        result = self.runner(argv, runner_cwd(self.host, session.session_root), stdin=script)
+        debug.log_command(argv, session.session_root, result)
+        if result.returncode != 0:
+            stderr = (result.stderr or result.stdout or "").strip()
+            msg = f"backend {self.name!r} write_file failed for {path}: {stderr}"
+            raise SessionBackendError(msg)
 
     def is_binary_file(self, session: ProjectSession, path: Path) -> bool:
         """Classify ``path`` as binary (a host viewer) vs text (the editor).

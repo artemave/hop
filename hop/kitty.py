@@ -10,13 +10,41 @@ from pathlib import Path
 from tempfile import gettempdir
 from typing import Any, Callable, Mapping, Protocol, Sequence, cast
 
+import hop
 from hop import debug
 from hop.backends import CommandBackend, SessionBackend
-from hop.config import SHELL_ROLE
+from hop.config import SHELL_ROLE, HopConfig
 from hop.errors import HopError
 from hop.layouts import WindowSpec, find_window
 from hop.session import ProjectSession
 from hop.sway import SwayWindow
+
+# Absolute path to the bundled clipboard-paste kitten, baked into the
+# ``map <key> kitten <path>`` overrides hop injects at session bootstrap.
+_PASTE_KITTEN_PATH = Path(hop.__file__).parent / "kitten" / "paste" / "main.py"
+# kitty ``clipboard_control`` value that permits OSC 52 reads without a
+# per-paste permission prompt — injected when ``[clipboard].allow_read``.
+_CLIPBOARD_CONTROL_ALLOW_READ = "clipboard_control write-clipboard write-primary read-clipboard read-primary"
+# Keys hop binds to the paste kitten when ``[keys].paste`` is unset.
+_DEFAULT_PASTE_KEYS = ("ctrl+v", "ctrl+shift+v")
+
+
+def session_kitty_overrides(config: HopConfig) -> tuple[str, ...]:
+    """``kitty --override`` values hop injects into a session's kitty.
+
+    One ``map <key> kitten <paste-kitten>`` per ``[keys].paste`` entry
+    (default ctrl+v / ctrl+shift+v; an explicit empty list binds nothing),
+    plus a ``clipboard_control`` read override unless ``[clipboard].allow_read``
+    is ``false``.
+    """
+
+    overrides: list[str] = []
+    paste_keys = config.paste_keys if config.paste_keys is not None else _DEFAULT_PASTE_KEYS
+    overrides.extend(f"map {key} kitten {_PASTE_KITTEN_PATH}" for key in paste_keys)
+    if config.clipboard_allow_read is not False:
+        overrides.append(_CLIPBOARD_CONTROL_ALLOW_READ)
+    return tuple(overrides)
+
 
 # `shell-2`, `shell-3`, ... — ad-hoc shells spawned by `hop` from inside an
 # existing session. These are shells, not user commands, so they don't get
@@ -196,6 +224,7 @@ class KittyRemoteControlAdapter:
         launcher: KittyLauncher | None = None,
         on_session_bootstrap: SessionBootstrapHook | None = None,
         sway: KittyAdapterSwayAdapter | None = None,
+        extra_overrides_for: Callable[[ProjectSession], Sequence[str]] | None = None,
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -215,6 +244,12 @@ class KittyRemoteControlAdapter:
         # ``build_kitten_services``) always pass a real ``SwayIpcAdapter``.
         self._sway: KittyAdapterSwayAdapter | None = sway
         self._on_session_bootstrap: SessionBootstrapHook = on_session_bootstrap or (lambda _session, _backend: None)
+        # Extra ``--override`` values (paste keybindings, clipboard_control)
+        # appended to the bootstrap ``kitty`` argv. Default: none, so an
+        # adapter built without config plumbing bootstraps a plain kitty.
+        self._extra_overrides_for: Callable[[ProjectSession], Sequence[str]] = extra_overrides_for or (
+            lambda _session: ()
+        )
         self._sleep = sleep
         self._clock = clock
 
@@ -436,6 +471,8 @@ class KittyRemoteControlAdapter:
             "--override",
             "allow_remote_control=yes",
         ]
+        for override in self._extra_overrides_for(session):
+            kitty_args.extend(("--override", override))
         # Bootstrap always launches the shell role: a freshly created kitty
         # process needs at least one window. Resolve the shell command from
         # the active layout/windows config (built-in default is "" → kitty's

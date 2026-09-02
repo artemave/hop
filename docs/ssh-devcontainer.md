@@ -143,6 +143,15 @@ fine to lose: a remote session can't use the remote's compositor anyway (your
 kitty is on the laptop). See **Clipboard** for how the editor clipboard actually
 works.
 
+If your overlay only mounts `${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY}` for
+clipboard integration, you can drop that mount (and the stub) entirely: image
+paste is now <kbd>Ctrl-V</kbd> → hop's paste kitten, which reads the clipboard
+on the *host* and pushes the file into the container over the backend command
+channel — no compositor socket in the container. Narrow the runtime-dir mount
+to just `${XDG_RUNTIME_DIR}/hop/` (it only needs to carry the bridge socket).
+Also make sure the container doesn't inherit a stale `DISPLAY` / `WAYLAND_DISPLAY`
+— an unreachable value hangs tools that probe it.
+
 ### 6. The bridge over ssh: `ssh -O forward`, not `-R`
 
 To let in-container editor plugins call back to host `hopd`, reverse-forward
@@ -196,15 +205,17 @@ end
 
 Copy works out of the box. **Paste** issues an OSC 52 *read*, which kitty gates
 behind `clipboard_control`; the default `read-clipboard-ask` prompts on every
-paste. Add `read-clipboard` to the host `kitty.conf` to silence it:
+paste. hop now injects `clipboard_control … read-clipboard read-primary` into
+the session kitty itself (`[clipboard].allow_read`, default `true`), so no
+`kitty.conf` change is needed. Trade-off: any program in the session's kitty can
+then read the clipboard via OSC 52; set `allow_read = false` to keep the prompt.
+Don't reach for `cache_enabled` on the provider to dodge the read — it makes
+paste return nvim's last *copy* instead of the real system clipboard.
 
-```conf
-clipboard_control write-clipboard write-primary read-clipboard read-primary
-```
-
-Trade-off: any program in any kitty window can then read the clipboard via
-OSC 52. Don't reach for `cache_enabled` on the provider to dodge the read — it
-makes paste return nvim's last *copy* instead of the real system clipboard.
+This section is about the editor's `+` register. **Image paste** into Claude Code
+/ Codex is separate: <kbd>Ctrl-V</kbd> runs hop's paste kitten, which reads the
+clipboard on the host and writes the image into the container — no `/dev/tty`, no
+`kitten clipboard`, no compositor socket.
 
 ### 9. Per-window environment
 

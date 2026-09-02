@@ -110,15 +110,17 @@ Choosing a `.png` in the open-selection kitten opens the file with your host's `
 
 ## Configuration
 
-A hop config has three named sections plus one scalar setting, all optional:
+A hop config has several named sections plus a few scalar settings, all optional:
 
 - `[backends.<name>]` - backend lifecycle (`prepare` / `teardown` / translate helpers) plus two prefixes: `interactive_prefix` for interactive launches and `noninteractive_prefix` for hop's piped queries (file-existence checks).
 - `[layouts.<name>]` - a named layout with one required `activate` shell-snippet probe and a list of windows that come up together when the probe matches.
 - `[windows.<role>]` - top-level windows (always active unless `activate = "false"`).
+- `[keys]` - session-kitty keybindings hop injects at bootstrap. `paste` (string or list of kitty key specs, default `["ctrl+v", "ctrl+shift+v"]`) binds the [clipboard-image paste kitten](#special-windows); an empty string or list disables it.
+- `[clipboard]` - `allow_read` (bool, default `true`) controls whether hop injects a `clipboard_control` override permitting OSC 52 clipboard reads without a per-paste prompt.
 - `workspace_layout = "<mode>"` - sway workspace layout applied at first session entry. One of `splith`, `splitv`, `stacking`, `tabbed`.
 - `debug_log = true` - opt-in diagnostic log; see [Troubleshooting](#troubleshooting).
 
-Configs live in `~/.config/hop/config.toml` or a project's `.hop.toml`.
+<a id="global-config"></a>Configs live in `~/.config/hop/config.toml` or a project's `.hop.toml`.
 
 ## Session backends
 
@@ -247,7 +249,11 @@ A session has exactly one editor window, shared by everything that opens a file 
 - **It's the target for every file-shaped dispatch** - `hop open <file>[:<line>]`, a Rails `Controller#action` ref, and any file token picked by the [Kitty kitten](#open-visible-output-targets-from-kitty). Binary files are the exception: they open on the host, see [Binary files open on the host](#binary-files-open-on-the-host).
 - **It runs on the backend**, inside the container or on the remote host - which is what makes the clipboard need help.
 
-**System clipboard on non-host backends.** With nvim on a remote host or inside a container there's no local display for `wl-copy`/`xclip` to reach, so the system clipboard has to go through OSC 52, which Kitty relays back to your real clipboard over the terminal. Point nvim's clipboard provider at OSC 52 whenever no display is present:
+**Pasting a clipboard image.** <kbd>Ctrl-V</kbd> (and <kbd>Ctrl-Shift-V</kbd>) in any hop session window runs a bundled kitten that reads the host clipboard, writes any image it finds into the focused window's filesystem (a local temp file for a host session, pushed over the backend's command channel for a container/remote one), and pastes the path. Claude Code and Codex attach the file it points at; a plain shell or editor just receives the path. Text on the clipboard falls through to kitty's native paste; an empty clipboard does nothing.
+
+The host needs `wl-clipboard` installed (`wl-paste`); a missing tool surfaces an error rather than failing silently. Change or disable the keys with [`[keys].paste`](#global-config). No `kitty.conf` changes are needed — hop injects the keybindings (and `allow_remote_control` / the listen socket) into every session kitty at bootstrap.
+
+**System clipboard for the editor on non-host backends.** With nvim on a remote host or inside a container there's no local display for `wl-copy` to reach, so its `+` register clipboard goes through OSC 52, which Kitty relays back to your real clipboard over the terminal. Point nvim's clipboard provider at OSC 52 whenever no display is present:
 
 ```vim
 if empty($WAYLAND_DISPLAY) && empty($DISPLAY)
@@ -255,15 +261,9 @@ if empty($WAYLAND_DISPLAY) && empty($DISPLAY)
 endif
 ```
 
-Naming the provider explicitly is required when `'clipboard'` is set to `unnamed`/`unnamedplus` - that otherwise suppresses nvim's automatic OSC 52 detection, leaving the clipboard with no provider at all.
+Naming the provider explicitly is required when `'clipboard'` is set to `unnamed`/`unnamedplus` - that otherwise suppresses nvim's automatic OSC 52 detection, leaving the clipboard with no provider at all. Also clear any stale `DISPLAY` / `WAYLAND_DISPLAY` the container inherits — a non-empty but unreachable value makes this guard skip `osc52` and fall back to a tool that hangs.
 
-Copy works with that alone. **Paste** (`"+p`) issues an OSC 52 *read*, which Kitty gates behind `clipboard_control` - the default `read-clipboard-ask` prompts on every paste. Add `read-clipboard` to your host `kitty.conf` to silence it:
-
-```conf
-clipboard_control write-clipboard write-primary read-clipboard read-primary
-```
-
-Trade-off: any program in any Kitty window can then read the system clipboard.
+Copy works with that alone. **Paste** (`"+p`) issues an OSC 52 *read*, which Kitty gates behind `clipboard_control` - the default `read-clipboard-ask` prompts on every paste. hop injects `clipboard_control … read-clipboard read-primary` into the session kitty for you (controlled by [`[clipboard].allow_read`](#global-config), default `true`), so `"+p` just works. The trade-off is the one Kitty documents: any program in the session's kitty can then read the system clipboard over OSC 52. Set `allow_read = false` to opt out and take the per-paste prompt back.
 
 #### Keystroke templates
 
