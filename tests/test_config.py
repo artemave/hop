@@ -533,6 +533,72 @@ def test_merge_configs_empty_paste_keys_still_overrides_global() -> None:
     assert merge_configs(project, global_).paste_keys == ()
 
 
+def test_load_global_config_parses_keys_open_selection_list(tmp_path: Path) -> None:
+    config_file = write(tmp_path / "config.toml", '[keys]\nopen_selection = ["ctrl+shift+o", "f4"]\n')
+
+    assert load_global_config(config_file).open_selection_keys == ("ctrl+shift+o", "f4")
+
+
+def test_load_global_config_normalizes_keys_open_selection_bare_string(tmp_path: Path) -> None:
+    config_file = write(tmp_path / "config.toml", '[keys]\nopen_selection = "ctrl+shift+p"\n')
+
+    assert load_global_config(config_file).open_selection_keys == ("ctrl+shift+p",)
+
+
+def test_load_global_config_keys_open_selection_empty_string_disables(tmp_path: Path) -> None:
+    config_file = write(tmp_path / "config.toml", '[keys]\nopen_selection = ""\n')
+
+    assert load_global_config(config_file).open_selection_keys == ()
+
+
+def test_load_global_config_keys_table_without_open_selection_is_none(tmp_path: Path) -> None:
+    config_file = write(tmp_path / "config.toml", '[keys]\npaste = "ctrl+v"\n')
+
+    assert load_global_config(config_file).open_selection_keys is None
+
+
+def test_load_global_config_keys_paste_and_open_selection_together(tmp_path: Path) -> None:
+    config_file = write(
+        tmp_path / "config.toml",
+        '[keys]\npaste = ["ctrl+v"]\nopen_selection = "ctrl+shift+o"\n',
+    )
+    cfg = load_global_config(config_file)
+
+    assert cfg.paste_keys == ("ctrl+v",)
+    assert cfg.open_selection_keys == ("ctrl+shift+o",)
+
+
+def test_load_global_config_rejects_empty_keys_open_selection_element(tmp_path: Path) -> None:
+    config_file = write(tmp_path / "config.toml", '[keys]\nopen_selection = ["ctrl+shift+o", ""]\n')
+
+    with pytest.raises(HopConfigError, match="'keys.open_selection' element at index 1 must be a non-empty string"):
+        load_global_config(config_file)
+
+
+def test_load_global_config_rejects_wrong_type_keys_open_selection(tmp_path: Path) -> None:
+    config_file = write(tmp_path / "config.toml", "[keys]\nopen_selection = 7\n")
+
+    with pytest.raises(HopConfigError, match="'keys.open_selection' must be a string or list of strings"):
+        load_global_config(config_file)
+
+
+def test_merge_configs_open_selection_keys_project_wins_wholesale() -> None:
+    project = HopConfig(open_selection_keys=("f4",))
+    global_ = HopConfig(open_selection_keys=("ctrl+shift+o",))
+
+    assert merge_configs(project, global_).open_selection_keys == ("f4",)
+
+
+def test_merge_configs_open_selection_keys_inherits_from_global() -> None:
+    merged = merge_configs(HopConfig(), HopConfig(open_selection_keys=("ctrl+shift+o",)))
+    assert merged.open_selection_keys == ("ctrl+shift+o",)
+
+
+def test_merge_configs_empty_open_selection_keys_still_overrides_global() -> None:
+    merged = merge_configs(HopConfig(open_selection_keys=()), HopConfig(open_selection_keys=("ctrl+shift+o",)))
+    assert merged.open_selection_keys == ()
+
+
 def test_load_global_config_parses_clipboard_allow_read(tmp_path: Path) -> None:
     config_file = write(tmp_path / "config.toml", "[clipboard]\nallow_read = false\n")
 

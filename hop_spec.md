@@ -560,7 +560,8 @@ Kitty is used as the terminal backend.
 ### Selection (hints)
 
 - interactive selection must work over **visible terminal output**
-- selection is implemented through Kitty's `hints` UI with custom processing in `kittens/open_selection/main.py`
+- selection is implemented through Kitty's `hints` UI with custom processing in `hop/kitten/hints/main.py`
+- the keybinding is injected at session bootstrap from `[keys].open_selection` (a kitty key spec or list; default `ctrl+shift+o`, an empty value disables) as `--override map <key> kitten hints --customize-processing <path>` — no `kitty.conf` entry required
 - selection should allow choosing file paths, URLs, and other matches
 - this replaces `tmux_super_fingers`
 

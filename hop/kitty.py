@@ -19,28 +19,40 @@ from hop.layouts import WindowSpec, find_window
 from hop.session import ProjectSession
 from hop.sway import SwayWindow
 
-# Absolute path to the bundled clipboard-paste kitten, baked into the
-# ``map <key> kitten <path>`` overrides hop injects at session bootstrap.
+# Absolute paths to the bundled kittens, baked into the ``map <key> kitten …``
+# overrides hop injects at session bootstrap. Same values ``hop path`` prints.
 _PASTE_KITTEN_PATH = Path(hop.__file__).parent / "kitten" / "paste" / "main.py"
+_HINTS_KITTEN_PATH = Path(hop.__file__).parent / "kitten" / "hints" / "main.py"
 # kitty ``clipboard_control`` value that permits OSC 52 reads without a
 # per-paste permission prompt — injected when ``[clipboard].allow_read``.
 _CLIPBOARD_CONTROL_ALLOW_READ = "clipboard_control write-clipboard write-primary read-clipboard read-primary"
-# Keys hop binds to the paste kitten when ``[keys].paste`` is unset.
+# Keys hop binds when the corresponding ``[keys]`` field is unset.
 _DEFAULT_PASTE_KEYS = ("ctrl+v", "ctrl+shift+v")
+_DEFAULT_OPEN_SELECTION_KEYS = ("ctrl+shift+o",)
 
 
 def session_kitty_overrides(config: HopConfig) -> tuple[str, ...]:
     """``kitty --override`` values hop injects into a session's kitty.
 
-    One ``map <key> kitten <paste-kitten>`` per ``[keys].paste`` entry
-    (default ctrl+v / ctrl+shift+v; an explicit empty list binds nothing),
-    plus a ``clipboard_control`` read override unless ``[clipboard].allow_read``
-    is ``false``.
+    - one ``map <key> kitten <paste-kitten>`` per ``[keys].paste`` entry
+      (default ctrl+v / ctrl+shift+v);
+    - one ``map <key> kitten hints --customize-processing <hints-kitten>`` per
+      ``[keys].open_selection`` entry (default ctrl+shift+o);
+    - a ``clipboard_control`` read override unless ``[clipboard].allow_read``
+      is ``false``.
+
+    An explicit empty list for either ``[keys]`` field binds nothing.
     """
 
     overrides: list[str] = []
     paste_keys = config.paste_keys if config.paste_keys is not None else _DEFAULT_PASTE_KEYS
     overrides.extend(f"map {key} kitten {_PASTE_KITTEN_PATH}" for key in paste_keys)
+    open_selection_keys = (
+        config.open_selection_keys if config.open_selection_keys is not None else _DEFAULT_OPEN_SELECTION_KEYS
+    )
+    overrides.extend(
+        f"map {key} kitten hints --customize-processing {_HINTS_KITTEN_PATH}" for key in open_selection_keys
+    )
     if config.clipboard_allow_read is not False:
         overrides.append(_CLIPBOARD_CONTROL_ALLOW_READ)
     return tuple(overrides)

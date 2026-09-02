@@ -256,34 +256,44 @@ def test_ensure_terminal_bootstraps_session_kitty_when_socket_is_not_listening()
     )
 
 
-def test_session_kitty_overrides_default_binds_both_keys_and_clipboard_read() -> None:
+def test_session_kitty_overrides_default_binds_all_keys_and_clipboard_read() -> None:
     overrides = session_kitty_overrides(HopConfig())
 
     assert [o for o in overrides if o.startswith("map ")] == [
         f"map ctrl+v kitten {_paste_kitten_path()}",
         f"map ctrl+shift+v kitten {_paste_kitten_path()}",
+        f"map ctrl+shift+o kitten hints --customize-processing {_hints_kitten_path()}",
     ]
     assert overrides[-1] == "clipboard_control write-clipboard write-primary read-clipboard read-primary"
 
 
-def test_session_kitty_overrides_honors_custom_key_list() -> None:
+def test_session_kitty_overrides_honors_custom_paste_key_list() -> None:
     overrides = session_kitty_overrides(HopConfig(paste_keys=("ctrl+y", "f2")))
 
-    assert [o for o in overrides if o.startswith("map ")] == [
+    assert [o for o in overrides if "kitten hints" not in o and o.startswith("map ")] == [
         f"map ctrl+y kitten {_paste_kitten_path()}",
         f"map f2 kitten {_paste_kitten_path()}",
     ]
 
 
-def test_session_kitty_overrides_empty_key_list_binds_nothing() -> None:
-    overrides = session_kitty_overrides(HopConfig(paste_keys=()))
+def test_session_kitty_overrides_honors_custom_open_selection_key_list() -> None:
+    overrides = session_kitty_overrides(HopConfig(open_selection_keys=("ctrl+shift+p", "f3")))
+
+    assert [o for o in overrides if "kitten hints" in o] == [
+        f"map ctrl+shift+p kitten hints --customize-processing {_hints_kitten_path()}",
+        f"map f3 kitten hints --customize-processing {_hints_kitten_path()}",
+    ]
+
+
+def test_session_kitty_overrides_empty_key_lists_bind_nothing() -> None:
+    overrides = session_kitty_overrides(HopConfig(paste_keys=(), open_selection_keys=()))
 
     assert not any(o.startswith("map ") for o in overrides)
     assert overrides == ("clipboard_control write-clipboard write-primary read-clipboard read-primary",)
 
 
 def test_session_kitty_overrides_allow_read_false_drops_clipboard_control() -> None:
-    overrides = session_kitty_overrides(HopConfig(paste_keys=(), clipboard_allow_read=False))
+    overrides = session_kitty_overrides(HopConfig(paste_keys=(), open_selection_keys=(), clipboard_allow_read=False))
 
     assert overrides == ()
 
@@ -292,6 +302,12 @@ def _paste_kitten_path() -> Path:
     import hop
 
     return Path(hop.__file__).parent / "kitten" / "paste" / "main.py"
+
+
+def _hints_kitten_path() -> Path:
+    import hop
+
+    return Path(hop.__file__).parent / "kitten" / "hints" / "main.py"
 
 
 def test_bootstrap_injects_extra_overrides_after_allow_remote_control() -> None:

@@ -86,13 +86,7 @@ bindsym $mod+Return exec /printed/by/hop/path
 
 ## Open visible-output targets from Kitty
 
-Add a Kitty mapping that runs the `hints` kitten with hop's custom processor:
-
-Kitty's config doesn't run a shell, so the path has to be substituted by hand. Run `hop path kitten/hints` and paste its output:
-
-```conf
-map ctrl+shift+o kitten hints --customize-processing /printed/by/hop/path
-```
+<kbd>Ctrl-Shift-O</kbd> in any hop session window runs the `hints` kitten with hop's custom processor - bound automatically at session bootstrap, no `kitty.conf` entry needed (hop injects it as a `--override`, same as the [paste keys](#special-windows)). Change or disable the key with [`[keys].open_selection`](#global-config).
 
 The picker scans visible terminal output and dispatches supported selections to the session editor or browser:
 
@@ -115,7 +109,7 @@ A hop config has several named sections plus a few scalar settings, all optional
 - `[backends.<name>]` - backend lifecycle (`prepare` / `teardown` / translate helpers) plus two prefixes: `interactive_prefix` for interactive launches and `noninteractive_prefix` for hop's piped queries (file-existence checks).
 - `[layouts.<name>]` - a named layout with one required `activate` shell-snippet probe and a list of windows that come up together when the probe matches.
 - `[windows.<role>]` - top-level windows (always active unless `activate = "false"`).
-- `[keys]` - session-kitty keybindings hop injects at bootstrap. `paste` (string or list of kitty key specs, default `["ctrl+v", "ctrl+shift+v"]`) binds the [clipboard-image paste kitten](#special-windows); an empty string or list disables it.
+- `[keys]` - session-kitty keybindings hop injects at bootstrap; each is a kitty key spec or a list of them, and an empty string or list disables it. `paste` (default `["ctrl+v", "ctrl+shift+v"]`) binds the [clipboard-image paste kitten](#special-windows); `open_selection` (default `["ctrl+shift+o"]`) binds the [visible-output picker](#open-visible-output-targets-from-kitty).
 - `[clipboard]` - `allow_read` (bool, default `true`) controls whether hop injects a `clipboard_control` override permitting OSC 52 clipboard reads without a per-paste prompt.
 - `workspace_layout = "<mode>"` - sway workspace layout applied at first session entry. One of `splith`, `splitv`, `stacking`, `tabbed`.
 - `debug_log = true` - opt-in diagnostic log; see [Troubleshooting](#troubleshooting).
