@@ -1,8 +1,7 @@
 """Bridge acceptor: HTTP-over-unix-socket entry point for hop CLI calls.
 
 Editor plugins running inside devcontainer/ssh backends use this socket
-to call back to host hop. See
-``.dust/tasks/add-host-side-bridge-acceptor.md`` for the design.
+to call back to host hop.
 """
 
 from __future__ import annotations

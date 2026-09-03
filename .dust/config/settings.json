@@ -1,9 +1,0 @@
-{
-  "dustCommand": "bunx dust",
-  "checks": [
-    {
-      "name": "make",
-      "command": "make"
-    }
-  ]
-}

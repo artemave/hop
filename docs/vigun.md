@@ -12,7 +12,7 @@ Examples:
 
 ```bash
 hop run --role test "python3 -m pytest tests/test_run_commands.py -q"
-hop run --role test "bun test smoke.test.ts"
+hop run --role test "python3 -m pytest tests/test_bridge.py -q"
 ```
 
 ## Contract
