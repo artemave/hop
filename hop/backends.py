@@ -21,7 +21,7 @@ from hop.config import (
     BackendConfig,
 )
 from hop.errors import HopError
-from hop.session import ProjectSession
+from hop.session import HOP_SESSION_ENV_VAR, ProjectSession
 
 # Sentinel hostnames that, inside a non-host backend's network namespace, all
 # refer to "this session's local interface" — i.e. the value the kitten dispatch
@@ -578,7 +578,16 @@ class CommandBackend:
         returns the substituted command unchanged.
         """
 
-        substituted = substitute(command, session=session, host=self._host)
+        # Export ``HOP_SESSION`` ahead of the in-backend command so every shell
+        # it launches (the integration shell, ``kitten run-shell``'s child, a
+        # bare ``$SHELL``) is marked as running inside a hop session. Every path
+        # here ends up under a shell (``sh -c`` locally, ``$SHELL -lc`` for a
+        # container/ssh), so a leading ``export …;`` is safe. An assignment
+        # *prefix* (``VAR=v cmd``) would only reach the first command, not the
+        # ``&& exec …`` that follows. The host raw-login-shell case (``wrap``
+        # returns ``()``) is covered by the kitty process environment instead.
+        session_env = f"export {HOP_SESSION_ENV_VAR}={shlex.quote(session.session_name)}; "
+        substituted = session_env + substitute(command, session=session, host=self._host)
         if not self.interactive_prefix:
             return substituted
         substituted_prefix = substitute(self.interactive_prefix, session=session, host=self._host)

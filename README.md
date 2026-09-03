@@ -334,7 +334,28 @@ hop tail "$id"
 
 `hop tail` blocks until the dispatched command returns to its shell prompt, then writes the combined output to stdout. This two-step protocol is what [vigun](https://github.com/artemave/vigun) uses to send a test run from the editor to a dedicated terminal in the session and collect its output once the run finishes.
 
+`hop run --wait "<command>"` collapses those two steps: it dispatches, blocks until the command returns to its prompt, writes the output, and exits with the command's own status (or `124` if it times out with the command still running). It prints no run id.
+
+```bash
+hop run --wait --role test "python3 -m pytest -q"
+```
+
 Prompt detection uses Kitty's shell integration (OSC 133), which is on by default for `bash`, `zsh`, and `fish`.
+
+### Run agent tools in the session
+
+`hop install --agents` installs the `hop-run` skill for Claude Code and Codex (into `~/.claude/skills/` and `~/.agents/skills/`). When the agent runs in a hop session terminal (detected via the `HOP_SESSION` env var hop exports into every session shell), the skill routes its one-shot commands into the session's terminals - test runs to the `test` window, everything else to `shell` - via `hop run --wait`, so you watch them run live. Outside a hop session, or for long-running processes (servers, watchers, REPLs), the agent works as usual.
+
+Run it once on the host. For a container or remote session, add it as a `prepare` step so it lands in that backend's home too:
+
+```bash
+prepare = [
+  # ... whatever installs hop in the backend ...
+  "<noninteractive_prefix> hop install --agents",
+]
+```
+
+This is an experimental convenience - the skill is advisory, and the routing is deliberately simple (tests to `test`, the rest to `shell`, one command at a time).
 
 ### Other commands
 

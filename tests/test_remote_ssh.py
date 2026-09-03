@@ -134,7 +134,8 @@ def test_ssh_to_container_wrap_nests_both_login_wraps() -> None:
     assert argv[0] == "ssh"
     ssh_inner = _decode_remote(argv[-1])
     assert ssh_inner.startswith("cd /remote/proj && podman exec dc sh -c ")
-    assert _decode_remote(ssh_inner) == "kitten run-shell"
+    # `inline` prepends `export HOP_SESSION=<name>;` to the in-container command.
+    assert _decode_remote(ssh_inner) == "export HOP_SESSION=thonon-les-pains; kitten run-shell"
 
 
 def test_default_ssh_options_multiplex_and_persist(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -199,8 +200,12 @@ def test_host_placeholder_resolves_to_bare_hostname_remotely() -> None:
     )
 
     # `{host}` is the externally-reachable hostname (for LOCAL_HOSTNAME / host
-    # translation), not the ssh target — the `user@` is stripped.
-    assert backend.inline("LOCAL_HOSTNAME={host} bin/dev", session) == "LOCAL_HOSTNAME=devbox.local bin/dev"
+    # translation), not the ssh target — the `user@` is stripped. `inline` also
+    # prepends the `export HOP_SESSION=<name>;` marker.
+    assert (
+        backend.inline("LOCAL_HOSTNAME={host} bin/dev", session)
+        == "export HOP_SESSION=thonon-les-pains; LOCAL_HOSTNAME=devbox.local bin/dev"
+    )
 
 
 def test_host_placeholder_resolves_to_localhost_locally() -> None:

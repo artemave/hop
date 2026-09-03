@@ -12,6 +12,7 @@ from hop.commands import (
     BrowserCommand,
     Command,
     EnterSessionCommand,
+    InstallCommand,
     KillCommand,
     ListSessionsCommand,
     ListWindowsCommand,
@@ -64,10 +65,27 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser = subparsers.add_parser("run")
     run_parser.add_argument("--role", default=DEFAULT_RUN_ROLE)
     run_parser.add_argument("--focus", action="store_true", dest="focus")
+    run_parser.add_argument(
+        "--wait",
+        action="store_true",
+        dest="wait",
+        help="Block until the command returns to its prompt, print its output, and exit with its status.",
+    )
     run_parser.add_argument("command_text")
 
     tail_parser = subparsers.add_parser("tail")
     tail_parser.add_argument("run_id")
+
+    install_parser = subparsers.add_parser(
+        "install",
+        help="Install hop's local integration files (e.g. the agent skill).",
+    )
+    install_parser.add_argument(
+        "--agents",
+        action="store_true",
+        dest="install_agents",
+        help="Install the hop-run skill for Claude Code and Codex.",
+    )
 
     browser_parser = subparsers.add_parser("browser")
     browser_parser.add_argument("url", nargs="?")
@@ -133,9 +151,14 @@ def parse_command(argv: Sequence[str] | None = None) -> Command:
                 role=namespace.role,
                 command_text=namespace.command_text,
                 focus=bool(namespace.focus),
+                wait=bool(namespace.wait),
             )
         case "tail":
             return TailCommand(run_id=namespace.run_id)
+        case "install":
+            if not namespace.install_agents:
+                raise ValueError("hop install: choose a target (e.g. --agents)")
+            return InstallCommand()
         case "browser":
             return BrowserCommand(url=namespace.url)
         case "kill":

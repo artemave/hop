@@ -15,6 +15,7 @@ from hop.commands import (
     BridgeShimCommand,
     BrowserCommand,
     EnterSessionCommand,
+    InstallCommand,
     KillCommand,
     ListSessionsCommand,
     MoveCommand,
@@ -106,6 +107,7 @@ class StubKittyAdapter:
         self,
         *,
         last_cmd_output: str = "",
+        last_cmd_exit_status: int = 0,
         alive_session_names: tuple[str, ...] = (),
     ) -> None:
         self.ensured_roles: list[tuple[str, str, Path]] = []
@@ -113,6 +115,7 @@ class StubKittyAdapter:
         self.runs: list[tuple[str, str, str, Path, bool]] = []
         self.closed_windows: list[int] = []
         self._last_cmd_output = last_cmd_output
+        self._last_cmd_exit_status = last_cmd_exit_status
         self._state_calls = 0
         self._alive_session_names = frozenset(alive_session_names)
 
@@ -145,7 +148,10 @@ class StubKittyAdapter:
 
     def get_window_state(self, session_name: str, window_id: int) -> KittyWindowState:
         self._state_calls += 1
-        return KittyWindowState(at_prompt=self._state_calls > 1, last_cmd_exit_status=0)
+        return KittyWindowState(
+            at_prompt=self._state_calls > 1,
+            last_cmd_exit_status=self._last_cmd_exit_status,
+        )
 
     def get_last_cmd_output(self, session_name: str, window_id: int) -> str:
         return self._last_cmd_output
@@ -241,6 +247,7 @@ def build_services(
     workspaces: tuple[str, ...] = (),
     focused_workspace: str = "",
     last_cmd_output: str = "",
+    last_cmd_exit_status: int = 0,
     sway_windows: tuple[SwayWindow, ...] = (),
     persisted_session_names: tuple[str, ...] = (),
     alive_session_names: tuple[str, ...] | None = None,
@@ -259,6 +266,7 @@ def build_services(
         ),
         kitty=StubKittyAdapter(
             last_cmd_output=last_cmd_output,
+            last_cmd_exit_status=last_cmd_exit_status,
             alive_session_names=alive_session_names,
         ),
         neovim=StubNeovimAdapter(),
@@ -816,6 +824,47 @@ def test_execute_command_tails_run_output_to_stdout(tmp_path: Path, monkeypatch:
         )
 
     assert stdout.getvalue() == "hello\n"
+
+
+def test_execute_command_run_wait_streams_output_and_returns_exit_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
+    monkeypatch.setenv("HOP_RUNS_DIR", str(tmp_path / "runs"))
+
+    services = build_services(last_cmd_output="FAILED\n", last_cmd_exit_status=2)
+    stdout = io.StringIO()
+
+    with redirect_stdout(stdout):
+        code = execute_command(
+            RunCommand(role="test", command_text="pytest -q", wait=True),
+            cwd=session_root,
+            services=services.as_services(),
+        )
+
+    assert code == 2
+    # --wait streams the command's own output, not a run id.
+    assert stdout.getvalue() == "FAILED\n"
+    assert services.kitty.runs == [("demo", "test", "pytest -q", session_root.resolve(), False)]
+
+
+def test_execute_command_install_agents_writes_skill_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # `Path.home()` reads $HOME via expanduser on POSIX; the install arm
+    # resolves it with no override, so pointing $HOME at a tmp dir is enough.
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    services = build_services()
+    stdout = io.StringIO()
+
+    with redirect_stdout(stdout):
+        assert execute_command(InstallCommand(), cwd=tmp_path, services=services.as_services()) == 0
+
+    claude = tmp_path / ".claude" / "skills" / "hop-run" / "SKILL.md"
+    codex = tmp_path / ".agents" / "skills" / "hop-run" / "SKILL.md"
+    assert claude.is_file() and codex.is_file()
+    assert str(claude) in stdout.getvalue()
+    assert str(codex) in stdout.getvalue()
 
 
 def test_execute_command_focuses_editor_via_term_role_editor(tmp_path: Path) -> None:

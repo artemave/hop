@@ -45,11 +45,19 @@ class RunCommand:
     command_text: str
     role: str = DEFAULT_RUN_ROLE
     focus: bool = False
+    wait: bool = False
 
 
 @dataclass(frozen=True, slots=True)
 class TailCommand:
     run_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class InstallCommand:
+    """`hop install --agents` — install the hop-run skill for Claude Code and
+    Codex. `hop install` is the umbrella for local integration installs; it
+    takes a target flag (only `--agents` today) and errors without one."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +95,7 @@ Command = (
     | TermCommand
     | RunCommand
     | TailCommand
+    | InstallCommand
     | BrowserCommand
     | KillCommand
     | BridgeShimCommand

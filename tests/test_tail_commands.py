@@ -1,9 +1,16 @@
+import io
 import json
 from pathlib import Path
 
 import pytest
 
-from hop.commands.tail import TailTimeoutError, UnknownRunError, tail_command
+from hop.commands.tail import (
+    TailResult,
+    TailTimeoutError,
+    UnknownRunError,
+    tail_command,
+    wait_for_dispatch,
+)
 from hop.kitty import KittyWindowState
 
 
@@ -50,19 +57,19 @@ def test_tail_returns_output_after_command_finishes(tmp_path: Path) -> None:
         states=[
             KittyWindowState(at_prompt=False, last_cmd_exit_status=0),
             KittyWindowState(at_prompt=False, last_cmd_exit_status=0),
-            KittyWindowState(at_prompt=True, last_cmd_exit_status=0),
+            KittyWindowState(at_prompt=True, last_cmd_exit_status=7),
         ],
         output="hello\n",
     )
 
-    output = tail_command(
+    result = tail_command(
         "abc",
         kitty=kitty,
         runs_dir=runs_dir,
         sleep=lambda _: None,
     )
 
-    assert output == "hello\n"
+    assert result == TailResult(output="hello\n", exit_status=7)
     assert kitty.output_calls == 1
 
 
@@ -80,7 +87,7 @@ def test_tail_returns_output_for_command_too_fast_to_observe_running(tmp_path: P
     def sleep_fn(dt: float) -> None:
         clock.advance(dt)
 
-    output = tail_command(
+    result = tail_command(
         "fast",
         kitty=kitty,
         runs_dir=runs_dir,
@@ -90,7 +97,7 @@ def test_tail_returns_output_for_command_too_fast_to_observe_running(tmp_path: P
         poll_interval_seconds=0.1,
     )
 
-    assert output == "quick\n"
+    assert result == TailResult(output="quick\n", exit_status=0)
 
 
 def test_tail_raises_for_unknown_run_id(tmp_path: Path) -> None:
@@ -143,7 +150,7 @@ def test_tail_does_not_exit_early_during_fast_done_window(tmp_path: Path) -> Non
     def sleep_fn(dt: float) -> None:
         clock.advance(dt)
 
-    output = tail_command(
+    result = tail_command(
         "soon",
         kitty=kitty,
         runs_dir=runs_dir,
@@ -153,5 +160,69 @@ def test_tail_does_not_exit_early_during_fast_done_window(tmp_path: Path) -> Non
         poll_interval_seconds=0.1,
     )
 
-    assert output == "ran\n"
+    assert result == TailResult(output="ran\n", exit_status=0)
     assert kitty.state_calls == 3
+
+
+def test_wait_for_dispatch_streams_output_and_returns_exit_status(tmp_path: Path) -> None:
+    runs_dir = tmp_path / "runs"
+    write_state(runs_dir, "run1", window_id=7)
+
+    kitty = StubKittyAdapter(
+        states=[
+            KittyWindowState(at_prompt=False, last_cmd_exit_status=0),
+            KittyWindowState(at_prompt=True, last_cmd_exit_status=5),
+        ],
+        output="boom\n",
+    )
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    code = wait_for_dispatch(
+        run_id="run1",
+        session_name="demo",
+        window_id=7,
+        role="test",
+        kitty=kitty,
+        stdout=stdout,
+        stderr=stderr,
+        runs_dir=runs_dir,
+        sleep=lambda _: None,
+    )
+
+    assert code == 5
+    assert stdout.getvalue() == "boom\n"
+    assert stderr.getvalue() == ""
+
+
+def test_wait_for_dispatch_returns_124_and_partial_output_on_timeout(tmp_path: Path) -> None:
+    runs_dir = tmp_path / "runs"
+    write_state(runs_dir, "stuck", window_id=7)
+
+    kitty = StubKittyAdapter(
+        states=[KittyWindowState(at_prompt=False, last_cmd_exit_status=0)],
+        output="partial so far\n",
+    )
+    clock = FakeClock()
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+
+    code = wait_for_dispatch(
+        run_id="stuck",
+        session_name="demo",
+        window_id=7,
+        role="shell",
+        kitty=kitty,
+        stdout=stdout,
+        stderr=stderr,
+        runs_dir=runs_dir,
+        clock=clock,
+        sleep=clock.advance,
+        timeout_seconds=1.0,
+        poll_interval_seconds=0.1,
+    )
+
+    assert code == 124
+    assert stdout.getvalue() == "partial so far\n"
+    assert "timed out" in stderr.getvalue()
+    assert "'shell'" in stderr.getvalue()

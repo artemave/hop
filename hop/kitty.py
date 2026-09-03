@@ -16,7 +16,7 @@ from hop.backends import CommandBackend, SessionBackend
 from hop.config import SHELL_ROLE, HopConfig
 from hop.errors import HopError
 from hop.layouts import WindowSpec, find_window
-from hop.session import ProjectSession
+from hop.session import HOP_SESSION_ENV_VAR, ProjectSession
 from hop.sway import SwayWindow
 
 # Absolute paths to the bundled kittens, baked into the ``map <key> kitten …``
@@ -29,11 +29,16 @@ _CLIPBOARD_CONTROL_ALLOW_READ = "clipboard_control write-clipboard write-primary
 # Keys hop binds when the corresponding ``[keys]`` field is unset.
 _DEFAULT_PASTE_KEYS = ("ctrl+v", "ctrl+shift+v")
 _DEFAULT_OPEN_SELECTION_KEYS = ("ctrl+shift+o",)
+# Roomy scrollback so a large `hop run --wait` capture (which is scraped back
+# out of the buffer via `get-text --extent last_cmd_output`) doesn't lose its
+# head. Kitty's default is 2000 lines.
+_SCROLLBACK_LINES = "scrollback_lines=100000"
 
 
 def session_kitty_overrides(config: HopConfig) -> tuple[str, ...]:
     """``kitty --override`` values hop injects into a session's kitty.
 
+    - ``scrollback_lines`` bumped so command-output capture isn't truncated;
     - one ``map <key> kitten <paste-kitten>`` per ``[keys].paste`` entry
       (default ctrl+v / ctrl+shift+v);
     - one ``map <key> kitten hints --customize-processing <hints-kitten>`` per
@@ -44,7 +49,7 @@ def session_kitty_overrides(config: HopConfig) -> tuple[str, ...]:
     An explicit empty list for either ``[keys]`` field binds nothing.
     """
 
-    overrides: list[str] = []
+    overrides: list[str] = [_SCROLLBACK_LINES]
     paste_keys = config.paste_keys if config.paste_keys is not None else _DEFAULT_PASTE_KEYS
     overrides.extend(f"map {key} kitten {_PASTE_KITTEN_PATH}" for key in paste_keys)
     open_selection_keys = (
@@ -494,7 +499,13 @@ class KittyRemoteControlAdapter:
         if shell_argv:
             kitty_args.append("--")
             kitty_args.extend(shell_argv)
-        self._launcher(tuple(kitty_args), dict(os.environ))
+        # HOP_SESSION marks every shell in this session's kitty as "inside a hop
+        # session" — the signal skills / tooling gate on. The kitty process env
+        # covers the host case (a raw login shell, and `kitty @ launch` children
+        # which copy this env); container/remote shells run behind a boundary
+        # this env can't cross and get it from `CommandBackend.wrap` instead.
+        launch_env = {**os.environ, HOP_SESSION_ENV_VAR: session.session_name}
+        self._launcher(tuple(kitty_args), launch_env)
         self._wait_for_session_kitty(addr)
         # Kitty's CLI doesn't accept --var, so the bootstrap window has no
         # user_vars by default. Tag it now so role-window discovery treats it

@@ -4,6 +4,12 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+# Exported into every session terminal's shell (host via the kitty process
+# environment, container/remote via ``CommandBackend.wrap``). Its presence is
+# the signal that a shell is running inside a hop session — what the bundled
+# agent skill and other tooling gate on.
+HOP_SESSION_ENV_VAR = "HOP_SESSION"
+
 
 @dataclass(frozen=True, slots=True)
 class ProjectSession:

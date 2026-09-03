@@ -239,7 +239,7 @@ def test_ensure_terminal_bootstraps_session_kitty_when_socket_is_not_listening()
     adapter.ensure_terminal(build_session(), role="shell")
 
     assert len(launcher.calls) == 1
-    args, _env = launcher.calls[0]
+    args, env = launcher.calls[0]
     session = build_session()
     assert args == (
         "kitty",
@@ -254,11 +254,16 @@ def test_ensure_terminal_bootstraps_session_kitty_when_socket_is_not_listening()
         "--override",
         "allow_remote_control=yes",
     )
+    # The kitty process carries HOP_SESSION so host role windows (and the
+    # `kitty @ launch` children that copy this env) are marked as inside a
+    # hop session.
+    assert env["HOP_SESSION"] == "demo"
 
 
 def test_session_kitty_overrides_default_binds_all_keys_and_clipboard_read() -> None:
     overrides = session_kitty_overrides(HopConfig())
 
+    assert overrides[0] == "scrollback_lines=100000"
     assert [o for o in overrides if o.startswith("map ")] == [
         f"map ctrl+v kitten {_paste_kitten_path()}",
         f"map ctrl+shift+v kitten {_paste_kitten_path()}",
@@ -289,13 +294,16 @@ def test_session_kitty_overrides_empty_key_lists_bind_nothing() -> None:
     overrides = session_kitty_overrides(HopConfig(paste_keys=(), open_selection_keys=()))
 
     assert not any(o.startswith("map ") for o in overrides)
-    assert overrides == ("clipboard_control write-clipboard write-primary read-clipboard read-primary",)
+    assert overrides == (
+        "scrollback_lines=100000",
+        "clipboard_control write-clipboard write-primary read-clipboard read-primary",
+    )
 
 
 def test_session_kitty_overrides_allow_read_false_drops_clipboard_control() -> None:
     overrides = session_kitty_overrides(HopConfig(paste_keys=(), open_selection_keys=(), clipboard_allow_read=False))
 
-    assert overrides == ()
+    assert overrides == ("scrollback_lines=100000",)
 
 
 def _paste_kitten_path() -> Path:

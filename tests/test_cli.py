@@ -7,6 +7,7 @@ from hop.commands import (
     BridgeShimCommand,
     BrowserCommand,
     EnterSessionCommand,
+    InstallCommand,
     KillCommand,
     ListSessionsCommand,
     ListWindowsCommand,
@@ -41,6 +42,11 @@ from hop.commands import (
             RunCommand(role="server", command_text="bundle exec rails server"),
         ),
         (["run", "--focus", "ls"], RunCommand(command_text="ls", focus=True)),
+        (["run", "--wait", "ls"], RunCommand(command_text="ls", wait=True)),
+        (
+            ["run", "--wait", "--role", "test", "pytest -q"],
+            RunCommand(role="test", command_text="pytest -q", wait=True),
+        ),
         (
             ["run", "--role", "server", "--focus", "bin/dev"],
             RunCommand(role="server", command_text="bin/dev", focus=True),
@@ -50,6 +56,7 @@ from hop.commands import (
             RunCommand(role="server", command_text="bin/dev", focus=True),
         ),
         (["tail", "abc123"], TailCommand(run_id="abc123")),
+        (["install", "--agents"], InstallCommand()),
         (["browser"], BrowserCommand()),
         (["browser", "https://example.com"], BrowserCommand(url="https://example.com")),
         (["kill"], KillCommand()),
@@ -71,6 +78,11 @@ def test_run_defaults_to_shell_role() -> None:
     command = parse_command(["run", "pytest -q"])
 
     assert command == RunCommand(command_text="pytest -q", role="shell")
+
+
+def test_install_requires_a_target() -> None:
+    with pytest.raises(ValueError, match="choose a target"):
+        parse_command(["install"])
 
 
 def test_hop_open_requires_target() -> None:

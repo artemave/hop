@@ -53,6 +53,13 @@ def build_session(session_root: Path) -> ProjectSession:
     )
 
 
+def _hop_env(session_root: Path) -> str:
+    """The ``export HOP_SESSION=<name>; `` prefix ``inline`` prepends to the
+    in-backend command so every shell it launches is marked as inside a hop
+    session."""
+    return f"export HOP_SESSION={shlex.quote(session_root.name)}; "
+
+
 @dataclass
 class RecordingRunner:
     returncode: int = 0
@@ -104,12 +111,12 @@ def test_host_backend_wrap_empty_returns_empty_argv(tmp_path: Path) -> None:
 
 def test_host_backend_wrap_substitutes_command(tmp_path: Path) -> None:
     args = host_backend().wrap("cd {session_root} && pwd", build_session(tmp_path))
-    assert args == ("sh", "-c", f"cd {shlex.quote(str(tmp_path))} && pwd")
+    assert args == ("sh", "-c", _hop_env(tmp_path) + f"cd {shlex.quote(str(tmp_path))} && pwd")
 
 
 def test_host_backend_inline_substitutes_without_sh_wrapping(tmp_path: Path) -> None:
     inlined = host_backend().inline("nvim", build_session(tmp_path))
-    assert inlined == "nvim"
+    assert inlined == _hop_env(tmp_path) + "nvim"
 
 
 def test_host_backend_translate_localhost_url_is_identity(tmp_path: Path) -> None:
@@ -190,7 +197,7 @@ def test_container_launches_the_integration_snippet_login_wrapped(tmp_path: Path
     args = backend.wrap(backend.integration_shell, build_session(tmp_path))
 
     assert args[2].startswith("podman exec dc sh -c ")
-    assert _login_inner(args[2]) == CONTAINER_INTEGRATION_SHELL
+    assert _login_inner(args[2]) == _hop_env(tmp_path) + CONTAINER_INTEGRATION_SHELL
 
 
 def test_command_backend_wrap_login_wraps_command_in_container(tmp_path: Path) -> None:
@@ -202,7 +209,7 @@ def test_command_backend_wrap_login_wraps_command_in_container(tmp_path: Path) -
 
     assert args[:2] == ("sh", "-c")
     assert args[2].startswith("compose exec devcontainer sh -c ")
-    assert _login_inner(args[2]) == "bin/dev"
+    assert _login_inner(args[2]) == _hop_env(tmp_path) + "bin/dev"
 
 
 def test_command_backend_wrap_substitutes_session_root(tmp_path: Path) -> None:
@@ -213,7 +220,7 @@ def test_command_backend_wrap_substitutes_session_root(tmp_path: Path) -> None:
     assert args[:2] == ("sh", "-c")
     # `{session_root}` is substituted in the prefix; the command is login-wrapped.
     assert args[2].startswith(f"ssh host cd {shlex.quote(str(tmp_path))} && sh -c ")
-    assert _login_inner(args[2]) == "exec zsh"
+    assert _login_inner(args[2]) == _hop_env(tmp_path) + "exec zsh"
 
 
 def test_command_backend_wrap_empty_falls_back_to_shell_via_prefix(tmp_path: Path) -> None:
@@ -227,7 +234,7 @@ def test_command_backend_wrap_empty_falls_back_to_shell_via_prefix(tmp_path: Pat
 
     assert args[:2] == ("sh", "-c")
     assert args[2].startswith("compose exec devcontainer sh -c ")
-    assert _login_inner(args[2]) == "${SHELL:-sh}"
+    assert _login_inner(args[2]) == _hop_env(tmp_path) + "${SHELL:-sh}"
 
 
 def test_command_backend_wrap_with_empty_prefix_returns_substituted_command(tmp_path: Path) -> None:
@@ -235,7 +242,7 @@ def test_command_backend_wrap_with_empty_prefix_returns_substituted_command(tmp_
 
     args = backend.wrap("nvim", build_session(tmp_path))
 
-    assert args == ("sh", "-c", "nvim")
+    assert args == ("sh", "-c", _hop_env(tmp_path) + "nvim")
 
 
 def test_command_backend_inline_login_wraps_command_in_container(tmp_path: Path) -> None:
@@ -247,7 +254,7 @@ def test_command_backend_inline_login_wraps_command_in_container(tmp_path: Path)
     inlined = backend.inline("nvim", build_session(tmp_path))
 
     assert inlined.startswith("compose exec devcontainer sh -c ")
-    assert _login_inner(inlined) == "nvim"
+    assert _login_inner(inlined) == _hop_env(tmp_path) + "nvim"
 
 
 def test_command_backend_inline_round_trips_metacharacters(tmp_path: Path) -> None:
@@ -257,13 +264,13 @@ def test_command_backend_inline_round_trips_metacharacters(tmp_path: Path) -> No
 
     inlined = backend.inline("pkill -f '[f]oreman'; bin/dev", build_session(tmp_path))
 
-    assert _login_inner(inlined) == "pkill -f '[f]oreman'; bin/dev"
+    assert _login_inner(inlined) == _hop_env(tmp_path) + "pkill -f '[f]oreman'; bin/dev"
 
 
-def test_command_backend_inline_with_empty_prefix_is_identity_substituted(tmp_path: Path) -> None:
+def test_command_backend_inline_with_empty_prefix_is_session_env_plus_substituted(tmp_path: Path) -> None:
     backend = backend_from_config(make_backend(interactive_prefix="", noninteractive_prefix=""))
 
-    assert backend.inline("nvim", build_session(tmp_path)) == "nvim"
+    assert backend.inline("nvim", build_session(tmp_path)) == _hop_env(tmp_path) + "nvim"
 
 
 def test_command_backend_substitutes_path_with_spaces_safely(tmp_path: Path) -> None:

@@ -233,7 +233,7 @@ Consequences:
 
 ## Window tagging
 
-Hop tags one piece of metadata on each Kitty role window: the **role**, stored as the `hop_role` user var. Kitty OS window names are session-agnostic (`hop:<role>`, e.g. `hop:shell`, `hop:editor`) — they do not include the session name, so external tools that read Sway's `app_id` only see the role. Per-session identification of hop-managed Sway windows (browser, editor) happens through Sway marks of the form `_hop_<role>:<session>` (leading underscore so Sway hides them from window titles). No `HOP_*` environment variables are exported into role terminals — external tools should consume `hop list --json` to recover session-name → session-root mapping rather than reading shell env. Kitty session and session-root identity live entirely in (a) the per-session Kitty socket address, and (b) the per-session state files.
+Hop tags one piece of metadata on each Kitty role window: the **role**, stored as the `hop_role` user var. Kitty OS window names are session-agnostic (`hop:<role>`, e.g. `hop:shell`, `hop:editor`) — they do not include the session name, so external tools that read Sway's `app_id` only see the role. Per-session identification of hop-managed Sway windows (browser, editor) happens through Sway marks of the form `_hop_<role>:<session>` (leading underscore so Sway hides them from window titles). One environment variable is exported into every role terminal's shell: `HOP_SESSION=<session name>` — set means "this shell is inside a hop session", the signal skills and tooling gate on. It is delivered through the session's Kitty process environment for host shells and prepended as a `HOP_SESSION=<name>` assignment to the in-backend command by `CommandBackend.wrap` for container / remote shells. It carries only the session name; external tools that need the session root should still consume `hop list --json`. Kitty session and session-root identity otherwise live entirely in (a) the per-session Kitty socket address, and (b) the per-session state files.
 
 ---
 
@@ -348,7 +348,7 @@ Behavior:
 ### Send command to terminal
 
 ```bash
-hop run [--focus] --role <name> "<command>"
+hop run [--focus] [--wait] --role <name> "<command>"
 ```
 
 Examples:
@@ -357,6 +357,7 @@ Examples:
 hop run --role test "bundle exec rails test"
 hop run "ls"
 hop run --role server --focus "bin/dev"
+hop run --wait --role test "pytest -q"
 ```
 
 Behavior:
@@ -367,8 +368,8 @@ Behavior:
 - send the exact `<command>` string followed by a trailing newline to that terminal
 - default behavior keeps the current focus while routing the command into the target role terminal
 - `--focus` opts in to focusing the role terminal: the role's Kitty window receives focus and Sway switches to the session's workspace, so the operator can dispatch and watch the role from any workspace in one step
-- print a fresh **run id** to stdout and return; `hop run` does not wait for the dispatched command to finish or proxy its exit status
-- the run id is opaque to callers and is the input to `hop tail`
+- without `--wait`: print a fresh **run id** to stdout and return; `hop run` does not wait for the dispatched command to finish or proxy its exit status. The run id is opaque to callers and is the input to `hop tail`
+- with `--wait`: do not print a run id — block until the command returns to its prompt (same detection as `hop tail`), write its combined output to stdout, and exit with the command's own status. On timeout, write the output captured so far, warn on stderr that the command is still running, and exit `124`. `--wait` composes with `--focus`
 - by default `hop run` does not switch Sway workspaces — the caller is expected to already be in the session's workspace (the canonical entry points for that are bare `hop` and `hop switch`); `--focus` is the explicit opt-in that does switch
 
 Default role: `shell`
@@ -392,6 +393,8 @@ Behavior:
 - write the captured combined output of that command to stdout and exit
 - `hop tail` exits 0 on successful delivery; it does not propagate the inner command's exit status
 - detection relies on Kitty's shell integration (OSC 133 prompt boundaries) for the role terminal; `hop tail` requires the shell in the role terminal to support it
+
+The captured exit status (from Kitty's OSC 133 `D` marker) is available alongside the output; `hop tail` discards it, and `hop run --wait` is the caller that propagates it.
 
 The intended consumer is `vigun`, which dispatches with `hop run` and then streams the output via `hop tail <id>`.
 
@@ -584,6 +587,18 @@ Each session's kitty binds `[keys].paste` (a kitty key spec or list; default `ct
 - **text, empty, or no focused hop session** — falls through to kitty's native `paste_from_clipboard`.
 
 `[clipboard].allow_read` (bool, default `true`) additionally injects `--override clipboard_control write-clipboard write-primary read-clipboard read-primary` so an in-container editor's OSC 52 paste (`"+p`) works without the per-paste permission prompt; `false` omits it and kitty's default prompt stands.
+
+### Scrollback
+
+Session kitties are bootstrapped with `--override scrollback_lines=100000` (kitty's default is 2000). `hop run --wait` / `hop tail` scrape command output back out of the scrollback buffer via `get-text --extent last_cmd_output`, so a small buffer would truncate the head of a large test run.
+
+### Agent skill
+
+`hop install --agents` writes the bundled `hop-run` skill (`hop/agents/hop-run/SKILL.md`) into `~/.claude/skills/hop-run/` (Claude Code) and `~/.agents/skills/hop-run/` (Codex), resolving the home of whichever process runs it. The skill is advisory: when `HOP_SESSION` is set it tells the agent to route one-shot commands through `hop run --wait --role test` (test runs) or `hop run --wait --role shell` (everything else), one at a time, never for long-running processes; when `HOP_SESSION` is unset the skill does not apply and the agent uses its normal shell tool.
+
+Because the copy targets `Path.home()`, one command serves every backend: run `hop install --agents` once on the host, and add `<noninteractive_prefix> hop install --agents` as a `prepare` step (after the step that installs `hop` in the backend) so a container/remote session's agent home also gets the skill. hop does not install it automatically.
+
+`hop install` with no target flag is an error, not a no-op; the command is the umbrella for local integration installs and can grow more targets.
 
 ---
 

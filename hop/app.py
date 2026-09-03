@@ -25,6 +25,7 @@ from hop.commands import (
     BrowserCommand,
     Command,
     EnterSessionCommand,
+    InstallCommand,
     KillCommand,
     ListSessionsCommand,
     ListWindowsCommand,
@@ -38,6 +39,7 @@ from hop.commands import (
     TermCommand,
 )
 from hop.commands.browser import focus_browser
+from hop.commands.install import install_agent_skill
 from hop.commands.kill import kill_session
 from hop.commands.move import move_focused_window
 from hop.commands.open import open_target_in_session
@@ -50,7 +52,7 @@ from hop.commands.session import (
     switch_session,
 )
 from hop.commands.ssh import run_hop_ssh
-from hop.commands.tail import tail_command
+from hop.commands.tail import tail_command, wait_for_dispatch
 from hop.commands.term import focus_terminal
 from hop.config import (
     PROJECT_CONFIG_FILE,
@@ -496,7 +498,7 @@ def execute_command(
                 sway=services.sway,
                 role=role,
             )
-        case RunCommand(role=role, command_text=command_text, focus=focus):
+        case RunCommand(role=role, command_text=command_text, focus=focus, wait=wait):
             dispatch = run_command(
                 current_directory,
                 terminals=services.kitty,
@@ -510,10 +512,22 @@ def execute_command(
                 # previous workspace when re-targeting the focused one,
                 # which would yank the operator out of the session.
                 services.sway.switch_to_workspace(dispatch.session.workspace_name)
-            print(dispatch.run_id)
+            if not wait:
+                print(dispatch.run_id)
+                return 0
+            return wait_for_dispatch(
+                run_id=dispatch.run_id,
+                session_name=dispatch.session.session_name,
+                window_id=dispatch.window_id,
+                role=role,
+                kitty=services.kitty,
+            )
         case TailCommand(run_id=run_id):
-            output = tail_command(run_id, kitty=services.kitty)
-            sys.stdout.write(output)
+            result = tail_command(run_id, kitty=services.kitty)
+            sys.stdout.write(result.output)
+        case InstallCommand():
+            for path in install_agent_skill():
+                print(path)
         case BrowserCommand(url=url):
             focus_browser(
                 current_directory,
