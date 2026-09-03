@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from typing import Mapping, Sequence
 
@@ -182,6 +183,7 @@ def test_ensure_terminal_launches_os_window_when_role_is_missing() -> None:
                 "os_window_title": "server",
                 "os_window_class": "hop:server",
                 "var": ["hop_role=server"],
+                "env": ["HOP_SESSION=demo"],
             },
         ),
     ]
@@ -357,6 +359,25 @@ def test_bootstrap_with_no_extra_overrides_matches_plain_argv() -> None:
 
     args, _env = launcher.calls[0]
     assert args[-2:] == ("--override", "allow_remote_control=yes")
+
+
+def test_bootstrap_exports_hop_session_env_var() -> None:
+    factory = StubKittyFactory(
+        [
+            KittyConnectionError("no such socket"),
+            KittyConnectionError("still not listening"),
+            {"ok": True, "data": []},
+            {"ok": True},
+        ]
+    )
+    launcher = StubLauncher()
+    adapter = KittyRemoteControlAdapter(transport_factory=factory, launcher=launcher, sleep=lambda _: None)
+
+    adapter.ensure_terminal(build_session(), role="shell")
+
+    _args, env = launcher.calls[0]
+    assert env["HOP_SESSION"] == "demo"
+    assert env["PATH"] == os.environ["PATH"]  # caller's env is inherited, not replaced
 
 
 def test_bootstrap_runs_backend_prepare_by_default() -> None:

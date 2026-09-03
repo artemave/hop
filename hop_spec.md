@@ -233,7 +233,9 @@ Consequences:
 
 ## Window tagging
 
-Hop tags one piece of metadata on each Kitty role window: the **role**, stored as the `hop_role` user var. Kitty OS window names are session-agnostic (`hop:<role>`, e.g. `hop:shell`, `hop:editor`) — they do not include the session name, so external tools that read Sway's `app_id` only see the role. Per-session identification of hop-managed Sway windows (browser, editor) happens through Sway marks of the form `_hop_<role>:<session>` (leading underscore so Sway hides them from window titles). No `HOP_*` environment variables are exported into role terminals — external tools should consume `hop list --json` to recover session-name → session-root mapping rather than reading shell env. Kitty session and session-root identity live entirely in (a) the per-session Kitty socket address, and (b) the per-session state files.
+Hop tags one piece of metadata on each Kitty role window: the **role**, stored as the `hop_role` user var. Kitty OS window names are session-agnostic (`hop:<role>`, e.g. `hop:shell`, `hop:editor`) — they do not include the session name, so external tools that read Sway's `app_id` only see the role. Per-session identification of hop-managed Sway windows (browser, editor) happens through Sway marks of the form `_hop_<role>:<session>` (leading underscore so Sway hides them from window titles).
+
+Every session terminal (the bootstrap window and every `kitty @ launch` role window) gets one environment variable exported: **`HOP_SESSION`**, set to the session name. It's the "am I inside a hop session, and which one" signal for automations that run in a session shell — e.g. deciding whether invoking the `hop` CLI makes sense. It is *not* a general identity channel: session-root and everything else still come from `hop list --json`, and it only reaches terminals whose shell runs on the host (a devcontainer/ssh backend's shell lives past a boundary the launcher env doesn't cross). Kitty session and session-root identity otherwise live entirely in (a) the per-session Kitty socket address, and (b) the per-session state files.
 
 ---
 
@@ -275,7 +277,7 @@ Behavior:
 
 - discover live Sway workspaces whose names start with `p:`
 - without `--json`: print session names without the `p:` prefix, one per line, alphabetical
-- with `--json`: print a JSON array of records `{name, workspace, session_root}`. `session_root` comes from per-session state files written at bootstrap (`${XDG_RUNTIME_DIR}/hop/sessions/<name>.json`) and is `null` when no record exists (e.g. for workspaces created outside hop). This is the stable machine-readable API external tools should consume — not the kitty user_vars or shell env vars.
+- with `--json`: print a JSON array of records `{name, workspace, session_root}`. `session_root` comes from per-session state files written at bootstrap (`${XDG_RUNTIME_DIR}/hop/sessions/<name>.json`) and is `null` when no record exists (e.g. for workspaces created outside hop). This is the stable machine-readable API external tools should consume for the full session list and their roots — not the kitty user_vars. (`$HOP_SESSION` inside a session shell tells you *which* session you're in, but not its root.)
 
 ---
 

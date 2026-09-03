@@ -68,6 +68,7 @@ KITTY_PROTOCOL_VERSION = (0, 39, 0)
 KITTY_COMMAND_PREFIX = b"\x1bP@kitty-cmd"
 KITTY_COMMAND_SUFFIX = b"\x1b\\"
 HOP_ROLE_VAR = "hop_role"
+HOP_SESSION_ENV_VAR = "HOP_SESSION"
 KITTY_BOOTSTRAP_TIMEOUT_SECONDS = 5.0
 KITTY_BOOTSTRAP_POLL_INTERVAL_SECONDS = 0.1
 # Bound on the post-launch Sway poll that finds the new role terminal's
@@ -494,7 +495,10 @@ class KittyRemoteControlAdapter:
         if shell_argv:
             kitty_args.append("--")
             kitty_args.extend(shell_argv)
-        self._launcher(tuple(kitty_args), dict(os.environ))
+        self._launcher(
+            tuple(kitty_args),
+            {**os.environ, HOP_SESSION_ENV_VAR: session.session_name},
+        )
         self._wait_for_session_kitty(addr)
         # Kitty's CLI doesn't accept --var, so the bootstrap window has no
         # user_vars by default. Tag it now so role-window discovery treats it
@@ -643,6 +647,7 @@ class KittyRemoteControlAdapter:
             # `os_window_name` only sets the X11 WM_CLASS-name half.
             "os_window_class": _os_window_name(role),
             "var": [f"{HOP_ROLE_VAR}={role}"],
+            "env": [f"{HOP_SESSION_ENV_VAR}={session.session_name}"],
         }
 
     def _launch_args(
