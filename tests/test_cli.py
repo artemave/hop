@@ -317,3 +317,30 @@ def test_main_intercepts_run_lifecycle_before_the_normal_flow(tmp_path: Path, mo
 
     assert cli.main(["__run-lifecycle", str(spec_path)]) == 0
     assert "FROM-SPEC" in log.read_text()
+
+
+def test_main_intercepts_paste_image_before_the_normal_flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`hop __paste-image <session> <write-path> <mime>` is the paste kitten's
+    internal entrypoint: it reads the clipboard and writes the backend file,
+    with no services."""
+    from hop import cli
+
+    def _no_services() -> object:
+        raise AssertionError("__paste-image must not build services / enter the normal flow")
+
+    monkeypatch.setattr(cli, "build_default_services", _no_services)
+
+    recorded: dict[str, object] = {}
+
+    def fake_helper(*, session_name: str, write_path: str, mime: str) -> int:
+        recorded.update(session_name=session_name, write_path=write_path, mime=mime)
+        return 0
+
+    monkeypatch.setattr("hop.paste.run_paste_helper", fake_helper)
+
+    assert cli.main(["__paste-image", "demo", "/tmp/hop-paste-9.png", "image/png"]) == 0
+    assert recorded == {
+        "session_name": "demo",
+        "write_path": "/tmp/hop-paste-9.png",
+        "mime": "image/png",
+    }

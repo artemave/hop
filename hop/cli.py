@@ -164,6 +164,15 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         return run_popup_lifecycle(Path(args[1]))
 
+    # Internal entrypoint: the clipboard-paste kitten launches `hop __paste-image
+    # <session> <write-path> <mime>` via kitty's `run_background_process`, so the
+    # `wl-paste` read and the (possibly slow, ssh-bound) backend write happen off
+    # the kitty boss thread. Self-contained; needs no services.
+    if args[:1] == ["__paste-image"]:
+        from hop.paste import run_paste_helper
+
+        return run_paste_helper(session_name=args[1], write_path=args[2], mime=args[3])
+
     command = parse_command(argv)
     _warn_if_hopd_version_stale()
 
