@@ -32,17 +32,38 @@ Two independent moves, both required:
 `handle_result` already runs inside kitty's interpreter with the live `boss` object. Use kitty's own clipboard access instead of shelling out to `wl-paste`:
 
 - **Text is not the kitten's job.** The kitten only shells out in the text case to decide "not an image, pass through" — that probe is exactly what deadlocks. Drop it. When the clipboard has no image, do nothing and let kitty paste natively (`paste_from_clipboard`), or better, don't intercept at all for that case. No `wl-paste`, no `--list-types`.
-- **Image bytes** come from kitty's in-process clipboard object on `boss`. kitty's non-text clipboard read is **asynchronous** (the Wayland fetch happens on kitty's event loop; a callback fires with the bytes) — which is what breaks the deadlock: `handle_result` returns immediately, the boss goes back to its loop, services the fetch (answering itself instantly when it owns the selection), then invokes the callback.
-  - Confirm the exact call against the installed kitty (currently **0.47.2**). `kitten @ get-clipboard` does **not** exist as a remote-control command; `kitten clipboard` is a separate subprocess (OSC 52, would deadlock the same way if blocked on) and is not suitable. The in-process path is `boss`'s `Clipboard` / clipboard-request machinery — the implementer must read kitty 0.47's source for the method name and callback signature and isolate it behind one function in the kitten.
+- **Image bytes** come from kitty's in-process `Clipboard` object. The API (confirmed against the installed kitty **0.47.2** by disassembling `kitty/clipboard.py` — the frozen build has no readable source):
 
-### 2. Do `backend.write_file` + `send-text` on a worker thread
+  ```python
+  from kitty.clipboard import Clipboard, ClipboardType
+  cb = Clipboard(ClipboardType.clipboard)          # or ClipboardType.primary_selection
+  cb.get_available_mime_types_for_paste() -> tuple[str, ...]     # like `wl-paste --list-types`
+  cb.get_mime(mime: str, output: Callable[[bytes], None]) -> None
+  ```
 
-Even with the clipboard read fixed, `backend.write_file` over ssh/`podman-compose` still blocks the boss. Once the image bytes arrive:
+  `get_mime` is the read to use, and it is **deadlock-proof by construction**:
+  - When kitty owns the selection — the exact case that hangs `wl-paste` — `get_mime` catches the C layer's `is_self_offer` and reads straight from kitty's own in-memory buffer, calling `output` **synchronously**. No Wayland round-trip.
+  - Otherwise it hands off to the C `get_clipboard_mime` and returns immediately; `output` is invoked later from the event loop as chunks arrive. Non-blocking.
+  - **End-of-stream is `output(b"")`** — an empty-bytes call. Accumulate non-empty chunks; the empty chunk is the signal to start the worker thread. (Same contract on both paths — visible in the self-offer chunker loop `q = b' '; while q: q = chunker(); output(q)`.)
 
-- Run `backend.write_file(session, write_path, data)` on a `threading.Thread` (or equivalent), not on the boss.
-- Add a hard `timeout=` to the backend subprocess for this path (the runner call in `CommandBackend.write_file`) so a dead ssh master fails instead of hanging.
-- On success, marshal the `send-text <path>` call back onto the boss thread — kitty's remote-control / `boss` API is not thread-safe. Use kitty's boss-thread scheduling primitive (e.g. the same mechanism kittens use to run boss work from a thread; confirm against kitty 0.47).
-- On failure or timeout, surface it: write a short error line into the target window (or a kitty notification). A silently-dropped paste is the wrong default, especially for a remote session where "laptop slept, link down" is routine.
+  Do **not** use `Clipboard.get_mime_data(mime) -> bytes` — it's the synchronous convenience wrapper and blocks the boss in the not-owned case. `get_text()` is fine for text but the kitten shouldn't be reading text at all.
+
+  Not viable: `kitten @ get-clipboard` does not exist as a remote-control command in 0.47; `kitten clipboard` is a separate subprocess (OSC 52) that would deadlock exactly like `wl-paste` if blocked on.
+
+### 2. Do `backend.write_file` + `send-text` in a detached helper process
+
+Even with the clipboard read fixed, `backend.write_file` over ssh/`podman-compose` still blocks the boss. When `get_mime` finishes (the `output(b"")` chunk), the callback runs **on the boss thread** with the full image bytes in memory. It must not do the backend write there.
+
+Preferred shape — a detached subprocess, no worker thread:
+
+1. In the completion callback, write the bytes to a **host** tempfile (a local, bounded disk write — fast) and `subprocess.Popen(..., start_new_session=True)` a small hop entrypoint, then return. No `wait`.
+2. The helper (`python -m hop <entrypoint> <host-tmpfile> <session-name> <write-path> <kitty-socket> <window-id>`) rebuilds the session/backend (as `hop.focused` already does from state), calls `backend.write_file(session, write_path, bytes)`, then `kitten @ --to <kitty-socket> send-text --match id:<window-id> --bracketed-paste=auto <write-path>`.
+3. `CommandBackend.write_file` gets a hard `timeout=` on its runner call (class constant, ~15 s) so a dead ssh master fails instead of hanging; `TimeoutExpired` → `SessionBackendError`.
+4. On any failure/timeout the helper sends a one-line error into the window instead (`send-text` or `kitten @ ... send-text`). A silently-dropped paste is the wrong default for a remote session where "laptop slept, link down" is routine.
+
+This keeps the boss involvement to one non-blocking `Popen`. It costs a short-lived helper process; that is the accepted trade (the original task floated exactly this — "a short detached helper (`subprocess.Popen`, no wait)").
+
+Alternative if a helper process is unwanted: a `threading.Thread` for the write, marshalling `send-text` back with `kitty.fast_data_types.add_timer(cb, 0, False)` + `wakeup_main_loop()` (the confirmed boss-loop primitives in 0.47). Rejected as the default because `add_timer`'s cross-thread-call safety isn't something this task can pin down, and the helper-process route has no such question.
 
 The path written and pasted is unchanged: `/tmp/hop-paste-<ns>.png` in the focused window's filesystem namespace (local write for host, base64 heredoc through `<noninteractive_prefix> sh` for container/ssh), then `send-text --bracketed-paste=auto <path>`.
 
@@ -54,9 +75,10 @@ The path written and pasted is unchanged: `/tmp/hop-paste-<ns>.png` in the focus
 
 1. `window = boss.window_id_map.get(target_window_id)`; return if `None`.
 2. Resolve the focused session + backend via `hop.focused.focused_session_and_backend()`. `None` → native `paste_from_clipboard`, return.
-3. Kick off an async in-process clipboard read for an image MIME (`image/png`, plus whatever kitty exposes for "is there an image"). Register a callback. Return from `handle_result` immediately — no blocking call remains on the boss.
-4. **Callback, image present:** spawn a worker thread that calls `hop.paste`'s materialize-and-paste helper with the bytes; the helper does `backend.write_file` then schedules `send-text` on the boss thread. On `SessionBackendError` / timeout, schedule an error line into the window.
-5. **Callback, no image:** native `paste_from_clipboard` (scheduled on the boss thread if the callback isn't already on it).
+3. Check `Clipboard(ClipboardType.clipboard).get_available_mime_types_for_paste()` for an image type. None → native `paste_from_clipboard`, return.
+4. Call `cb.get_mime("image/png", output)` where `output` appends non-empty chunks to a `bytearray` and, on `b""`, writes them to a host tempfile and `Popen`s the detached helper (§2). Return from `handle_result` immediately.
+
+`get_mime`'s `output` runs on the boss thread but only does a bounded local write + non-blocking `Popen` — no backend call, no wait.
 
 Keep the existing rotating-log-on-exception behaviour.
 
@@ -64,9 +86,20 @@ Keep the existing rotating-log-on-exception behaviour.
 
 `paste_clipboard_image` currently calls `clipboard_read()` itself and runs `write_file` + `send_text` inline. Split:
 
-- The clipboard read moves out (it's now kitty-async in the kitten).
-- Keep a testable synchronous core: given `session`, `backend`, `write_path`, `data: bytes`, `send_text`, it calls `backend.write_file(session, Path(write_path), data)` then `send_text(write_path)`. No kitty imports, no threads (the kitten owns threading). `write_file` errors propagate.
-- The `PasteOutcome` enum's `PASSTHROUGH` branch is subsumed by the kitten's "no image" callback path; drop it if nothing else needs it.
+- The clipboard read moves out (it's now kitty-in-process in the kitten).
+- Keep a testable synchronous core: given `session`, `backend`, `write_path`, `data: bytes`, `send_text`, it calls `backend.write_file(session, Path(write_path), data)` then `send_text(write_path)`. No kitty imports. `write_file` errors propagate to the caller (the helper entrypoint), which turns them into the in-window error line.
+- The `PasteOutcome` enum's `PASSTHROUGH` branch is subsumed by the kitten's "no image" path; drop it if nothing else needs it.
+
+### The detached helper — `hop/commands/` entrypoint (or a `hop/paste.py` `__main__` hook)
+
+A hidden hop entrypoint the kitten `Popen`s. Args: host tempfile, session name, write-path, kitty socket, window id. It:
+
+- loads the session from state and rebuilds the backend (same path `hop.focused` uses),
+- reads the tempfile, calls the `hop/paste.py` sync core with a `send_text` backed by `kitten @ --to <socket> send-text --match id:<id> --bracketed-paste=auto`,
+- on `SessionBackendError` (incl. the write timeout) sends a single error line to the window instead,
+- unlinks the tempfile.
+
+Runs entirely outside kitty; the kitten never waits on it.
 
 ### `hop/clipboard.py`
 
@@ -78,17 +111,18 @@ Keep the existing rotating-log-on-exception behaviour.
 
 ### `hop_spec.md`
 
-Update the "Clipboard paste" subsection: the read is kitty's in-process clipboard API (not `wl-paste`), the materialize + paste runs off the boss thread, a failed/timed-out write surfaces in the window, and the non-image case is a native passthrough.
+Update the "Clipboard paste" subsection: the read is kitty's in-process clipboard API (not `wl-paste`), the materialize + paste runs in a detached helper process off the boss thread, a failed/timed-out write surfaces in the window, and the non-image case is a native passthrough.
 
 ### Docs
 
-- `README.md` "System clipboard on non-host backends" / the kitten setup note: drop any implication that the host needs `wl-clipboard` for paste (the hints/open-selection path and anything else that still uses it keeps its own requirement; paste no longer does). State that paste uses kitty's in-process clipboard API and runs its backend write asynchronously.
+- `README.md` "System clipboard on non-host backends" / the kitten setup note: drop any implication that the host needs `wl-clipboard` for paste (the hints/open-selection path and anything else that still uses it keeps its own requirement; paste no longer does). State that paste uses kitty's in-process clipboard API and runs its backend write in a detached helper process.
 - `docs/ssh-devcontainer.md`, `docs/devcontainer.md`: adjust any `wl-clipboard`-for-paste mention; note the write can fail visibly on a dropped link.
 
 ## Files to change
 
-- `hop/kitten/paste/main.py` — async in-process clipboard read; worker thread for write + boss-scheduled `send-text`; visible failure.
+- `hop/kitten/paste/main.py` — `Clipboard.get_mime` in-process read; accumulate to a host tempfile; detached `Popen` of the helper; native passthrough when no image type is offered.
 - `hop/paste.py` — split out the clipboard read; keep a sync materialize-and-paste core; drop `PASSTHROUGH` if unused.
+- new helper entrypoint (`hop/commands/` or `hop/paste.py` `__main__`) — the detached process that does `backend.write_file` + `send-text` and the in-window error line.
 - `hop/clipboard.py` — remove or gut; it's no longer imported by the kitten.
 - `hop/backends.py` — `timeout=` on `CommandBackend.write_file`'s runner call; `TimeoutExpired` → `SessionBackendError`.
 - `hop_spec.md`, `README.md`, `docs/ssh-devcontainer.md`, `docs/devcontainer.md` — as under Design → Docs.
@@ -101,7 +135,8 @@ No mocks of hop's own code. External processes get the doubles the suite already
 - **`tests/test_backends.py`** — `CommandBackend.write_file`: fake runner that raises `subprocess.TimeoutExpired` → `SessionBackendError` naming the path; a slow-but-under-timeout runner still succeeds; the `timeout=` value is passed to the runner.
 - **`tests/test_clipboard.py`** — deleted if the module goes; otherwise trimmed to whatever survives.
 - **`tests/test_kitty.py`** — unchanged: the `--override map … kitten <…/hop/kitten/paste/main.py>` bindings and `clipboard_control` override still inject as before (bootstrap wiring is not what changes here).
-- Kitten-internal threading / boss-callback wiring: exercised through the manual verification below; the boss object and kitty's async clipboard API have no in-suite double, and adding one would be mocking kitty. If a seam is needed, make the materialize-and-paste core (already sync and kitty-free) the unit under test and keep the kitten body a thin adapter.
+- **helper entrypoint** — with a `FakeBackend`: happy path calls `write_file` then the `send_text` with the bracketed-paste path; `SessionBackendError` from `write_file` → the error-line `send_text` instead; the tempfile is unlinked either way.
+- Kitten body (`Clipboard.get_mime` callback, `Popen`): exercised through manual verification — the boss object and kitty's clipboard API have no in-suite double and faking them would be mocking kitty. The kitten stays a thin adapter over the tested sync core + helper.
 
 ## Manual verification (needs a real clipboard + display)
 
@@ -135,12 +170,12 @@ implement
 
 ## Definition of Done
 
-- `hop/kitten/paste/main.py`'s `handle_result` makes no blocking subprocess or blocking clipboard call on the boss thread. Copying from a window in a hop session and pasting into another window of the same session no longer freezes the kitty, for both text and image clipboards.
-- The clipboard read uses kitty's in-process clipboard API on `boss` (asynchronous for image bytes), not `wl-paste` and not `kitten clipboard`.
-- With an image on the clipboard, the kitten materializes it at `/tmp/hop-paste-<ns>.png` in the focused window's filesystem namespace via `backend.write_file` **on a worker thread**, then sends the path with `send-text --bracketed-paste=auto` marshalled back onto the boss thread. Verified against host, local container, remote container, and remote host sessions with the kitty staying responsive throughout.
-- A non-image clipboard results in kitty's native `paste_from_clipboard`; an empty clipboard is a no-op.
-- `CommandBackend.write_file` passes a `timeout=` to its runner call; a `subprocess.TimeoutExpired` becomes a `SessionBackendError` naming the path. A write failure or timeout is surfaced in the target window, not silently dropped — verified by killing a remote session's ssh ControlMaster mid-paste.
-- `hop/paste.py` exposes a kitty-free, thread-free synchronous core (bytes + backend + `write_path` + `send_text` → write then paste) that the kitten calls; `hop/clipboard.py` is removed or no longer imported by the kitten.
-- `hop_spec.md`, `README.md`, `docs/ssh-devcontainer.md`, and `docs/devcontainer.md` reflect the in-process read, the off-boss asynchronous write, and the visible-failure behaviour.
+- `hop/kitten/paste/main.py`'s `handle_result` (and any callback it registers) makes no blocking subprocess or blocking clipboard call on the boss thread. Copying from a window in a hop session and pasting into another window of the same session no longer freezes the kitty, for both text and image clipboards.
+- The clipboard read uses `kitty.clipboard.Clipboard(ClipboardType.clipboard).get_mime(...)` in-process, not `wl-paste` and not `kitten clipboard`. The `output` callback accumulates chunks and treats `b""` as end-of-stream.
+- With an image on the clipboard, the kitten writes the bytes to a host tempfile and `Popen`s a detached helper (`start_new_session=True`, no wait); the helper does `backend.write_file` at `/tmp/hop-paste-<ns>.png` in the focused window's filesystem namespace and then `send-text --bracketed-paste=auto <path>`. Verified against host, local container, remote container, and remote host sessions with the kitty staying responsive throughout.
+- A non-image clipboard (no image MIME in `get_available_mime_types_for_paste()`) results in kitty's native `paste_from_clipboard`; an empty clipboard is a no-op.
+- `CommandBackend.write_file` passes a `timeout=` to its runner call; a `subprocess.TimeoutExpired` becomes a `SessionBackendError` naming the path. A write failure or timeout is surfaced as a line in the target window by the helper, not silently dropped — verified by killing a remote session's ssh ControlMaster mid-paste.
+- `hop/paste.py` exposes a kitty-free synchronous core (bytes + backend + `write_path` + `send_text` → write then paste) that the helper calls; `hop/clipboard.py` is removed or no longer imported by the kitten.
+- `hop_spec.md`, `README.md`, `docs/ssh-devcontainer.md`, and `docs/devcontainer.md` reflect the in-process read, the detached-helper backend write, and the visible-failure behaviour.
 - New and updated tests follow the repo's no-mock conventions and pass under `make`.
 - `bunx dust lint` passes for this task file.
