@@ -1,12 +1,12 @@
 # ssh session backend
 
-> **The supported path is now `hop ssh <host>`** — see the usage guide at
+> **The supported path is `hop ssh <host>`** — see the usage guide at
 > **[docs/hop-ssh.md](hop-ssh.md)**. It sets up the ssh transport (ControlMaster,
 > the reverse-forwarded bridge socket, the installed shim) and drops you into a
 > remote shell where `cd <project> && hop` starts a session on the remote — the
 > project's own `.hop.toml` drives it, with no ssh in the recipe and no local
-> stub directory. This guide documents the underlying hand-wired recipe `hop ssh`
-> automates, and for setups it doesn't cover.
+> stub directory. This guide documents the hand-wired recipe `hop ssh` automates,
+> and covers setups `hop ssh` doesn't.
 
 This guide walks through running hop sessions whose files, shells, and editor live on a remote machine reached over ssh.
 
@@ -102,7 +102,7 @@ noninteractive_prefix = "ssh -o ControlPath=~/.ssh/cm-%r@%h:%p myhost"
 host_translate        = "echo myhost"
 ```
 
-What changed in `prepare`:
+The bridge-specific pieces of `prepare`:
 
 - **`-R /run/hop.sock:$XDG_RUNTIME_DIR/hop/api.sock`** — reverse-forwards the host's bridge socket to `/run/hop.sock` on the remote. The shim's default `HOP_SOCKET` is `/run/hop.sock`, so this needs no in-shim config.
 - **`-o StreamLocalBindUnlink=yes`** — tells the remote sshd to unlink any stale socket at the bind path before creating the new one. Without this, a second `ssh -R` after an unclean session leaves the prior socket and fails. Requires `StreamLocalBindUnlink=yes` to also be enabled in the remote `sshd_config` for SocketAddrPath bindings outside the user's runtime dir; if your sysadmin won't enable that, pick a per-user path like `$HOME/.hop-api.sock` on the remote and set `HOP_SOCKET` to match (e.g. via `~/.ssh/environment` or by exporting it from the shell's profile).
@@ -119,7 +119,7 @@ Verify:
 hop term --role editor
 ```
 
-Errors from the acceptor — `no focused Sway window`, `session 'X' from focused window is not in hop state`, etc. — go to the shim's stderr. The bridge requires you to be focused on the session's **editor** window when the call is made; calls from role terminals (test/server) are rejected pending a future enhancement.
+Errors from the acceptor — `no focused Sway window`, `session 'X' from focused window is not in hop state`, etc. — go to the shim's stderr. The acceptor resolves the target session from the focused Sway window, which must be on a hop session workspace (`p:<session>`); any window on that workspace qualifies — editor, shell, or a role terminal.
 
 ## Tradeoffs
 

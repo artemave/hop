@@ -190,7 +190,7 @@ The host's bridge socket lives at `$XDG_RUNTIME_DIR/hop/api.sock`. Pick one of t
         - "${XDG_RUNTIME_DIR}/hop:${XDG_RUNTIME_DIR}/hop"
   ```
 
-  Then pass `--socket "$XDG_RUNTIME_DIR/hop/api.sock"` to `hop bridge shim` (see **c** below). A whole-`${XDG_RUNTIME_DIR}` mount also works but exposes far more than needed — and hop no longer needs the host Wayland socket in the container (image paste reads the clipboard host-side; see [the paste kitten](../README.md#special-windows)).
+  Then pass `--socket "$XDG_RUNTIME_DIR/hop/api.sock"` to `hop bridge shim` (see **c** below). A whole-`${XDG_RUNTIME_DIR}` mount also works but exposes far more than needed; the container needs only the bridge socket.
 - **Minimal: a single-file mount** of just the socket:
 
   ```yaml
@@ -247,7 +247,7 @@ hop term --role editor
 
 It should focus your host editor window (a no-op if you're already on it, otherwise switching to the session's Sway workspace). Errors from the acceptor — `no focused Sway window`, `session 'X' from focused window is not in hop state`, etc. — go to the shim's stderr.
 
-The bridge currently requires you to be focused on the session's **editor** window when the call is made. Bridge calls from kitty role terminals (test/server/console) are rejected; that's a future enhancement.
+The acceptor resolves the target session from the focused Sway window, which must be on the session's Sway workspace (`p:<session>`). Any window on that workspace qualifies — the editor or a role terminal (test/server/console).
 
 ## Project config
 

@@ -1,12 +1,12 @@
 # ssh + container session backend
 
-> **The supported path is now `hop ssh <host>`** — see the usage guide at
+> **The supported path is `hop ssh <host>`** — see the usage guide at
 > **[docs/hop-ssh.md](hop-ssh.md)**. With it, the project's own portable
 > `.hop.toml` (the plain [devcontainer](devcontainer.md) recipe) runs a local *or*
 > remote container with no second config and no ssh in the recipe: `hop ssh devbox`,
 > then `cd <project> && hop`. hop wraps the recipe in the ssh transport for you.
-> This guide remains the rationale — it shows, by hand, the transport, quoting,
-> PATH, bridge, clipboard, and translation concerns that `hop ssh` now owns.
+> This guide is the rationale — it shows, by hand, the transport, quoting,
+> PATH, bridge, clipboard, and translation concerns `hop ssh` handles.
 
 A worked guide to running a hop session whose dev container lives on a **remote**
 machine reached over ssh — the GUI (kitty/Sway) on your laptop, the container on
@@ -94,19 +94,18 @@ that socket lives on the laptop.
 shell re-parses it. One quote level is lost in transit. This breaks any command
 that relies on nested quoting.
 
-- **Window commands.** No longer a hazard. Role commands are typed into the shell
+- **Window commands are unaffected.** Role commands are typed into the shell
   (not composed into the launch), and hop launches the shell login-wrapped with a
   base64 `exec "$SHELL" -lc "$(… base64 -d)"` — a single flatten-safe token that
   nests cleanly inside the ssh transport's own base64 wrapper (a login shell on the
   remote host, then a login shell in the container, mise/asdf active). So
   `command = "bin/dev"` just works over ssh — no manual `$SHELL -lc` / `zsh -lc "'…'"`
   quoting dance.
-- **Hop's own path checks.** `paths_exist`/`read_file` used to compose
-  `<noninteractive_prefix> sh -c '<script>'`, which hit the same wall — the
-  open-selection kitten failed with `zsh:1: parse error near 'do'`. Hop now pipes
-  the script over stdin to a bare `sh` (a single token that survives flattening),
-  with paths inlined. This is the one place ssh support required a hop code change
-  rather than a recipe tweak.
+- **Hop's own path checks.** `paths_exist`/`read_file` pipe their script over stdin
+  to a bare `sh` — a single token that survives flattening — with paths inlined,
+  rather than composing `<noninteractive_prefix> sh -c '<script>'` (which the remote
+  shell re-parses and chokes on: `zsh:1: parse error near 'do'`). This is the one
+  place ssh support lives in hop's code rather than in a recipe.
 
 ### 3. The non-login ssh PATH
 
@@ -145,7 +144,7 @@ works.
 
 If your overlay only mounts `${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY}` for
 clipboard integration, you can drop that mount (and the stub) entirely: image
-paste is now <kbd>Ctrl-V</kbd> → hop's paste kitten, which reads the clipboard
+paste is <kbd>Ctrl-V</kbd> → hop's paste kitten, which reads the clipboard
 on the *host* and pushes the file into the container over the backend command
 channel — no compositor socket in the container. Narrow the runtime-dir mount
 to just `${XDG_RUNTIME_DIR}/hop/` (it only needs to carry the bridge socket).
