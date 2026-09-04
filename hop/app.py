@@ -6,6 +6,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Protocol, Sequence
 
+from hop import trust, trust_prompt
 from hop.backends import (
     CommandBackend,
     CommandRunner,
@@ -36,6 +37,7 @@ from hop.commands import (
     SwitchSessionCommand,
     TailCommand,
     TermCommand,
+    TrustCommand,
 )
 from hop.commands.browser import focus_browser
 from hop.commands.kill import kill_session
@@ -52,15 +54,16 @@ from hop.commands.session import (
 from hop.commands.ssh import run_hop_ssh
 from hop.commands.tail import tail_command
 from hop.commands.term import focus_terminal
+from hop.commands.trust import trust_command
 from hop.config import (
     PROJECT_CONFIG_FILE,
     HopConfig,
     load_global_config,
-    load_project_config,
     merge_configs,
     parse_project_config_text,
 )
 from hop.editor import SharedNeovimEditorAdapter
+from hop.errors import HopError, ProjectConfigUntrusted
 from hop.kitty import (
     KittyRemoteControlAdapter,
     KittyWindow,
@@ -163,6 +166,7 @@ class SessionBackendRegistry:
         self._sessions_loader = sessions_loader
         self._runner = runner
         self._overrides: dict[str, SessionBackend] = {}
+        self._pending_project_config_text: dict[str, str | None] = {}
 
     def for_session(self, session: ProjectSession) -> SessionBackend:
         override = self._overrides.get(session.session_name)
@@ -199,7 +203,7 @@ class SessionBackendRegistry:
             if persisted is not None:
                 return _backend_from_record(persisted.backend, session_root=persisted.session_root)
 
-        configured = self._merged_config(session).backends
+        configured = self._merged_config_fresh(session).backends
 
         runner = self._runner if self._runner is not None else default_runner
         interactive_transport, noninteractive_transport, host = _transports_for(session)
@@ -275,26 +279,62 @@ class SessionBackendRegistry:
         project_config = self._load_project_config(session)
         return merge_configs(project_config, global_config)
 
+    def _merged_config_fresh(self, session: ProjectSession) -> HopConfig:
+        global_config = self._global_config_loader()
+        project_config = self._load_project_config_fresh(session)
+        return merge_configs(project_config, global_config)
+
     def _load_project_config(self, session: ProjectSession) -> HopConfig:
+        persisted = self._sessions_loader().get(session.session_name)
+        if persisted is None:
+            return self._load_project_config_fresh(session)
+        text = persisted.backend.project_config_toml
+        if text is None:
+            return HopConfig()
+        source = Path(f"{session.session_name} (trusted snapshot)")
+        return parse_project_config_text(text, source=source)
+
+    def _load_project_config_fresh(self, session: ProjectSession) -> HopConfig:
         host = session.host
         if host is None:
-            return load_project_config(session.session_root)
-        # Remote session: there is no local `.hop.toml` — fetch it from the
-        # remote over the transport and parse the bytes in memory.
-        runner = self._runner if self._runner is not None else default_runner
-        transport = SshTransport(host, str(session.session_root), interactive=False)
-        argv = transport(f"cat {PROJECT_CONFIG_FILE}")
-        result = runner(argv, Path.home())
-        if result.returncode != 0:
-            return HopConfig()
-        source = Path(f"{host}:{session.session_root}") / PROJECT_CONFIG_FILE
-        return parse_project_config_text(result.stdout, source=source)
+            path = Path(session.session_root) / PROJECT_CONFIG_FILE
+            if not path.is_file():
+                self._pending_project_config_text[session.session_name] = None
+                return HopConfig()
+            text = path.read_text()
+            source = path
+        else:
+            # Remote session: there is no local `.hop.toml` — fetch it from
+            # the remote over the transport and parse the bytes in memory.
+            runner = self._runner if self._runner is not None else default_runner
+            transport = SshTransport(host, str(session.session_root), interactive=False)
+            argv = transport(f"cat {PROJECT_CONFIG_FILE}")
+            result = runner(argv, Path.home())
+            if result.returncode != 0:
+                self._pending_project_config_text[session.session_name] = None
+                return HopConfig()
+            text = result.stdout
+            source = Path(f"{host}:{session.session_root}") / PROJECT_CONFIG_FILE
+
+        config_path = str(source)
+        if not trust.is_trusted(config_path, text):
+            raise ProjectConfigUntrusted(config_path, text)
+
+        self._pending_project_config_text[session.session_name] = text
+        return parse_project_config_text(text, source=source)
 
     def set_override(self, session_name: str, backend: SessionBackend) -> None:
         self._overrides[session_name] = backend
 
     def clear_override(self, session_name: str) -> None:
         self._overrides.pop(session_name, None)
+
+    def persist_bootstrap_record(self, session: ProjectSession, backend: SessionBackend) -> None:
+        record = replace(
+            _record_for_backend(backend),
+            project_config_toml=self._pending_project_config_text.pop(session.session_name, None),
+        )
+        record_session(session, backend=record)
 
 
 def _transports(host: str | None, remote_cwd: str) -> tuple[Transport, Transport, str | None]:
@@ -377,6 +417,67 @@ class HopServices:
     popup: HopPopup
 
 
+def _enter_or_recreate_session(
+    session: ProjectSession,
+    *,
+    backend_name: str | None,
+    kitty_alive: bool,
+    current_directory: Path,
+    services: HopServices,
+) -> None:
+    """First entry creates both shell and editor; re-entry from another
+    workspace just switches and ensures the shell — we don't second-guess a
+    deliberately-closed editor on every `hop`. "First entry" is gated on the
+    session's kitty being unreachable, not on the persisted state file
+    existing: a state file outlives the kitty process when the user closes
+    windows manually, the wm crashes, or the machine reboots, and we want
+    every cold bootstrap to run the full activation sweep regardless of
+    whether the file is stale on disk. This also fires when we *are* focused
+    on `p:<session>` but kitty is dead — typically after `hop kill` leaves us
+    on the (now-empty) workspace — so recreating the session from there gets
+    the same full bootstrap as recreating it from elsewhere.
+    """
+    is_first_entry = not kitty_alive
+    # Headless first-entry takes a different path: the popup runs prepare
+    # with a visible UI, but it can't do that *after* `resolve_for_entry` has
+    # already prepared inline — so we skip the inline prepare, switch
+    # workspace eagerly (so the popup lands on `p:<session>` rather than the
+    # user's previous workspace), then dispatch the popup. Re-entry doesn't
+    # run prepare in either branch, so the headless path only matters when
+    # kitty isn't alive.
+    headless_first_entry = is_first_entry and not services.popup.is_interactive()
+    backend = services.session_backends.resolve_for_entry(
+        session,
+        backend_name=backend_name,
+        kitty_alive=kitty_alive,
+        skip_prepare=headless_first_entry,
+    )
+    if headless_first_entry:
+        services.sway.switch_to_workspace(session.workspace_name)
+        services.popup.run_prepare(session, backend)
+        # The popup-driven prepare just brought the backend up; probe the
+        # workspace path now so it lands in the persisted record (and the
+        # open-selection kitten has a fallback base cwd when OSC 7 isn't
+        # being emitted).
+        backend = services.session_backends.probe_workspace_path(session, backend)
+    services.session_backends.set_override(session.session_name, backend)
+    try:
+        windows = services.session_backends.resolve_windows_for_entry(session) if is_first_entry else ()
+        workspace_layout = services.session_backends.workspace_layout_for_entry(session) if is_first_entry else None
+        enter_project_session(
+            current_directory,
+            sway=services.sway,
+            terminals=services.kitty,
+            first_entry=is_first_entry,
+            browser=services.browser if is_first_entry else None,
+            windows=windows,
+            workspace_layout=workspace_layout,
+            session=session,
+        )
+    finally:
+        services.session_backends.clear_override(session.session_name)
+
+
 def execute_command(
     command: Command,
     *,
@@ -401,62 +502,30 @@ def execute_command(
                     session=session,
                 )
             else:
-                # First entry creates both shell and editor; re-entry from
-                # another workspace just switches and ensures the shell —
-                # we don't second-guess a deliberately-closed editor on
-                # every `hop`. "First entry" is gated on the session's
-                # kitty being unreachable, not on the persisted state file
-                # existing: a state file outlives the kitty process when
-                # the user closes windows manually, the wm crashes, or the
-                # machine reboots, and we want every cold bootstrap to run
-                # the full activation sweep regardless of whether the file
-                # is stale on disk. This branch also fires when we *are*
-                # focused on `p:<session>` but kitty is dead — typically
-                # after `hop kill` leaves us on the (now-empty) workspace
-                # — so recreating the session from there gets the same
-                # full bootstrap as recreating it from elsewhere.
-                is_first_entry = not kitty_alive
-                # Headless first-entry takes a different path: the popup
-                # runs prepare with a visible UI, but it can't do that
-                # *after* `resolve_for_entry` has already prepared inline
-                # — so we skip the inline prepare, switch workspace
-                # eagerly (so the popup lands on `p:<session>` rather
-                # than the user's previous workspace), then dispatch the
-                # popup. Re-entry doesn't run prepare in either branch, so
-                # the headless path only matters when kitty isn't alive.
-                headless_first_entry = is_first_entry and not services.popup.is_interactive()
-                backend = services.session_backends.resolve_for_entry(
-                    session,
-                    backend_name=backend_name,
-                    kitty_alive=kitty_alive,
-                    skip_prepare=headless_first_entry,
-                )
-                if headless_first_entry:
-                    services.sway.switch_to_workspace(session.workspace_name)
-                    services.popup.run_prepare(session, backend)
-                    # The popup-driven prepare just brought the backend up;
-                    # probe the workspace path now so it lands in the
-                    # persisted record (and the open-selection kitten has a
-                    # fallback base cwd when OSC 7 isn't being emitted).
-                    backend = services.session_backends.probe_workspace_path(session, backend)
-                services.session_backends.set_override(session.session_name, backend)
                 try:
-                    windows = services.session_backends.resolve_windows_for_entry(session) if is_first_entry else ()
-                    workspace_layout = (
-                        services.session_backends.workspace_layout_for_entry(session) if is_first_entry else None
+                    _enter_or_recreate_session(
+                        session,
+                        backend_name=backend_name,
+                        kitty_alive=kitty_alive,
+                        current_directory=current_directory,
+                        services=services,
                     )
-                    enter_project_session(
-                        current_directory,
-                        sway=services.sway,
-                        terminals=services.kitty,
-                        first_entry=is_first_entry,
-                        browser=services.browser if is_first_entry else None,
-                        windows=windows,
-                        workspace_layout=workspace_layout,
-                        session=session,
+                except ProjectConfigUntrusted as untrusted:
+                    if services.popup.is_interactive():
+                        trusted = trust_prompt.ask(untrusted.config_path, untrusted.content)
+                    else:
+                        trusted = services.popup.run_trust_prompt(session, untrusted.config_path, untrusted.content)
+                    if not trusted:
+                        msg = f"{untrusted.config_path} not trusted; aborted."
+                        raise HopError(msg, surfaced_by_popup=not services.popup.is_interactive()) from None
+                    trust.record(untrusted.config_path, untrusted.content)
+                    _enter_or_recreate_session(
+                        session,
+                        backend_name=backend_name,
+                        kitty_alive=kitty_alive,
+                        current_directory=current_directory,
+                        services=services,
                     )
-                finally:
-                    services.session_backends.clear_override(session.session_name)
         case SwitchSessionCommand(session_name=session_name):
             switch_session(session_name, sway=services.sway)
         case MoveCommand(session_name=session_name):
@@ -538,15 +607,13 @@ def execute_command(
             print(resolve_asset_path(name))
         case SshCommand(host=host):
             run_hop_ssh(host)
+        case TrustCommand(mode=mode, path=path):
+            print(trust_command(current_directory, mode=mode, path=path))
         case _:
             msg = f"Unsupported command {command!r}"
             raise ValueError(msg)
 
     return 0
-
-
-def _persist_bootstrap_record(session: ProjectSession, backend: SessionBackend) -> None:
-    record_session(session, backend=_record_for_backend(backend))
 
 
 def build_default_services() -> HopServices:
@@ -555,7 +622,7 @@ def build_default_services() -> HopServices:
     kitty = KittyRemoteControlAdapter(
         session_backend_for=registry.for_session,
         session_windows_for=registry.resolve_windows_for_entry,
-        on_session_bootstrap=_persist_bootstrap_record,
+        on_session_bootstrap=registry.persist_bootstrap_record,
         sway=sway,
         extra_overrides_for=registry.session_kitty_overrides_for_entry,
     )
@@ -587,7 +654,7 @@ def build_kitten_services(boss: object) -> HopServices:
     kitty = KittyRemoteControlAdapter(
         session_backend_for=registry.for_session,
         session_windows_for=registry.resolve_windows_for_entry,
-        on_session_bootstrap=_persist_bootstrap_record,
+        on_session_bootstrap=registry.persist_bootstrap_record,
         sway=sway,
         extra_overrides_for=registry.session_kitty_overrides_for_entry,
     )

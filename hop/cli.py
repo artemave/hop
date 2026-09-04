@@ -23,6 +23,7 @@ from hop.commands import (
     SwitchSessionCommand,
     TailCommand,
     TermCommand,
+    TrustCommand,
 )
 from hop.commands.run import DEFAULT_RUN_ROLE
 from hop.config import load_global_config
@@ -86,6 +87,26 @@ def build_parser() -> argparse.ArgumentParser:
     )
     ssh_parser.add_argument("host")
 
+    trust_parser = subparsers.add_parser(
+        "trust",
+        help="Trust the current directory's .hop.toml so hop will run its commands.",
+    )
+    trust_group = trust_parser.add_mutually_exclusive_group()
+    trust_group.add_argument(
+        "--list",
+        action="store_true",
+        dest="trust_list",
+        help="List trusted .hop.toml files.",
+    )
+    trust_group.add_argument(
+        "--revoke",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="PATH",
+        help="Revoke trust for the current directory's .hop.toml, or an explicit PATH.",
+    )
+
     bridge_parser = subparsers.add_parser("bridge")
     bridge_subparsers = bridge_parser.add_subparsers(dest="bridge_command", required=True)
     bridge_shim_parser = bridge_subparsers.add_parser("shim", help="Print the POSIX-sh bridge client to stdout.")
@@ -148,6 +169,12 @@ def parse_command(argv: Sequence[str] | None = None) -> Command:
             return PathCommand(name=namespace.name)
         case "ssh":
             return SshCommand(host=namespace.host)
+        case "trust":
+            if namespace.trust_list:
+                return TrustCommand(mode="list")
+            if namespace.revoke is not None:
+                return TrustCommand(mode="revoke", path=namespace.revoke or None)
+            return TrustCommand(mode="trust")
         case command_name:
             msg = f"Unsupported command {command_name!r}"
             raise ValueError(msg)
@@ -172,6 +199,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         from hop.paste import run_paste_helper
 
         return run_paste_helper(session_name=args[1], write_path=args[2], mime=args[3])
+
+    if args[:1] == ["__trust-prompt"]:
+        from hop import trust_prompt
+
+        config_path = args[1]
+        content = Path(args[2]).read_text()
+        return 0 if trust_prompt.ask(config_path, content) else 1
 
     command = parse_command(argv)
     _warn_if_hopd_version_stale()

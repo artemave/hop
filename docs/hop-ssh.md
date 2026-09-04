@@ -43,7 +43,11 @@ cd ~/projects/myapp && hop
 ## Configuration
 
 The repo's `.hop.toml` (or your global `~/.config/hop/config.toml`) is the single
-source of truth. Prefixes are identical local and remote:
+source of truth. Prefixes are identical local and remote. The remote `.hop.toml`
+is fetched and gated the same way as a local one — see
+[Trusting `.hop.toml`](../README.md#trusting-hoptoml) — the trust prompt shows up
+on your laptop (where hopd runs), keyed on `<host>:<path>` so it's distinct from
+a same-named local project.
 
 ```toml
 [backends.devcontainer]

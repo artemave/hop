@@ -16,6 +16,7 @@ from hop.popup import (
     _hold_shell,  # pyright: ignore[reportPrivateUsage]
     _lifecycle_spec,  # pyright: ignore[reportPrivateUsage]
     run_popup_lifecycle,
+    trust_prompt_content_path,
 )
 from hop.session import ProjectSession
 from hop.sway import SwayWindow
@@ -549,3 +550,47 @@ def test_default_launcher_spawns_subprocess_and_returns_popen() -> None:
 
     proc_err = _default_launcher(["sh", "-c", "exit 7"])
     assert proc_err.wait() == 7
+
+
+def test_run_trust_prompt_stages_content_and_launches_entrypoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    launcher = _RecordingLauncher(exit_code=0)
+    popup = KittyHopPopup(launcher=launcher)
+    session = _make_session(tmp_path)
+
+    trusted = popup.run_trust_prompt(session, "/proj/.hop.toml", 'activate = "true"\n')
+
+    assert trusted is True
+    assert len(launcher.calls) == 1
+    argv = launcher.calls[0]
+    assert argv[0] == "kitty"
+    assert argv[argv.index("--class") + 1] == POPUP_APP_ID
+    assert argv[-6:-4] == (sys.executable, "-m")
+    content_path = trust_prompt_content_path(session)
+    assert argv[-1] == str(content_path)
+    assert content_path.read_text() == 'activate = "true"\n'
+
+
+def test_run_trust_prompt_passes_config_path_as_argument(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    launcher = _RecordingLauncher(exit_code=0)
+    popup = KittyHopPopup(launcher=launcher)
+    session = _make_session(tmp_path)
+
+    popup.run_trust_prompt(session, "/proj/.hop.toml", "content")
+
+    argv = launcher.calls[0]
+    assert argv[argv.index("__trust-prompt") + 1] == "/proj/.hop.toml"
+
+
+def test_run_trust_prompt_false_on_non_zero_exit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    launcher = _RecordingLauncher(exit_code=1)
+    popup = KittyHopPopup(launcher=launcher)
+    session = _make_session(tmp_path)
+
+    trusted = popup.run_trust_prompt(session, "/proj/.hop.toml", "content")
+
+    assert trusted is False

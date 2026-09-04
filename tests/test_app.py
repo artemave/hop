@@ -25,6 +25,7 @@ from hop.commands import (
     SwitchSessionCommand,
     TailCommand,
     TermCommand,
+    TrustCommand,
 )
 from hop.config import BackendConfig, HopConfig
 from hop.errors import HopError
@@ -179,13 +180,16 @@ class StubHopPopup:
         is_interactive: bool = True,
         prepare_raises: BaseException | None = None,
         teardown_raises: BaseException | None = None,
+        trust_prompt_result: bool = True,
     ) -> None:
         self._is_interactive = is_interactive
         self._prepare_raises = prepare_raises
         self._teardown_raises = teardown_raises
+        self._trust_prompt_result = trust_prompt_result
         self.prepare_calls: list[tuple[str, str | None]] = []
         self.teardown_calls: list[tuple[str, str | None]] = []
         self.shown_errors: list[HopError] = []
+        self.trust_prompt_calls: list[tuple[str, str, str]] = []
 
     def is_interactive(self) -> bool:
         return self._is_interactive
@@ -202,6 +206,10 @@ class StubHopPopup:
 
     def show_error(self, error: HopError) -> None:
         self.shown_errors.append(error)
+
+    def run_trust_prompt(self, session: ProjectSession, config_path: str, content: str) -> bool:
+        self.trust_prompt_calls.append((session.session_name, config_path, content))
+        return self._trust_prompt_result
 
 
 @dataclass
@@ -349,6 +357,100 @@ def test_execute_command_enters_project_session_and_bootstraps_shell(tmp_path: P
         ("src", "shell", nested_directory.resolve()),
         ("src", "editor", nested_directory.resolve()),
     ]
+
+
+def test_execute_command_interactive_trust_prompt_records_and_retries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from hop import trust
+    from hop import trust_prompt as trust_prompt_module
+
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
+    config_path = session_root / ".hop.toml"
+    config_path.write_text('workspace_layout = "tabbed"\n')
+
+    asked: list[tuple[str, str]] = []
+
+    def fake_ask(config_path_arg: str, content_arg: str, **_: object) -> bool:
+        asked.append((config_path_arg, content_arg))
+        return True
+
+    monkeypatch.setattr(trust_prompt_module, "ask", fake_ask)
+
+    services = build_services()
+    services.popup = StubHopPopup(is_interactive=True)
+
+    assert execute_command(EnterSessionCommand(), cwd=session_root, services=services.as_services()) == 0
+
+    assert asked == [(str(config_path), 'workspace_layout = "tabbed"\n')]
+    assert trust.is_trusted(str(config_path), 'workspace_layout = "tabbed"\n') is True
+    assert services.sway.switched_workspaces == [f"p:{session_root.name}"]
+
+
+def test_execute_command_interactive_trust_prompt_aborts_without_recording(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from hop import trust
+    from hop import trust_prompt as trust_prompt_module
+
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
+    config_path = session_root / ".hop.toml"
+    config_path.write_text('workspace_layout = "tabbed"\n')
+
+    def fake_ask(config_path_arg: str, content_arg: str, **_: object) -> bool:
+        return False
+
+    monkeypatch.setattr(trust_prompt_module, "ask", fake_ask)
+
+    services = build_services()
+    services.popup = StubHopPopup(is_interactive=True)
+
+    with pytest.raises(HopError) as excinfo:
+        execute_command(EnterSessionCommand(), cwd=session_root, services=services.as_services())
+
+    assert str(config_path) in str(excinfo.value)
+    assert excinfo.value.surfaced_by_popup is False
+    assert trust.is_trusted(str(config_path), 'workspace_layout = "tabbed"\n') is False
+    assert services.sway.switched_workspaces == []
+
+
+def test_execute_command_headless_trust_prompt_uses_popup_and_retries(tmp_path: Path) -> None:
+    from hop import trust
+
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
+    config_path = session_root / ".hop.toml"
+    config_path.write_text('workspace_layout = "tabbed"\n')
+
+    services = build_services()
+    popup = StubHopPopup(is_interactive=False, trust_prompt_result=True)
+    services.popup = popup
+
+    assert execute_command(EnterSessionCommand(), cwd=session_root, services=services.as_services()) == 0
+
+    assert popup.trust_prompt_calls == [(session_root.name, str(config_path), 'workspace_layout = "tabbed"\n')]
+    assert trust.is_trusted(str(config_path), 'workspace_layout = "tabbed"\n') is True
+    assert services.sway.switched_workspaces == [f"p:{session_root.name}"]
+
+
+def test_execute_command_headless_trust_prompt_abort_is_surfaced_by_popup(tmp_path: Path) -> None:
+    from hop import trust
+
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
+    config_path = session_root / ".hop.toml"
+    config_path.write_text('workspace_layout = "tabbed"\n')
+
+    services = build_services()
+    services.popup = StubHopPopup(is_interactive=False, trust_prompt_result=False)
+
+    with pytest.raises(HopError) as excinfo:
+        execute_command(EnterSessionCommand(), cwd=session_root, services=services.as_services())
+
+    assert excinfo.value.surfaced_by_popup is True
+    assert trust.is_trusted(str(config_path), 'workspace_layout = "tabbed"\n') is False
 
 
 def test_execute_command_spawns_extra_shell_when_focused_on_session_workspace(tmp_path: Path) -> None:
@@ -1221,6 +1323,29 @@ def _make_session(session_root: Path) -> ProjectSession:
     )
 
 
+def test_load_project_config_reads_from_the_frozen_snapshot_when_a_record_exists(tmp_path: Path) -> None:
+    from hop.app import SessionBackendRegistry
+    from hop.state import CommandBackendRecord, SessionState
+
+    session = _make_session(tmp_path)
+    (tmp_path / ".hop.toml").write_text('workspace_layout = "stacking"\n')
+    persisted = {
+        session.session_name: SessionState(
+            name=session.session_name,
+            session_root=tmp_path,
+            backend=CommandBackendRecord(
+                name="host",
+                interactive_prefix="",
+                noninteractive_prefix="",
+                project_config_toml='workspace_layout = "tabbed"\n',
+            ),
+        )
+    }
+    registry = SessionBackendRegistry(global_config_loader=lambda: HopConfig(), sessions_loader=lambda: persisted)
+
+    assert registry.workspace_layout_for_entry(session) == "tabbed"
+
+
 def test_registry_session_kitty_overrides_for_entry_uses_merged_config(tmp_path: Path) -> None:
     from hop.app import SessionBackendRegistry
 
@@ -1392,6 +1517,7 @@ def test_session_base_registry_project_override_can_flip_autodetect(tmp_path: Pa
     """
     import subprocess
 
+    from hop import trust
     from hop.app import SessionBackendRegistry
 
     # Two backends, both with activate probes that *would* succeed (test -e .).
@@ -1413,12 +1539,12 @@ def test_session_base_registry_project_override_can_flip_autodetect(tmp_path: Pa
     )
 
     # Project disables primary by overriding its activate probe to false.
-    (tmp_path / ".hop.toml").write_text(
-        """
+    project_config_toml = """
 [backends.primary]
 activate = "false"
-""",
-    )
+"""
+    (tmp_path / ".hop.toml").write_text(project_config_toml)
+    trust.record(str(tmp_path / ".hop.toml"), project_config_toml)
 
     def runner(args: Sequence[str], cwd: Path, *, stdin: str | None = None) -> subprocess.CompletedProcess[str]:
         # Activate probes go through `sh -c <command>`. Match on the substituted
@@ -1446,16 +1572,17 @@ def test_session_backend_registry_uses_project_only_backend_definition(tmp_path:
     """
     import subprocess
 
+    from hop import trust
     from hop.app import SessionBackendRegistry
 
-    (tmp_path / ".hop.toml").write_text(
-        """
+    project_config_toml = """
 [backends.project-only]
 activate                      = "true"
 interactive_prefix                = "my-prefix"
 noninteractive_prefix = "my-prefix"
-""",
-    )
+"""
+    (tmp_path / ".hop.toml").write_text(project_config_toml)
+    trust.record(str(tmp_path / ".hop.toml"), project_config_toml)
 
     def runner(args: Sequence[str], cwd: Path, *, stdin: str | None = None) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(args=list(args), returncode=0, stdout="", stderr="")
@@ -1479,16 +1606,17 @@ def test_session_backend_registry_project_only_backend_wins_autodetect(tmp_path:
     """
     import subprocess
 
+    from hop import trust
     from hop.app import SessionBackendRegistry
 
-    (tmp_path / ".hop.toml").write_text(
-        """
+    project_config_toml = """
 [backends.project-only]
 activate                      = "true"
 interactive_prefix                = "my-prefix"
 noninteractive_prefix = "my-prefix"
-""",
-    )
+"""
+    (tmp_path / ".hop.toml").write_text(project_config_toml)
+    trust.record(str(tmp_path / ".hop.toml"), project_config_toml)
 
     def runner(args: Sequence[str], cwd: Path, *, stdin: str | None = None) -> subprocess.CompletedProcess[str]:
         if args == ("sh", "-c", "true"):
@@ -1617,7 +1745,7 @@ def test_record_for_backend_round_trips_command_backend(tmp_path: Path) -> None:
 
 
 def test_persist_bootstrap_record_writes_session_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from hop.app import _persist_bootstrap_record  # pyright: ignore[reportPrivateUsage]
+    from hop.app import SessionBackendRegistry
 
     monkeypatch.setenv("HOP_SESSIONS_DIR", str(tmp_path / "sessions"))
     session = ProjectSession(
@@ -1631,11 +1759,38 @@ def test_persist_bootstrap_record_writes_session_state(tmp_path: Path, monkeypat
         noninteractive_prefix="compose exec -T devcontainer",
     )
 
-    _persist_bootstrap_record(session, backend)
+    SessionBackendRegistry().persist_bootstrap_record(session, backend)
 
     payload = json.loads((tmp_path / "sessions" / "bootstrap.json").read_text())
     assert payload["backend"]["type"] == "command"
     assert payload["backend"]["name"] == "devcontainer"
+    assert "project_config_toml" not in payload["backend"]
+
+
+def test_persist_bootstrap_record_freezes_the_pending_project_config_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from hop.app import SessionBackendRegistry
+
+    monkeypatch.setenv("HOP_SESSIONS_DIR", str(tmp_path / "sessions"))
+    session = ProjectSession(
+        session_root=tmp_path,
+        session_name="bootstrap",
+        workspace_name="p:bootstrap",
+    )
+    backend = CommandBackend(name="host", interactive_prefix="", noninteractive_prefix="")
+    registry = SessionBackendRegistry()
+    registry._pending_project_config_text[session.session_name] = (  # pyright: ignore[reportPrivateUsage]
+        'activate = "true"\n'
+    )
+
+    registry.persist_bootstrap_record(session, backend)
+
+    payload = json.loads((tmp_path / "sessions" / "bootstrap.json").read_text())
+    assert payload["backend"]["project_config_toml"] == 'activate = "true"\n'
+    assert (
+        session.session_name not in registry._pending_project_config_text  # pyright: ignore[reportPrivateUsage]
+    )
 
 
 def test_build_default_services_returns_real_adapters(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1770,6 +1925,22 @@ def test_execute_bridge_shim_bakes_socket_flag_into_default(tmp_path: Path, caps
     assert custom_socket in captured.out
     assert "/run/hop.sock" not in captured.out
     assert captured.err == ""
+
+
+def test_execute_trust_command_prints_trust_command_result(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    from hop import trust
+
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
+    (session_root / ".hop.toml").write_text('activate = "true"\n')
+    services = build_services().as_services()
+
+    rc = execute_command(TrustCommand(mode="trust"), cwd=session_root, services=services)
+
+    assert rc == 0
+    config_path = str(session_root / ".hop.toml")
+    assert config_path in capsys.readouterr().out
+    assert trust.is_trusted(config_path, 'activate = "true"\n') is True
 
 
 def test_execute_path_prints_kitten_main_py(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

@@ -112,6 +112,9 @@ class _InteractivePopup:
     def show_error(self, *_args: object, **_kwargs: object) -> None:  # pragma: no cover - unused
         return None
 
+    def run_trust_prompt(self, *_args: object, **_kwargs: object) -> bool:  # pragma: no cover - unused
+        return True
+
 
 @dataclass
 class StubHopServices:

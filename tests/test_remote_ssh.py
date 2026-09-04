@@ -328,6 +328,10 @@ def test_remote_session_from_env_is_none_without_both_vars(monkeypatch: pytest.M
 
 
 def test_registry_fetches_remote_config_over_the_transport() -> None:
+    from hop import trust
+
+    trust.record("devbox:/home/u/thonon-les-pains/.hop.toml", 'workspace_layout = "tabbed"\n')
+
     def runner(args: Sequence[str], cwd: Path, *, stdin: str | None = None) -> CompletedProcess[str]:
         assert args[0] == "ssh"
         return CompletedProcess(args=list(args), returncode=0, stdout='workspace_layout = "tabbed"\n', stderr="")

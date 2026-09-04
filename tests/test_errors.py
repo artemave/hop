@@ -1,5 +1,5 @@
 from hop.backends import SessionBackendError, UnknownBackendError
-from hop.errors import HopError
+from hop.errors import HopError, ProjectConfigUntrusted
 
 
 def test_hoperror_defaults_surfaced_by_popup_to_false() -> None:
@@ -28,3 +28,12 @@ def test_unknown_backend_error_inherits_kwarg() -> None:
 
     assert isinstance(error, HopError)
     assert error.surfaced_by_popup is False
+
+
+def test_project_config_untrusted_carries_path_and_content() -> None:
+    error = ProjectConfigUntrusted("/proj/.hop.toml", "activate = true")
+
+    assert isinstance(error, HopError)
+    assert error.config_path == "/proj/.hop.toml"
+    assert error.content == "activate = true"
+    assert str(error) == "/proj/.hop.toml is not trusted"

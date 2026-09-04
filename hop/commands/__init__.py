@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 from hop.commands.run import DEFAULT_RUN_ROLE
 
@@ -77,6 +78,12 @@ class SshCommand:
     host: str
 
 
+@dataclass(frozen=True, slots=True)
+class TrustCommand:
+    mode: Literal["trust", "list", "revoke"] = "trust"
+    path: str | None = None
+
+
 Command = (
     EnterSessionCommand
     | SwitchSessionCommand
@@ -92,4 +99,5 @@ Command = (
     | BridgeShimCommand
     | PathCommand
     | SshCommand
+    | TrustCommand
 )

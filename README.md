@@ -116,6 +116,24 @@ A hop config has several named sections plus a few scalar settings, all optional
 
 <a id="global-config"></a>Configs live in `~/.config/hop/config.toml` or a project's `.hop.toml`.
 
+### Trusting `.hop.toml`
+
+A project's `.hop.toml` can declare shell commands (`activate`, `prepare`, `teardown`, translate helpers, window `command`, `open_keys`) that hop runs on your behalf. hop only runs a project's `.hop.toml` once you've trusted it - `git clone <repo> && cd <repo> && hop` prompts first:
+
+```
+hop: /home/you/projects/foo/.hop.toml is not trusted.
+It can run shell commands (backend activate/prepare/teardown, port translation,
+window commands, editor keystrokes).
+
+  [t]   trust it and continue
+  [s]   show it
+  Ctrl-C / Ctrl-D to abort (no session created)
+```
+
+The prompt is inline with a tty, or a floating kitty panel when hop runs detached (vicinae, a sway keybinding). Trust is keyed on the file's exact content - any edit drops out of trust and re-prompts.
+
+Trust is frozen into the session record at creation and used for the session's whole life: `.hop.toml` edits have no effect until you either kill and re-enter the session, or run **`hop trust`** in the project directory, which re-trusts the current file and - if the session is still live - refreshes its snapshot immediately, no teardown needed. `hop trust --list` shows every trusted config and flags drift; `hop trust --revoke [path]` drops one.
+
 ## Session backends
 
 A session has a **backend** that decides what kind of environment its windows run in. The default is **host**. Other backends - docker container (devcontainer) or anything else describable as a chain of commands - are configured as named entries in the config file. Running a backend on a *remote* machine is a separate axis - the ssh transport (`hop ssh`, see [Remote sessions over ssh](#remote-sessions-over-ssh)) - not a backend of its own.
@@ -345,6 +363,7 @@ Prompt detection uses Kitty's shell integration (OSC 133), which is on by defaul
 - `hop term --role <name>` - focus or create the window for the given role, [editor](#editor) included.
 - `hop browser [<url>]` - focus or create the session's [browser](#browser) window, and send it a URL if given.
 - `hop kill` - close every Sway/Kitty window owned by the session, remove its workspace, and run the backend's `teardown`. Run from the session root.
+- `hop trust` - trust the current directory's `.hop.toml` and, if the session is already live, refresh the trusted snapshot. `hop trust --list` shows every trusted config and flags drift; `hop trust --revoke [path]` drops one. See [Trusting `.hop.toml`](#trusting-hoptoml).
 
 ## Troubleshooting
 

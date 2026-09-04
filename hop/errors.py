@@ -14,3 +14,10 @@ class HopError(RuntimeError):
 
 class IntegrationNotImplementedError(HopError):
     """Raised when a command reaches an integration scaffold that is not wired yet."""
+
+
+class ProjectConfigUntrusted(HopError):
+    def __init__(self, config_path: str, content: str) -> None:
+        super().__init__(f"{config_path} is not trusted")
+        self.config_path = config_path
+        self.content = content

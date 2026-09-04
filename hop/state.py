@@ -41,6 +41,7 @@ class CommandBackendRecord:
     # of re-running ``hop ssh``. When set, ``SessionState.session_root`` is a
     # path on this remote host.
     transport_host: str | None = None
+    project_config_toml: str | None = None
     type: str = "command"
 
     def to_json(self) -> dict[str, object]:
@@ -62,6 +63,8 @@ class CommandBackendRecord:
             payload["workspace_path"] = self.workspace_path
         if self.transport_host is not None:
             payload["transport_host"] = self.transport_host
+        if self.project_config_toml is not None:
+            payload["project_config_toml"] = self.project_config_toml
         return payload
 
 
@@ -178,6 +181,7 @@ def _decode_backend_record(raw: object) -> BackendRecord:
                     host_translate_command=_optional_steps(record.get("host_translate_command")),
                     workspace_path=_optional_str(record.get("workspace_path")),
                     transport_host=_optional_str(record.get("transport_host")),
+                    project_config_toml=_optional_str(record.get("project_config_toml")),
                 )
     # Anything we can't decode (legacy ``{"type": "host"}`` records, malformed
     # payloads, the ``workspace_command``/``workspace_path``-era shape) falls

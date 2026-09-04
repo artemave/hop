@@ -18,6 +18,7 @@ from hop.commands import (
     SwitchSessionCommand,
     TailCommand,
     TermCommand,
+    TrustCommand,
 )
 
 
@@ -61,6 +62,10 @@ from hop.commands import (
         (["path", "kitten/hints"], PathCommand(name="kitten/hints")),
         (["path", "sway/term-or-kitty"], PathCommand(name="sway/term-or-kitty")),
         (["ssh", "devbox"], SshCommand(host="devbox")),
+        (["trust"], TrustCommand(mode="trust")),
+        (["trust", "--list"], TrustCommand(mode="list")),
+        (["trust", "--revoke"], TrustCommand(mode="revoke", path=None)),
+        (["trust", "--revoke", "/proj/.hop.toml"], TrustCommand(mode="revoke", path="/proj/.hop.toml")),
     ],
 )
 def test_parse_command_maps_argv_to_typed_commands(argv: list[str], expected: object) -> None:
@@ -344,3 +349,44 @@ def test_main_intercepts_paste_image_before_the_normal_flow(tmp_path: Path, monk
         "write_path": "/tmp/hop-paste-9.png",
         "mime": "image/png",
     }
+
+
+def test_main_intercepts_trust_prompt_before_the_normal_flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from hop import cli
+
+    def _no_services() -> object:
+        raise AssertionError("__trust-prompt must not build services / enter the normal flow")
+
+    monkeypatch.setattr(cli, "build_default_services", _no_services)
+
+    asked: list[tuple[str, str]] = []
+
+    def fake_ask(config_path: str, content: str, **_: object) -> bool:
+        asked.append((config_path, content))
+        return True
+
+    monkeypatch.setattr("hop.trust_prompt.ask", fake_ask)
+
+    content_path = tmp_path / "content.toml"
+    content_path.write_text('activate = "true"\n')
+
+    assert cli.main(["__trust-prompt", "/proj/.hop.toml", str(content_path)]) == 0
+    assert asked == [("/proj/.hop.toml", 'activate = "true"\n')]
+
+
+def test_main_trust_prompt_returns_one_on_abort(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from hop import cli
+
+    def _no_services() -> object:
+        raise AssertionError("__trust-prompt must not build services / enter the normal flow")
+
+    def fake_ask(config_path: str, content: str, **_: object) -> bool:
+        return False
+
+    monkeypatch.setattr(cli, "build_default_services", _no_services)
+    monkeypatch.setattr("hop.trust_prompt.ask", fake_ask)
+
+    content_path = tmp_path / "content.toml"
+    content_path.write_text("content")
+
+    assert cli.main(["__trust-prompt", "/proj/.hop.toml", str(content_path)]) == 1

@@ -251,7 +251,7 @@ The acceptor resolves the target session from the focused Sway window, which mus
 
 ## Project config
 
-`<session_root>/.hop.toml` uses **the same schema** as the global file — backends, layouts, and top-level windows are all parseable in either place. Drop in whatever subset of sections you want. Hop merges the two files when resolving:
+`<session_root>/.hop.toml` uses **the same schema** as the global file — backends, layouts, and top-level windows are all parseable in either place. Drop in whatever subset of sections you want. hop runs a project's `.hop.toml` only once you've trusted it (`hop trust`, or the prompt on first entry) — see [Trusting `.hop.toml`](../README.md#trusting-hoptoml). Hop merges the two files when resolving:
 
 - Project entries come first in auto-detect / declaration order.
 - Same-named entries are field-merged with project fields winning. The merged entry takes the project's slot.

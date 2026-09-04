@@ -101,6 +101,35 @@ def test_record_session_persists_list_form_lifecycle(tmp_path: Path) -> None:
     assert loaded["demo"].backend.teardown == ("compose down",)
 
 
+def test_record_session_omits_project_config_toml_when_none(tmp_path: Path) -> None:
+    sessions_dir = tmp_path / "sessions"
+    session = make_session(name="demo", session_root=tmp_path / "demo")
+
+    record_session(session, sessions_dir=sessions_dir)
+
+    payload = json.loads((sessions_dir / "demo.json").read_text())
+    assert "project_config_toml" not in payload["backend"]
+
+
+def test_project_config_toml_round_trips_through_record_session(tmp_path: Path) -> None:
+    sessions_dir = tmp_path / "sessions"
+    session = make_session(name="demo", session_root=tmp_path / "demo")
+
+    record_session(
+        session,
+        backend=CommandBackendRecord(
+            name="host",
+            interactive_prefix="",
+            noninteractive_prefix="",
+            project_config_toml='activate = "true"\n',
+        ),
+        sessions_dir=sessions_dir,
+    )
+
+    loaded = load_sessions(sessions_dir=sessions_dir)
+    assert loaded["demo"].backend.project_config_toml == 'activate = "true"\n'
+
+
 def test_record_session_omits_optional_fields(tmp_path: Path) -> None:
     """Optional lifecycle / translate fields are dropped from the JSON when
     unset; required fields (name + both prefixes) always appear."""

@@ -90,6 +90,8 @@ class HopPopup(Protocol):
 
     def show_error(self, error: HopError) -> None: ...
 
+    def run_trust_prompt(self, session: ProjectSession, config_path: str, content: str) -> bool: ...
+
 
 class PopupSwayAdapter(Protocol):
     """Sway surface KittyHopPopup needs: a single ``run_command`` to install
@@ -134,6 +136,13 @@ class KittyHopPopup:
         # for "display a message". Still a bash one-liner: no lifecycle to run,
         # just a message + a held shell.
         self._spawn_and_wait(_kitty_command_argv("bash", "-c", _error_script(error)))
+
+    def run_trust_prompt(self, session: ProjectSession, config_path: str, content: str) -> bool:
+        content_path = trust_prompt_content_path(session)
+        content_path.parent.mkdir(parents=True, exist_ok=True)
+        content_path.write_text(content)
+        exit_code = self._spawn_and_wait(_kitty_trust_prompt_argv(config_path, content_path))
+        return exit_code == 0
 
     def _run_lifecycle(
         self,
@@ -208,6 +217,16 @@ def popup_spec_path(session: ProjectSession, kind: str) -> Path:
     are easy to find; the child reads it back to know what to execute."""
 
     return popup_log_path(session, kind).with_suffix(".spec.json")
+
+
+def trust_prompt_content_path(session: ProjectSession) -> Path:
+    base_env = os.environ.get("XDG_RUNTIME_DIR")
+    base = Path(base_env) if base_env else Path("/tmp")
+    return base / "hop" / f"popup-{session.session_name}-trust.toml"
+
+
+def _kitty_trust_prompt_argv(config_path: str, content_path: Path) -> tuple[str, ...]:
+    return _kitty_command_argv(sys.executable, "-m", "hop", "__trust-prompt", config_path, str(content_path))
 
 
 def _kitty_lifecycle_argv(spec_path: Path) -> tuple[str, ...]:
