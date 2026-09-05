@@ -42,7 +42,7 @@ activate = "true"
 # … rest of the recipe (see below)
 ```
 
-`activate = "true"` forces this backend to win auto-detect when you run `hop` from the stub directory. The local dir exists only to give sway a workspace identity (`p:foo-remote`); every shell, editor, and path lookup hops through ssh to the remote.
+`activate = "true"` forces this backend to win auto-detect when you run `hop` from the stub directory. The local dir exists only to give sway a workspace identity (`s:foo-remote`); every shell, editor, and path lookup hops through ssh to the remote.
 
 ## Recipe
 
@@ -119,7 +119,7 @@ Verify:
 hop term --role editor
 ```
 
-Errors from the acceptor — `no focused Sway window`, `session 'X' from focused window is not in hop state`, etc. — go to the shim's stderr. The acceptor resolves the target session from the focused Sway window, which must be on a hop session workspace (`p:<session>`); any window on that workspace qualifies — editor, shell, or a role terminal.
+Errors from the acceptor — `no focused Sway window`, `session 'X' from focused window is not in hop state`, etc. — go to the shim's stderr. The acceptor resolves the target session from the focused Sway window, which must be on a hop session workspace (`s:<session>`); any window on that workspace qualifies — editor, shell, or a role terminal.
 
 ## Tradeoffs
 

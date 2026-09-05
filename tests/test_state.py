@@ -23,7 +23,7 @@ def make_session(*, name: str, session_root: Path) -> ProjectSession:
     return ProjectSession(
         session_name=name,
         session_root=session_root,
-        workspace_name=f"p:{name}",
+        workspace_name=f"s:{name}",
     )
 
 

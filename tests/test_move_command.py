@@ -17,7 +17,7 @@ class StubSwayAdapter:
         self.moved_windows: list[tuple[int, str]] = []
         self.switched_workspaces: list[str] = []
 
-    def list_session_workspaces(self, *, prefix: str = "p:") -> tuple[str, ...]:
+    def list_session_workspaces(self, *, prefix: str = "s:") -> tuple[str, ...]:
         return tuple(w for w in self._workspaces if w.startswith(prefix))
 
     def list_windows(self) -> tuple[SwayWindow, ...]:
@@ -52,19 +52,19 @@ def _unfocused(window_id: int, workspace_name: str) -> SwayWindow:
 
 def test_move_relocates_focused_window_and_follows_to_destination() -> None:
     sway = StubSwayAdapter(
-        workspaces=("p:/home/user/projects/demo", "p:/home/user/projects/other"),
-        windows=(_focused(42, "2"), _unfocused(7, "p:/home/user/projects/demo")),
+        workspaces=("s:/home/user/projects/demo", "s:/home/user/projects/other"),
+        windows=(_focused(42, "2"), _unfocused(7, "s:/home/user/projects/demo")),
     )
 
     move_focused_window("demo", sway=sway)
 
-    assert sway.moved_windows == [(42, "p:/home/user/projects/demo")]
-    assert sway.switched_workspaces == ["p:/home/user/projects/demo"]
+    assert sway.moved_windows == [(42, "s:/home/user/projects/demo")]
+    assert sway.switched_workspaces == ["s:/home/user/projects/demo"]
 
 
 def test_move_raises_when_session_does_not_exist() -> None:
     sway = StubSwayAdapter(
-        workspaces=("p:/home/user/projects/demo",),
+        workspaces=("s:/home/user/projects/demo",),
         windows=(_focused(42, "2"),),
     )
 
@@ -77,7 +77,7 @@ def test_move_raises_when_session_does_not_exist() -> None:
 
 def test_move_raises_when_no_window_is_focused() -> None:
     sway = StubSwayAdapter(
-        workspaces=("p:/home/user/projects/demo",),
+        workspaces=("s:/home/user/projects/demo",),
         windows=(_unfocused(7, "2"),),
     )
 
@@ -92,11 +92,11 @@ def test_self_move_still_issues_the_sway_calls() -> None:
     """Sway no-ops both `move container to workspace <same>` and `workspace
     <focused>`, so there's no need to special-case self-move in the executor."""
     sway = StubSwayAdapter(
-        workspaces=("p:/home/user/projects/demo",),
-        windows=(_focused(42, "p:/home/user/projects/demo"),),
+        workspaces=("s:/home/user/projects/demo",),
+        windows=(_focused(42, "s:/home/user/projects/demo"),),
     )
 
     move_focused_window("demo", sway=sway)
 
-    assert sway.moved_windows == [(42, "p:/home/user/projects/demo")]
-    assert sway.switched_workspaces == ["p:/home/user/projects/demo"]
+    assert sway.moved_windows == [(42, "s:/home/user/projects/demo")]
+    assert sway.switched_workspaces == ["s:/home/user/projects/demo"]

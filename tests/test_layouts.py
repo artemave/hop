@@ -15,7 +15,7 @@ def build_session(session_root: Path) -> ProjectSession:
     return ProjectSession(
         session_root=session_root,
         session_name=session_root.name,
-        workspace_name=f"p:{session_root.name}",
+        workspace_name=f"s:{session_root.name}",
     )
 
 
@@ -582,7 +582,7 @@ def test_resolve_windows_routes_remote_probes_through_transport_with_local_cwd(t
     remote_session = ProjectSession(
         session_root=Path("/remote/proj"),
         session_name="proj",
-        workspace_name="p:proj",
+        workspace_name="s:proj",
         host="devbox",
     )
     runner = RecordingRunner()

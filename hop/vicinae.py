@@ -88,9 +88,9 @@ def compute_target_scripts(
 ) -> tuple[GeneratedScript, ...]:
     """Compute the desired vicinae script set for the current state.
 
-    On a `p:<session>` workspace: per-window scripts for every declared
+    On a `s:<session>` workspace: per-window scripts for every declared
     role, `hop-kill`, plus `hop-switch-<other-session>` for every other
-    live session. Off any `p:*` workspace: only `hop-switch-<session>`
+    live session. Off any `s:*` workspace: only `hop-switch-<session>`
     for every live session. `hop-create` and `hop-move` are always
     emitted — both fall through to a `vicinae dmenu` pick over their
     own candidate list.

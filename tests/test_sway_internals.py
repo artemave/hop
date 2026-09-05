@@ -111,7 +111,7 @@ def test_collect_windows_ignores_non_dict_nodes_and_tracks_workspace_context() -
     _collect_windows(
         {
             "type": "workspace",
-            "name": "p:demo",
+            "name": "s:demo",
             "nodes": [
                 {"id": 17, "focused": True},
                 {
@@ -135,7 +135,7 @@ def test_collect_windows_ignores_non_dict_nodes_and_tracks_workspace_context() -
     assert windows == [
         SwayWindow(
             id=23,
-            workspace_name="p:demo",
+            workspace_name="s:demo",
             app_id="firefox",
             window_class=None,
             marks=("_hop_browser:demo",),
@@ -143,7 +143,7 @@ def test_collect_windows_ignores_non_dict_nodes_and_tracks_workspace_context() -
         ),
         SwayWindow(
             id=29,
-            workspace_name="p:demo",
+            workspace_name="s:demo",
             app_id=None,
             window_class="kitty",
             marks=(),

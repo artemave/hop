@@ -18,7 +18,7 @@ hop run --role test "python3 -m pytest tests/test_bridge.py -q"
 ## Contract
 
 - `hop` resolves the session from the caller's current working directory — the resolved directory is the session root and its basename is the session name. There is no marker-file or ancestor search.
-- `hop` switches to the session workspace `p:<session>`.
+- `hop` switches to the session workspace `s:<session>`.
 - `hop` targets the Kitty terminal whose role is `test`.
 - If the `test` terminal does not exist yet, `hop` creates it as a session-scoped Kitty OS window and keeps the current focus while doing so.
 - `hop` sends the exact `<command>` string to that terminal and appends a newline if the caller did not include one.

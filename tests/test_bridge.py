@@ -121,7 +121,7 @@ def _running_bridge(
 def _editor_window(session_name: str) -> SwayWindow:
     return SwayWindow(
         id=1,
-        workspace_name=f"p:{session_name}",
+        workspace_name=f"s:{session_name}",
         app_id="hop:editor",
         window_class=None,
         marks=(),
@@ -134,7 +134,7 @@ def _record_demo_session(sessions_dir: Path, session_root: Path, name: str = "de
     session = ProjectSession(
         session_root=session_root.resolve(),
         session_name=name,
-        workspace_name=f"p:{name}",
+        workspace_name=f"s:{name}",
     )
     record_session(session, sessions_dir=sessions_dir)
     return session
@@ -228,7 +228,7 @@ def test_focused_role_terminal_on_session_workspace_resolves_session(tmp_path: P
 
     role_terminal = SwayWindow(
         id=42,
-        workspace_name="p:demo",
+        workspace_name="s:demo",
         app_id="hop:test",
         window_class=None,
         marks=(),
@@ -381,7 +381,7 @@ def test_dispatch_via_subprocess_runs_real_hop(tmp_path: Path) -> None:
     session = ProjectSession(
         session_root=tmp_path.resolve(),
         session_name="demo",
-        workspace_name="p:demo",
+        workspace_name="s:demo",
     )
     result = dispatch_via_subprocess(session, ["--help"])
 
@@ -403,7 +403,7 @@ def test_dispatch_via_subprocess_remote_session_runs_from_home_with_env() -> Non
     remote = ProjectSession(
         session_root=Path("/home/admin/projects/thonon-les-pains"),
         session_name="thonon-les-pains",
-        workspace_name="p:thonon-les-pains",
+        workspace_name="s:thonon-les-pains",
         host="devbox",
     )
 

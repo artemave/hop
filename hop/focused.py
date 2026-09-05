@@ -31,7 +31,7 @@ from hop.targets import (
     resolve_target,
 )
 
-WORKSPACE_PREFIX = "p:"
+WORKSPACE_PREFIX = "s:"
 
 
 def paths_exist(

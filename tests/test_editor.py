@@ -71,14 +71,14 @@ def build_session() -> ProjectSession:
     return ProjectSession(
         session_root=session_root,
         session_name="demo",
-        workspace_name=f"p:{session_root}",
+        workspace_name=f"s:{session_root}",
     )
 
 
 def build_editor_window(window_id: int) -> SwayWindow:
     return SwayWindow(
         id=window_id,
-        workspace_name="p:/tmp/demo",
+        workspace_name="s:/tmp/demo",
         app_id="hop:editor",
         window_class=None,
     )
@@ -188,7 +188,7 @@ def test_open_target_skips_sway_focus_when_no_editor_window_visible() -> None:
 
 def test_open_target_ignores_editor_windows_on_other_workspaces() -> None:
     factory = TransportFactory(ls_response=make_ls_response(kitty_window_id=77))
-    other = SwayWindow(id=31, workspace_name="p:other", app_id="hop:editor", window_class=None)
+    other = SwayWindow(id=31, workspace_name="s:other", app_id="hop:editor", window_class=None)
     sway = StubSwayAdapter([other])
     adapter = make_adapter(sway=sway, factory=factory, terminals=StubTerminalAdapter())
 
@@ -231,7 +231,7 @@ def test_open_target_does_not_respawn_on_boss_path_when_editor_is_present() -> N
 
 def test_open_target_matches_editor_via_x11_window_class_fallback() -> None:
     factory = TransportFactory(ls_response=make_ls_response(kitty_window_id=77))
-    xwayland_editor = SwayWindow(id=31, workspace_name="p:/tmp/demo", app_id=None, window_class="hop:editor")
+    xwayland_editor = SwayWindow(id=31, workspace_name="s:/tmp/demo", app_id=None, window_class="hop:editor")
     sway = StubSwayAdapter([xwayland_editor])
     adapter = make_adapter(sway=sway, factory=factory)
 

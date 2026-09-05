@@ -112,7 +112,7 @@ def test_paths_exist_resolves_relative_candidates_against_focused_cwd(tmp_path: 
 
     result = paths_exist(
         ["app/foo.rb", "missing.rb"],
-        focused_workspace=lambda: "p:demo",
+        focused_workspace=lambda: "s:demo",
         sessions_loader=lambda: {"demo": _state("demo", session_root.resolve())},
         cwd_loader=lambda _name: shell_cwd.resolve(),
         backend_loader=lambda _state: fake_backend,
@@ -136,7 +136,7 @@ def test_paths_exist_returns_input_strings_not_resolved_paths(tmp_path: Path) ->
 
     result = paths_exist(
         ["../app/foo.rb"],
-        focused_workspace=lambda: "p:demo",
+        focused_workspace=lambda: "s:demo",
         sessions_loader=lambda: {"demo": _state("demo", session_root.resolve())},
         cwd_loader=lambda _name: shell_cwd.resolve(),
         backend_loader=lambda _state: fake_backend,
@@ -146,7 +146,7 @@ def test_paths_exist_returns_input_strings_not_resolved_paths(tmp_path: Path) ->
 
 
 def test_paths_exist_falls_back_to_local_when_workspace_not_a_hop_session(tmp_path: Path) -> None:
-    """When sway reports a workspace that isn't ``p:<name>``, the function
+    """When sway reports a workspace that isn't ``s:<name>``, the function
     falls back to local ``Path.exists()`` against ``Path.cwd()``. URLs and
     Rails refs are dropped (no backend → no def-line lookup). The backend
     loader is never invoked."""
@@ -178,7 +178,7 @@ def test_paths_exist_falls_back_to_local_when_workspace_not_a_hop_session(tmp_pa
 
 
 def test_paths_exist_falls_back_when_session_state_missing(tmp_path: Path) -> None:
-    """Workspace name matches ``p:<name>`` but no recorded session exists
+    """Workspace name matches ``s:<name>`` but no recorded session exists
     for it — fall back to local check."""
     existing_file = tmp_path / "exists.txt"
     existing_file.write_text("")
@@ -189,7 +189,7 @@ def test_paths_exist_falls_back_when_session_state_missing(tmp_path: Path) -> No
         os.chdir(tmp_path)
         result = paths_exist(
             ["exists.txt", "missing.txt"],
-            focused_workspace=lambda: "p:unknown",
+            focused_workspace=lambda: "s:unknown",
             sessions_loader=lambda: {},
             cwd_loader=lambda _name: None,
             backend_loader=lambda _state: None,
@@ -255,7 +255,7 @@ def test_paths_exist_uses_real_sway_when_focused_workspace_kwarg_omitted(tmp_pat
 def test_paths_exist_empty_input_returns_empty(tmp_path: Path) -> None:
     result = paths_exist(
         [],
-        focused_workspace=lambda: "p:demo",
+        focused_workspace=lambda: "s:demo",
         sessions_loader=lambda: {"demo": _state("demo", tmp_path)},
         cwd_loader=lambda _name: tmp_path,
         backend_loader=lambda _state: _FakeBackend(existing=set()),
@@ -276,7 +276,7 @@ def test_paths_exist_falls_back_to_state_session_root_when_kitty_socket_dead(tmp
 
     result = paths_exist(
         ["foo.rb"],
-        focused_workspace=lambda: "p:demo",
+        focused_workspace=lambda: "s:demo",
         sessions_loader=lambda: {"demo": _state("demo", session_root.resolve())},
         cwd_loader=lambda _name: None,
         backend_loader=lambda _state: fake_backend,
@@ -309,7 +309,7 @@ def test_paths_exist_uses_backend_workspace_path_when_kitty_cwd_unavailable(tmp_
 
     result = paths_exist(
         ["foo.rb"],
-        focused_workspace=lambda: "p:demo",
+        focused_workspace=lambda: "s:demo",
         sessions_loader=lambda: {"demo": state},
         cwd_loader=lambda _name: None,
         backend_loader=lambda _state: fake_backend,
@@ -334,7 +334,7 @@ def test_paths_exist_translates_rails_references_via_target_resolver(tmp_path: P
 
     result = paths_exist(
         ["Processing UsersController#index"],
-        focused_workspace=lambda: "p:demo",
+        focused_workspace=lambda: "s:demo",
         sessions_loader=lambda: {"demo": _state("demo", session_root.resolve())},
         cwd_loader=lambda _name: shell_cwd.resolve(),
         backend_loader=lambda _state: fake_backend,
@@ -360,7 +360,7 @@ def test_paths_exist_drops_rails_reference_when_def_not_defined(tmp_path: Path) 
 
     result = paths_exist(
         ["Processing UsersController#index"],
-        focused_workspace=lambda: "p:demo",
+        focused_workspace=lambda: "s:demo",
         sessions_loader=lambda: {"demo": _state("demo", session_root.resolve())},
         cwd_loader=lambda _name: shell_cwd.resolve(),
         backend_loader=lambda _state: fake_backend,
@@ -384,7 +384,7 @@ def test_paths_exist_falls_back_when_backend_loader_returns_none(tmp_path: Path)
         os.chdir(tmp_path)
         result = paths_exist(
             ["exists.txt"],
-            focused_workspace=lambda: "p:demo",
+            focused_workspace=lambda: "s:demo",
             sessions_loader=lambda: {"demo": _state("demo", session_root.resolve())},
             cwd_loader=lambda _name: session_root.resolve(),
             backend_loader=lambda _state: None,
@@ -404,7 +404,7 @@ def test_paths_exist_returns_empty_set_when_no_candidate_resolves_to_file(tmp_pa
 
     result = paths_exist(
         ["https://example.com"],
-        focused_workspace=lambda: "p:demo",
+        focused_workspace=lambda: "s:demo",
         sessions_loader=lambda: {"demo": _state("demo", session_root.resolve())},
         cwd_loader=lambda _name: session_root.resolve(),
         backend_loader=lambda _state: fake_backend,
@@ -430,7 +430,7 @@ def test_paths_exist_round_trips_through_command_backend_record(tmp_path: Path) 
 
     result = paths_exist(
         ["foo.rb"],
-        focused_workspace=lambda: "p:demo",
+        focused_workspace=lambda: "s:demo",
         sessions_loader=lambda: {"demo": state},
         cwd_loader=lambda _name: session_root.resolve(),
     )
@@ -448,7 +448,7 @@ def test_focused_session_and_backend_returns_session_and_backend(tmp_path: Path)
     session_root = (tmp_path / "demo").resolve()
 
     result = focused_session_and_backend(
-        focused_workspace=lambda: "p:demo",
+        focused_workspace=lambda: "s:demo",
         sessions_loader=lambda: {"demo": _state("demo", session_root)},
         backend_loader=lambda _state: fake_backend,
     )
@@ -478,7 +478,7 @@ def test_focused_session_and_backend_none_when_backend_unresolvable(tmp_path: Pa
 
     assert (
         focused_session_and_backend(
-            focused_workspace=lambda: "p:demo",
+            focused_workspace=lambda: "s:demo",
             sessions_loader=lambda: {"demo": _state("demo", tmp_path)},
             backend_loader=lambda _state: None,
         )

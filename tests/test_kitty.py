@@ -88,7 +88,7 @@ def build_session() -> ProjectSession:
     return ProjectSession(
         session_root=session_root,
         session_name="demo",
-        workspace_name=f"p:{session_root.name}",
+        workspace_name=f"s:{session_root.name}",
     )
 
 
@@ -1372,7 +1372,7 @@ def test_launch_window_moves_new_role_terminal_to_session_workspace_when_drifted
     sway = StubSwayAdapter(
         timeline=[
             (),  # pre-launch snapshot — no hop:test windows yet
-            (_hop_role_window(window_id=42, role="test", workspace_name="p:other"),),
+            (_hop_role_window(window_id=42, role="test", workspace_name="s:other"),),
         ]
     )
     adapter = KittyRemoteControlAdapter(
@@ -1384,7 +1384,7 @@ def test_launch_window_moves_new_role_terminal_to_session_workspace_when_drifted
 
     adapter.ensure_terminal(build_session(), role="test")
 
-    assert sway.moves == [(42, "p:demo")]
+    assert sway.moves == [(42, "s:demo")]
 
 
 def test_launch_window_skips_move_when_new_role_terminal_already_on_session_workspace() -> None:
@@ -1392,7 +1392,7 @@ def test_launch_window_skips_move_when_new_role_terminal_already_on_session_work
     sway = StubSwayAdapter(
         timeline=[
             (),
-            (_hop_role_window(window_id=42, role="test", workspace_name="p:demo"),),
+            (_hop_role_window(window_id=42, role="test", workspace_name="s:demo"),),
         ]
     )
     adapter = KittyRemoteControlAdapter(
@@ -1411,8 +1411,8 @@ def test_launch_window_ignores_pre_existing_hop_role_windows_when_diffing() -> N
     """Another session's ``hop:test`` window must not be mistaken for the
     one this launch just created. The pre-launch snapshot excludes it."""
     factory = StubKittyFactory([{"ok": True, "data": []}, {"ok": True}])
-    pre_existing = _hop_role_window(window_id=10, role="test", workspace_name="p:other")
-    new_window = _hop_role_window(window_id=20, role="test", workspace_name="p:other")
+    pre_existing = _hop_role_window(window_id=10, role="test", workspace_name="s:other")
+    new_window = _hop_role_window(window_id=20, role="test", workspace_name="s:other")
     sway = StubSwayAdapter(
         timeline=[
             (pre_existing,),  # pre-launch
@@ -1428,7 +1428,7 @@ def test_launch_window_ignores_pre_existing_hop_role_windows_when_diffing() -> N
 
     adapter.ensure_terminal(build_session(), role="test")
 
-    assert sway.moves == [(20, "p:demo")]
+    assert sway.moves == [(20, "s:demo")]
     # The pre-existing window stays put; never moved.
     assert not any(move[0] == 10 for move in sway.moves)
 
@@ -1493,7 +1493,7 @@ def test_bootstrap_path_adopts_new_role_terminal_to_session_workspace() -> None:
             # meaningful one) after ``backend.prepare`` returns.
             (),
             (),
-            (_hop_role_window(window_id=7, role="shell", workspace_name="p:other"),),
+            (_hop_role_window(window_id=7, role="shell", workspace_name="s:other"),),
         ]
     )
     adapter = KittyRemoteControlAdapter(
@@ -1505,4 +1505,4 @@ def test_bootstrap_path_adopts_new_role_terminal_to_session_workspace() -> None:
 
     adapter.ensure_terminal(build_session(), role="shell")
 
-    assert sway.moves == [(7, "p:demo")]
+    assert sway.moves == [(7, "s:demo")]

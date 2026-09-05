@@ -202,7 +202,7 @@ class SwayIpcAdapter:
             msg = f"Sway rejected command {command!r}."
             raise SwayCommandError(msg)
 
-    def list_session_workspaces(self, *, prefix: str = "p:") -> tuple[str, ...]:
+    def list_session_workspaces(self, *, prefix: str = "s:") -> tuple[str, ...]:
         response = self._transport.request(SwayMessageType.GET_WORKSPACES)
         workspace_entries = json.loads(response.decode())
         workspaces = [

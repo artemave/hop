@@ -58,10 +58,10 @@ def test_switch_to_workspace_uses_run_command_ipc_message() -> None:
     transport = StubSwayTransport(responses={SwayMessageType.RUN_COMMAND: json.dumps([{"success": True}]).encode()})
     sway = SwayIpcAdapter(transport=transport)
 
-    sway.switch_to_workspace("p:demo")
+    sway.switch_to_workspace("s:demo")
 
     assert transport.requests == [
-        (SwayMessageType.RUN_COMMAND, b'workspace "p:demo"'),
+        (SwayMessageType.RUN_COMMAND, b'workspace "s:demo"'),
     ]
 
 
@@ -73,7 +73,7 @@ def test_set_workspace_layout_sends_bare_layout_command() -> None:
     transport = StubSwayTransport(responses={SwayMessageType.RUN_COMMAND: json.dumps([{"success": True}]).encode()})
     sway = SwayIpcAdapter(transport=transport)
 
-    sway.set_workspace_layout("p:demo", "tabbed")
+    sway.set_workspace_layout("s:demo", "tabbed")
 
     assert transport.requests == [
         (SwayMessageType.RUN_COMMAND, b"layout tabbed"),
@@ -85,7 +85,7 @@ def test_set_workspace_layout_raises_when_sway_rejects_command() -> None:
     sway = SwayIpcAdapter(transport=transport)
 
     try:
-        sway.set_workspace_layout("p:demo", "tabbed")
+        sway.set_workspace_layout("s:demo", "tabbed")
     except SwayCommandError as error:
         assert "tabbed" in str(error)
     else:
@@ -97,9 +97,9 @@ def test_switch_to_workspace_raises_when_sway_rejects_command() -> None:
     sway = SwayIpcAdapter(transport=transport)
 
     try:
-        sway.switch_to_workspace("p:demo")
+        sway.switch_to_workspace("s:demo")
     except SwayCommandError as error:
-        assert "p:demo" in str(error)
+        assert "s:demo" in str(error)
     else:
         raise AssertionError("Expected SwayCommandError for a rejected workspace command")
 
@@ -122,15 +122,15 @@ def test_list_session_workspaces_filters_and_sorts_workspace_names() -> None:
             SwayMessageType.GET_WORKSPACES: json.dumps(
                 [
                     {"name": "scratch", "focused": False},
-                    {"name": "p:zeta", "focused": False},
-                    {"name": "p:alpha", "focused": True},
+                    {"name": "s:zeta", "focused": False},
+                    {"name": "s:alpha", "focused": True},
                 ]
             ).encode()
         }
     )
     sway = SwayIpcAdapter(transport=transport)
 
-    assert sway.list_session_workspaces() == ("p:alpha", "p:zeta")
+    assert sway.list_session_workspaces() == ("s:alpha", "s:zeta")
 
 
 def test_get_focused_workspace_returns_focused_workspace_name() -> None:
@@ -139,14 +139,14 @@ def test_get_focused_workspace_returns_focused_workspace_name() -> None:
             SwayMessageType.GET_WORKSPACES: json.dumps(
                 [
                     {"name": "scratch", "focused": False},
-                    {"name": "p:demo", "focused": True},
+                    {"name": "s:demo", "focused": True},
                 ]
             ).encode()
         }
     )
     sway = SwayIpcAdapter(transport=transport)
 
-    assert sway.get_focused_workspace() == "p:demo"
+    assert sway.get_focused_workspace() == "s:demo"
 
 
 def test_get_focused_workspace_returns_empty_string_when_none_is_focused() -> None:
@@ -155,7 +155,7 @@ def test_get_focused_workspace_returns_empty_string_when_none_is_focused() -> No
             SwayMessageType.GET_WORKSPACES: json.dumps(
                 [
                     {"name": "scratch", "focused": False},
-                    {"name": "p:demo", "focused": False},
+                    {"name": "s:demo", "focused": False},
                 ]
             ).encode()
         }
@@ -173,7 +173,7 @@ def test_list_windows_flattens_the_sway_tree_with_workspace_context() -> None:
                     "nodes": [
                         {
                             "type": "workspace",
-                            "name": "p:demo",
+                            "name": "s:demo",
                             "nodes": [
                                 {
                                     "id": 17,
@@ -201,7 +201,7 @@ def test_list_windows_flattens_the_sway_tree_with_workspace_context() -> None:
     assert sway.list_windows() == (
         SwayWindow(
             id=17,
-            workspace_name="p:demo",
+            workspace_name="s:demo",
             app_id="brave-browser",
             window_class=None,
             marks=("_hop_browser:demo",),
@@ -209,7 +209,7 @@ def test_list_windows_flattens_the_sway_tree_with_workspace_context() -> None:
         ),
         SwayWindow(
             id=23,
-            workspace_name="p:demo",
+            workspace_name="s:demo",
             app_id=None,
             window_class="firefox",
             marks=(),
@@ -223,13 +223,13 @@ def test_window_commands_use_sway_criteria_by_container_id() -> None:
     sway = SwayIpcAdapter(transport=transport)
 
     sway.focus_window(17)
-    sway.move_window_to_workspace(17, "p:demo")
+    sway.move_window_to_workspace(17, "s:demo")
     sway.mark_window(17, "_hop_browser:demo")
     sway.unmark_window(17, "_hop_browser:demo")
 
     assert transport.requests == [
         (SwayMessageType.RUN_COMMAND, b"[con_id=17] focus"),
-        (SwayMessageType.RUN_COMMAND, b'[con_id=17] move container to workspace "p:demo"'),
+        (SwayMessageType.RUN_COMMAND, b'[con_id=17] move container to workspace "s:demo"'),
         (SwayMessageType.RUN_COMMAND, b'[con_id=17] mark --add "_hop_browser:demo"'),
         (SwayMessageType.RUN_COMMAND, b'[con_id=17] unmark "_hop_browser:demo"'),
     ]
@@ -250,7 +250,7 @@ def test_remove_workspace_switches_focus_to_trigger_sway_cleanup() -> None:
     transport = StubSwayTransport(responses={SwayMessageType.RUN_COMMAND: json.dumps([{"success": True}]).encode()})
     sway = SwayIpcAdapter(transport=transport)
 
-    sway.remove_workspace("p:/tmp/demo")
+    sway.remove_workspace("s:/tmp/demo")
 
     assert transport.requests == [
         (SwayMessageType.RUN_COMMAND, b"workspace back_and_forth"),
@@ -294,7 +294,7 @@ def test_default_transport_requires_swaysock() -> None:
 
 
 def test_subscribe_to_workspace_events_yields_decoded_event_dicts() -> None:
-    event_one = json.dumps({"change": "focus", "current": {"name": "p:demo"}}).encode()
+    event_one = json.dumps({"change": "focus", "current": {"name": "s:demo"}}).encode()
     event_two = json.dumps({"change": "focus", "current": {"name": "scratch"}}).encode()
     transport = StubSwayTransport(
         subscribe_acks=json.dumps({"success": True}).encode(),
@@ -305,7 +305,7 @@ def test_subscribe_to_workspace_events_yields_decoded_event_dicts() -> None:
     events = list(sway.subscribe_to_workspace_events())
 
     assert events == [
-        {"change": "focus", "current": {"name": "p:demo"}},
+        {"change": "focus", "current": {"name": "s:demo"}},
         {"change": "focus", "current": {"name": "scratch"}},
     ]
     assert transport.subscribe_payloads == [b'["workspace"]']
@@ -367,7 +367,7 @@ def test_subscribe_against_real_unix_socket_yields_workspace_event(tmp_path: Pat
                 + ack_payload
             )
 
-            event_payload = json.dumps({"change": "focus", "current": {"name": "p:demo"}}).encode()
+            event_payload = json.dumps({"change": "focus", "current": {"name": "s:demo"}}).encode()
             client.sendall(
                 struct.pack(IPC_HEADER_FORMAT, IPC_MAGIC, len(event_payload), WORKSPACE_EVENT_TYPE) + event_payload
             )
@@ -383,7 +383,7 @@ def test_subscribe_against_real_unix_socket_yields_workspace_event(tmp_path: Pat
 
         events = list(sway.subscribe_to_workspace_events())
 
-        assert events == [{"change": "focus", "current": {"name": "p:demo"}}]
+        assert events == [{"change": "focus", "current": {"name": "s:demo"}}]
     finally:
         server_thread.join(timeout=2)
         server.close()

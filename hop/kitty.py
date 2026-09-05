@@ -552,14 +552,14 @@ class KittyRemoteControlAdapter:
         to ``session.workspace_name`` if it landed elsewhere.
 
         Kitty places its window on whatever Sway workspace is focused at
-        registration time, so if the user has wandered off ``p:<session>``
+        registration time, so if the user has wandered off ``s:<session>``
         during ``prepare`` the role terminal lands on the wrong workspace.
         This recovers that case by:
 
         1. Diffing the current Sway window set against the pre-launch snapshot
            to identify the newly-appeared con_id (picks the smallest new id,
            mirroring the editor / browser adoption pattern).
-        2. Issuing ``move container to workspace p:<session>`` against it if
+        2. Issuing ``move container to workspace s:<session>`` against it if
            it isn't already on the session workspace.
 
         Best-effort: if no new window appears within

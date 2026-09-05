@@ -144,7 +144,7 @@ def _start_mark_reconciler(sway: SwayIpcAdapter) -> None:
 
     Runs on a daemon thread so it dies with the process. Each event triggers
     one reconcile pass — sway's window event is what surfaces user moves
-    (raw Sway keybinding sends the editor off ``p:<session>``), so a sweep
+    (raw Sway keybinding sends the editor off ``s:<session>``), so a sweep
     per event keeps marks aligned with placement without explicit filtering.
     """
 
@@ -279,7 +279,7 @@ def sweep_stale_persisted_sessions(
     sessions_loader: Callable[[], dict[str, SessionState]] = load_sessions,
     forget: Callable[[str], None] = forget_session,
 ) -> None:
-    """Drop persisted state files whose `p:<name>` workspace is no longer alive.
+    """Drop persisted state files whose `s:<name>` workspace is no longer alive.
 
     The CLI's first-entry gate keys on kitty socket liveness, so stale state
     is a tidiness concern rather than a correctness bug. Run on every

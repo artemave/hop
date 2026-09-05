@@ -65,7 +65,7 @@ exec hopd
 
 Day-to-day, [Vicinae](https://www.vicinae.com/) is the primary surface. What you see when you type `hop` in Vicinae's main search depends on where you are:
 
-- **On a hop session's workspace** (`p:<session>`): one entry per declared window - `Hop editor`, `Hop browser`, `Hop shell`, etc. Plus `Hop kill` for the focused session and `Hop switch to <other-session>` for every other live session.
+- **On a hop session's workspace** (`s:<session>`): one entry per declared window - `Hop editor`, `Hop browser`, `Hop shell`, etc. Plus `Hop kill` for the focused session and `Hop switch to <other-session>` for every other live session.
 - **Off any hop workspace**: only `Hop switch to <session>` per live session - no `Hop kill`, no per-window entries to clutter unrelated workspaces.
 - **Always**: `Hop create session` - falls through to a second Vicinae search over directories under `$HOME` (skips dot-dirs and common build noise like `node_modules`, `target`, `dist`). Picking a directory creates a fresh session for it, or - if it's already the root of a hop session - switches to it.
 
@@ -316,17 +316,17 @@ The browser is the one window that isn't a kitty terminal. hop doesn't own the p
 - **The default command is xdg-detected**: hop reads the default browser's desktop entry for its `Exec` line and `StartupWMClass`. `[windows.browser] command = "..."` overrides the detection.
 - **Recognizing a browser window** uses both the name (`app_id` / `class` against those desktop-entry identifiers) and the owning process (the window's pid resolved through `/proc`, against the launch command). Either signal alone misses real browsers: wrapper-script launchers run a differently-named binary, and generated `userapp-*.desktop` entries carry no `StartupWMClass` to match a name against.
 - **It always runs on the host**, even when the session's backend is a container or a remote machine. That's why a URL printed inside a container can't be handed over as-is: `hop open <url>` runs it through the backend's [`port_translate` / `host_translate`](#backend-example) first, so `http://localhost:3000` inside the container becomes the host-reachable address.
-- **`hop browser [<url>]`** focuses the session's browser window, creating it if there is none, and moves it back onto `p:<session>` if it drifted. With a URL, the URL goes to that window.
+- **`hop browser [<url>]`** focuses the session's browser window, creating it if there is none, and moves it back onto `s:<session>` if it drifted. With a URL, the URL goes to that window.
 
 #### When the browser restarts
 
 The mark lives on the window, so it survives the window being moved around - but not the window going away. A browser restart (relaunching after an update, or a reboot) destroys every window and takes the marks with it. The browser's own session restore brings your tabs back, but as ordinary windows with no hop affiliation.
 
-hop picks them back up: when a session has no marked browser window, `hop browser` promotes an unclaimed browser window that's already on `p:<session>` instead of launching a second one next to your restored tabs. After a restart, move the restored window onto the session's workspace (or just run the session where it already landed) and `hop browser` adopts it - marks it, focuses it, and dispatches any URL to it from then on.
+hop picks them back up: when a session has no marked browser window, `hop browser` promotes an unclaimed browser window that's already on `s:<session>` instead of launching a second one next to your restored tabs. After a restart, move the restored window onto the session's workspace (or just run the session where it already landed) and `hop browser` adopts it - marks it, focuses it, and dispatches any URL to it from then on.
 
 Only the session's own workspace is searched, and a window already marked for some session is never taken - so a browser window sitting on another workspace stays yours.
 
-The same promotion covers the reverse case: moving the session browser off `p:<session>` by raw Sway means clears its mark (`hopd` reconciles marks against placement on every Sway `window` event), and moving it back re-adopts it on the next `hop browser`.
+The same promotion covers the reverse case: moving the session browser off `s:<session>` by raw Sway means clears its mark (`hopd` reconciles marks against placement on every Sway `window` event), and moving it back re-adopts it on the next `hop browser`.
 
 ## Automation
 
@@ -356,9 +356,9 @@ Prompt detection uses Kitty's shell integration (OSC 133), which is on by defaul
 
 ### Other commands
 
-- `hop list` - print active Sway workspaces whose names start with `p:`.
-- `hop switch <name>` - focus the Sway workspace `p:<name>`.
-- `hop move <name>` - move the currently focused Sway window onto `p:<name>` and switch to that workspace.
+- `hop list` - print active Sway workspaces whose names start with `s:`.
+- `hop switch <name>` - focus the Sway workspace `s:<name>`.
+- `hop move <name>` - move the currently focused Sway window onto `s:<name>` and switch to that workspace.
 - `hop open <target>` - route the target to the right place: a URL goes to the session [browser](#browser) (with the backend's localhost translation applied), a binary file (image, PDF, archive, ...) opens on the host with `xdg-open`, a Rails `Controller#action` ref or `path[:line]` goes to the session [editor](#editor). See [Binary files open on the host](#binary-files-open-on-the-host). The kitten under [Open visible-output targets from Kitty](#open-visible-output-targets-from-kitty) uses the same parser.
 - `hop term --role <name>` - focus or create the window for the given role, [editor](#editor) included.
 - `hop browser [<url>]` - focus or create the session's [browser](#browser) window, and send it a URL if given.

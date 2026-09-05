@@ -94,7 +94,7 @@ def build_session() -> ProjectSession:
     return ProjectSession(
         session_root=session_root,
         session_name="demo",
-        workspace_name=f"p:{session_root.name}",
+        workspace_name=f"s:{session_root.name}",
     )
 
 

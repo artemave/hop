@@ -401,7 +401,7 @@ def test_remote_binary_downloads_to_host_and_opens_local_copy(tmp_path: Path) ->
     session = ProjectSession(
         session_root=Path("/remote/proj"),
         session_name="proj",
-        workspace_name="p:proj",
+        workspace_name="s:proj",
         host="devbox",
     )
     opener = RecordingOpener()

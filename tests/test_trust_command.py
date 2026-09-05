@@ -14,7 +14,7 @@ from hop.state import CommandBackendRecord, load_sessions, record_session
 
 
 def _session(root: Path) -> ProjectSession:
-    return ProjectSession(session_root=root, session_name=root.name, workspace_name=f"p:{root.name}")
+    return ProjectSession(session_root=root, session_name=root.name, workspace_name=f"s:{root.name}")
 
 
 def test_trust_raises_when_no_hop_toml_exists(tmp_path: Path) -> None:

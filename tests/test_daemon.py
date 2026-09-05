@@ -76,7 +76,7 @@ class StubSubscribingSway:
     def socket_path(self) -> str:
         return "/run/user/1000/sway-ipc.test.sock"
 
-    def list_session_workspaces(self, *, prefix: str = "p:") -> tuple[str, ...]:
+    def list_session_workspaces(self, *, prefix: str = "s:") -> tuple[str, ...]:
         del prefix
         return ()
 
@@ -104,9 +104,9 @@ def test_daemon_runs_initial_regen_and_one_per_event(
 ) -> None:
     sway = StubSubscribingSway(
         events=(
-            {"change": "focus", "current": {"name": "p:rails"}},
+            {"change": "focus", "current": {"name": "s:rails"}},
             {"change": "focus", "current": {"name": "scratch"}},
-            {"change": "focus", "current": {"name": "p:other"}},
+            {"change": "focus", "current": {"name": "s:other"}},
         ),
     )
     monkeypatch.setattr(daemon, "SwayIpcAdapter", lambda: sway)
@@ -389,10 +389,10 @@ def test_sweep_stale_persisted_sessions_forgets_sessions_with_no_live_workspace(
     host_record = CommandBackendRecord(name="host", interactive_prefix="", noninteractive_prefix="")
 
     class _SwayWithWorkspaces:
-        def list_session_workspaces(self, *, prefix: str = "p:") -> tuple[str, ...]:
+        def list_session_workspaces(self, *, prefix: str = "s:") -> tuple[str, ...]:
             del prefix
             # Only `live` is on the sway side; `stale` was destroyed.
-            return ("p:live",)
+            return ("s:live",)
 
     forgotten: list[str] = []
     sessions = {

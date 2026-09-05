@@ -247,7 +247,7 @@ hop term --role editor
 
 It should focus your host editor window (a no-op if you're already on it, otherwise switching to the session's Sway workspace). Errors from the acceptor — `no focused Sway window`, `session 'X' from focused window is not in hop state`, etc. — go to the shim's stderr.
 
-The acceptor resolves the target session from the focused Sway window, which must be on the session's Sway workspace (`p:<session>`). Any window on that workspace qualifies — the editor or a role terminal (test/server/console).
+The acceptor resolves the target session from the focused Sway window, which must be on the session's Sway workspace (`s:<session>`). Any window on that workspace qualifies — the editor or a role terminal (test/server/console).
 
 ## Project config
 

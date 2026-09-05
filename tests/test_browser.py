@@ -84,7 +84,7 @@ def build_session() -> ProjectSession:
     return ProjectSession(
         session_root=session_root,
         session_name="demo",
-        workspace_name="p:demo",
+        workspace_name="s:demo",
     )
 
 
@@ -101,7 +101,7 @@ def test_ensure_browser_focuses_existing_session_window() -> None:
         [
             SwayWindow(
                 id=23,
-                workspace_name="p:demo",
+                workspace_name="s:demo",
                 app_id="brave-browser",
                 window_class=None,
                 marks=("_hop_browser:demo",),
@@ -142,7 +142,7 @@ def test_ensure_browser_reattaches_drifted_session_window_before_focusing() -> N
 
     adapter.ensure_browser(build_session(), url=None)
 
-    assert sway.moves == [(23, "p:demo")]
+    assert sway.moves == [(23, "s:demo")]
     assert sway.focused_window_ids == [23]
 
 
@@ -151,7 +151,7 @@ def test_ensure_browser_opens_url_in_existing_session_window() -> None:
         [
             SwayWindow(
                 id=23,
-                workspace_name="p:demo",
+                workspace_name="s:demo",
                 app_id="brave-browser",
                 window_class=None,
                 marks=("_hop_browser:demo",),
@@ -176,7 +176,7 @@ def test_ensure_browser_promotes_an_unclaimed_browser_window_on_the_session_work
         [
             SwayWindow(
                 id=17,
-                workspace_name="p:demo",
+                workspace_name="s:demo",
                 app_id="brave-browser",
                 window_class=None,
                 marks=(),
@@ -215,7 +215,7 @@ def test_ensure_browser_ignores_browser_windows_on_other_workspaces() -> None:
         sway.windows.append(
             SwayWindow(
                 id=41,
-                workspace_name="p:demo",
+                workspace_name="s:demo",
                 app_id="brave-browser",
                 window_class=None,
                 marks=(),
@@ -240,7 +240,7 @@ def test_ensure_browser_does_not_promote_another_sessions_browser_window() -> No
         [
             SwayWindow(
                 id=17,
-                workspace_name="p:demo",
+                workspace_name="s:demo",
                 app_id="brave-browser",
                 window_class=None,
                 marks=("_hop_browser:other",),
@@ -252,7 +252,7 @@ def test_ensure_browser_does_not_promote_another_sessions_browser_window() -> No
         sway.windows.append(
             SwayWindow(
                 id=41,
-                workspace_name="p:demo",
+                workspace_name="s:demo",
                 app_id="brave-browser",
                 window_class=None,
                 marks=(),
@@ -281,7 +281,7 @@ def test_ensure_browser_promotes_a_window_whose_process_matches_but_name_does_no
         [
             SwayWindow(
                 id=17,
-                workspace_name="p:demo",
+                workspace_name="s:demo",
                 app_id="firefox-dev",
                 window_class=None,
                 marks=(),
@@ -315,7 +315,7 @@ def test_ensure_browser_does_not_promote_a_window_whose_process_is_unreadable() 
         [
             SwayWindow(
                 id=17,
-                workspace_name="p:demo",
+                workspace_name="s:demo",
                 app_id="firefox-dev",
                 window_class=None,
                 marks=(),
@@ -328,7 +328,7 @@ def test_ensure_browser_does_not_promote_a_window_whose_process_is_unreadable() 
         sway.windows.append(
             SwayWindow(
                 id=41,
-                workspace_name="p:demo",
+                workspace_name="s:demo",
                 app_id="brave-browser",
                 window_class=None,
                 marks=(),
@@ -352,7 +352,7 @@ def test_ensure_browser_does_not_promote_a_non_browser_window() -> None:
         [
             SwayWindow(
                 id=17,
-                workspace_name="p:demo",
+                workspace_name="s:demo",
                 app_id="hop:shell",
                 window_class=None,
                 marks=(),
@@ -365,7 +365,7 @@ def test_ensure_browser_does_not_promote_a_non_browser_window() -> None:
         sway.windows.append(
             SwayWindow(
                 id=41,
-                workspace_name="p:demo",
+                workspace_name="s:demo",
                 app_id="brave-browser",
                 window_class=None,
                 marks=(),
@@ -389,7 +389,7 @@ def test_ensure_browser_promotes_by_window_class_and_opens_the_url() -> None:
         [
             SwayWindow(
                 id=17,
-                workspace_name="p:demo",
+                workspace_name="s:demo",
                 app_id=None,
                 window_class="Brave-browser",
                 marks=(),
@@ -440,7 +440,7 @@ def test_ensure_browser_launches_new_window_marks_it_and_focuses_it() -> None:
             build_session().session_root,
         )
     ]
-    assert sway.moves == [(41, "p:demo")]
+    assert sway.moves == [(41, "s:demo")]
     assert sway.marks == [(41, "_hop_browser:demo")]
     assert sway.focused_window_ids == [41]
 
@@ -461,7 +461,7 @@ def test_ensure_browser_launches_from_home_for_a_remote_session() -> None:
     remote = ProjectSession(
         session_root=Path("/home/admin/projects/thonon-les-pains"),
         session_name="thonon-les-pains",
-        workspace_name="p:thonon-les-pains",
+        workspace_name="s:thonon-les-pains",
         host="devbox",
     )
 
@@ -507,7 +507,7 @@ def test_adapter_resolves_default_browser_desktop_entry(tmp_path: Path) -> None:
         [
             SwayWindow(
                 id=23,
-                workspace_name="p:demo",
+                workspace_name="s:demo",
                 app_id="brave-browser",
                 window_class=None,
                 marks=("_hop_browser:demo",),

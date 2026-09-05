@@ -49,7 +49,7 @@ def _remote_session(session_root: str = "/home/u/thonon-les-pains", host: str = 
     return ProjectSession(
         session_root=root,
         session_name=root.name,
-        workspace_name=f"p:{root.name}",
+        workspace_name=f"s:{root.name}",
         host=host,
     )
 
@@ -164,7 +164,7 @@ def test_remote_backend_runs_ssh_locally_from_home() -> None:
     session = ProjectSession(
         session_root=Path("/remote/proj"),
         session_name="proj",
-        workspace_name="p:proj",
+        workspace_name="s:proj",
         host=None,
     )
     backend = CommandBackend(
@@ -204,7 +204,7 @@ def test_host_placeholder_resolves_to_bare_hostname_remotely() -> None:
 
 
 def test_host_placeholder_resolves_to_localhost_locally() -> None:
-    session = ProjectSession(session_root=Path("/p"), session_name="p", workspace_name="p:p")
+    session = ProjectSession(session_root=Path("/p"), session_name="p", workspace_name="s:p")
 
     assert substitute("echo {host}", session=session) == "echo localhost"
 
@@ -313,7 +313,7 @@ def test_remote_session_from_env_builds_remote_session(monkeypatch: pytest.Monke
     assert session is not None
     assert session.host == "devbox"
     assert session.session_name == "thonon-les-pains"
-    assert session.workspace_name == "p:thonon-les-pains"
+    assert session.workspace_name == "s:thonon-les-pains"
     assert session.session_root == Path("/home/u/thonon-les-pains")
 
 

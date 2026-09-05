@@ -89,7 +89,7 @@ def build_session() -> ProjectSession:
     return ProjectSession(
         session_root=session_root,
         session_name="demo",
-        workspace_name=f"p:{session_root}",
+        workspace_name=f"s:{session_root}",
     )
 
 
@@ -162,7 +162,7 @@ def test_default_editor_respawn_local_runs_hop_open_in_session_cwd(
     monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
     session_root = tmp_path / "proj"
     session_root.mkdir()
-    session = ProjectSession(session_root=session_root, session_name="proj", workspace_name="p:proj")
+    session = ProjectSession(session_root=session_root, session_name="proj", workspace_name="s:proj")
 
     _default_editor_respawn(session, "app/models/user.rb:42")
 
@@ -183,7 +183,7 @@ def test_default_editor_respawn_remote_passes_identity_via_env(tmp_path: Path, m
     session = ProjectSession(
         session_root=Path("/remote/proj"),
         session_name="proj",
-        workspace_name="p:proj",
+        workspace_name="s:proj",
         host="devbox",
     )
 

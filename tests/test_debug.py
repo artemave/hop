@@ -36,7 +36,7 @@ def build_session(session_root: Path) -> ProjectSession:
     return ProjectSession(
         session_root=session_root,
         session_name=session_root.name,
-        workspace_name=f"p:{session_root.name}",
+        workspace_name=f"s:{session_root.name}",
     )
 
 

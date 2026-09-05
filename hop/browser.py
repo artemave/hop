@@ -175,7 +175,7 @@ class SessionBrowserAdapter:
         return min(windows, key=lambda window: window.id)
 
     def _adopt_workspace_browser_window(self, session: ProjectSession) -> SwayWindow | None:
-        """Promote a browser window already sitting on `p:<session>` to the session browser.
+        """Promote a browser window already sitting on `s:<session>` to the session browser.
 
         Launching a second browser window on a workspace that already shows one
         is never what the user wants, so an unclaimed one there is marked and

@@ -14,7 +14,7 @@ from hop.state import record_session
 
 
 def build_session(root: Path) -> ProjectSession:
-    return ProjectSession(session_root=root, session_name="demo", workspace_name="p:demo")
+    return ProjectSession(session_root=root, session_name="demo", workspace_name="s:demo")
 
 
 class RecordingBackend:

@@ -242,7 +242,7 @@ class SharedNeovimEditorAdapter:
             self._sway.focus_window(min(candidates, key=lambda window: window.id).id)
 
     def _editor_candidates(self, session: ProjectSession) -> list[SwayWindow]:
-        # The session's editor role window(s) on `p:<session>`, matched by
+        # The session's editor role window(s) on `s:<session>`, matched by
         # app_id exactly like every other role (see term.py's
         # `_find_role_window`). Empty means the editor is gone.
         return [

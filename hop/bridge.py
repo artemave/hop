@@ -120,7 +120,7 @@ def resolve_session_from_focus(
 ) -> ProjectSession:
     """Resolve the focused Sway window to a hop session.
 
-    The focused window's workspace name must match ``p:<session>``. That covers
+    The focused window's workspace name must match ``s:<session>``. That covers
     every kitty role terminal — shell, editor, test/server/console/… — since
     they all live on the session workspace, plus any other window the user
     happens to be on while inside a session workspace.

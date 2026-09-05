@@ -43,8 +43,8 @@ def test_reconciler_clears_browser_mark_when_window_left_session_workspace() -> 
 def test_reconciler_is_a_noop_when_marks_match_their_session_workspace() -> None:
     sway = StubSwayAdapter(
         [
-            _window(1, workspace_name="p:demo", marks=("_hop_browser:demo",)),
-            _window(2, workspace_name="p:other", marks=("_hop_browser:other",)),
+            _window(1, workspace_name="s:demo", marks=("_hop_browser:demo",)),
+            _window(2, workspace_name="s:other", marks=("_hop_browser:other",)),
         ]
     )
 
@@ -56,10 +56,10 @@ def test_reconciler_is_a_noop_when_marks_match_their_session_workspace() -> None
 def test_reconciler_handles_multiple_sessions_independently() -> None:
     sway = StubSwayAdapter(
         [
-            _window(1, workspace_name="p:demo", marks=("_hop_browser:demo",)),  # placed correctly
-            _window(2, workspace_name="p:other", marks=("_hop_browser:demo",)),  # drifted
-            _window(3, workspace_name="p:other", marks=("_hop_browser:other",)),  # placed correctly
-            _window(4, workspace_name="p:demo", marks=("_hop_browser:other",)),  # drifted
+            _window(1, workspace_name="s:demo", marks=("_hop_browser:demo",)),  # placed correctly
+            _window(2, workspace_name="s:other", marks=("_hop_browser:demo",)),  # drifted
+            _window(3, workspace_name="s:other", marks=("_hop_browser:other",)),  # placed correctly
+            _window(4, workspace_name="s:demo", marks=("_hop_browser:other",)),  # drifted
         ]
     )
 
@@ -72,7 +72,7 @@ def test_reconciler_leaves_unrelated_marks_alone() -> None:
     sway = StubSwayAdapter(
         [
             _window(1, workspace_name="2", marks=("user-favorite",)),
-            _window(2, workspace_name="p:other", marks=("scratchpad",)),
+            _window(2, workspace_name="s:other", marks=("scratchpad",)),
         ]
     )
 
@@ -88,7 +88,7 @@ def test_reconciler_clears_only_session_marks_on_a_mixed_window() -> None:
         [
             _window(
                 42,
-                workspace_name="p:other",
+                workspace_name="s:other",
                 marks=("_hop_browser:demo", "user-favorite"),
             )
         ]

@@ -55,13 +55,13 @@ def test_focus_terminal_escalates_via_sway_ipc_when_role_window_exists(tmp_path:
 
     role_window = SwayWindow(
         id=42,
-        workspace_name="p:rails",
+        workspace_name="s:rails",
         app_id="hop:console",
         window_class=None,
     )
     other_window = SwayWindow(
         id=99,
-        workspace_name="p:rails",
+        workspace_name="s:rails",
         app_id="hop:server",
         window_class=None,
     )
@@ -87,7 +87,7 @@ def test_focus_terminal_matches_role_via_x11_window_class_fallback(tmp_path: Pat
     # surfaces it as `window_class`. Both should match.
     role_window = SwayWindow(
         id=7,
-        workspace_name="p:rails",
+        workspace_name="s:rails",
         app_id=None,
         window_class="hop:console",
     )
@@ -135,7 +135,7 @@ def test_focus_terminal_ignores_role_windows_on_other_workspaces(tmp_path: Path)
 
     drifted = SwayWindow(
         id=1,
-        workspace_name="p:other",
+        workspace_name="s:other",
         app_id="hop:console",
         window_class=None,
     )
@@ -162,7 +162,7 @@ def test_focus_terminal_editor_role_is_a_plain_role_terminal(tmp_path: Path) -> 
 
     editor_window = SwayWindow(
         id=42,
-        workspace_name="p:rails",
+        workspace_name="s:rails",
         app_id="hop:editor",
         window_class=None,
     )

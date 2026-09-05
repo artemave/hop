@@ -38,7 +38,7 @@ class StubSwayAdapter:
     def set_workspace_layout(self, workspace_name: str, layout: str) -> None:
         self.layout_calls.append((workspace_name, layout))
 
-    def list_session_workspaces(self, *, prefix: str = "p:") -> tuple[str, ...]:
+    def list_session_workspaces(self, *, prefix: str = "s:") -> tuple[str, ...]:
         return tuple(workspace for workspace in self.workspaces if workspace.startswith(prefix))
 
     def list_windows(self) -> tuple[SwayWindow, ...]:
@@ -88,7 +88,7 @@ def test_enter_project_session_switches_to_workspace_and_bootstraps_shell(tmp_pa
     session = enter_project_session(nested_directory, sway=sway, terminals=terminals)
 
     assert session.session_name == "src"
-    assert sway.switched_workspaces == [f"p:{nested_directory.name}"]
+    assert sway.switched_workspaces == [f"s:{nested_directory.name}"]
     assert terminals.ensured_terminals == [("src", "shell", nested_directory)]
     # Caller has already run prepare (resolve_for_entry inline or the headless
     # popup) — the bootstrap path must not re-run it. Re-running ``compose up
@@ -106,7 +106,7 @@ def test_enter_project_session_uses_supplied_session_over_cwd(tmp_path: Path) ->
     remote = ProjectSession(
         session_root=Path("/home/admin/projects/thonon-les-pains"),
         session_name="thonon-les-pains",
-        workspace_name="p:thonon-les-pains",
+        workspace_name="s:thonon-les-pains",
         host="devbox",
     )
 
@@ -115,7 +115,7 @@ def test_enter_project_session_uses_supplied_session_over_cwd(tmp_path: Path) ->
     returned = enter_project_session(tmp_path, sway=sway, terminals=terminals, session=remote)
 
     assert returned is remote
-    assert sway.switched_workspaces == ["p:thonon-les-pains"]
+    assert sway.switched_workspaces == ["s:thonon-les-pains"]
     assert terminals.ensured_terminals == [
         ("thonon-les-pains", "shell", Path("/home/admin/projects/thonon-les-pains")),
     ]
@@ -313,14 +313,14 @@ def test_enter_project_session_skips_inactive_window(tmp_path: Path) -> None:
 def test_enter_project_session_applies_workspace_layout_after_refocusing_shell(tmp_path: Path) -> None:
     """``workspace_layout`` is applied *after* ``_focus_shell_if_present`` has
     refocused the session workspace, not before window launches. Reason: sway
-    reaps empty named workspaces — a slow ``prepare`` can leave ``p:<session>``
+    reaps empty named workspaces — a slow ``prepare`` can leave ``s:<session>``
     empty long enough to be destroyed, and the recreated workspace loses any
     earlier layout. Refocusing the shell first brings us back to a populated
-    ``p:<session>`` so the ``layout <mode>`` command sticks."""
+    ``s:<session>`` so the ``layout <mode>`` command sticks."""
     session_root = tmp_path / "demo"
     session_root.mkdir()
 
-    shell_window = SwayWindow(id=42, workspace_name="p:demo", app_id="hop:shell", window_class=None)
+    shell_window = SwayWindow(id=42, workspace_name="s:demo", app_id="hop:shell", window_class=None)
     sway = StubSwayAdapter(windows=(shell_window,))
     terminals = StubTerminalAdapter()
 
@@ -333,12 +333,12 @@ def test_enter_project_session_applies_workspace_layout_after_refocusing_shell(t
     )
 
     assert sway.focused_window_ids == [42]
-    assert sway.layout_calls == [("p:demo", "tabbed")]
-    assert sway.switched_workspaces == ["p:demo"]
+    assert sway.layout_calls == [("s:demo", "tabbed")]
+    assert sway.switched_workspaces == ["s:demo"]
 
 
 def test_enter_project_session_skips_workspace_layout_when_no_shell_on_session_workspace(tmp_path: Path) -> None:
-    """If no shell window has registered on ``p:<session>`` by the end of the
+    """If no shell window has registered on ``s:<session>`` by the end of the
     activation sweep, ``_focus_shell_if_present`` can't refocus — and applying
     ``layout`` against whatever workspace the user is currently on would
     silently corrupt that workspace's layout. Skip in that case."""
@@ -368,8 +368,8 @@ def test_enter_project_session_focuses_shell_window_after_sweep(tmp_path: Path) 
     session_root = tmp_path / "demo"
     session_root.mkdir()
 
-    shell_window = SwayWindow(id=42, workspace_name="p:demo", app_id="hop:shell", window_class=None)
-    editor_window = SwayWindow(id=43, workspace_name="p:demo", app_id="hop:editor", window_class=None)
+    shell_window = SwayWindow(id=42, workspace_name="s:demo", app_id="hop:shell", window_class=None)
+    editor_window = SwayWindow(id=43, workspace_name="s:demo", app_id="hop:editor", window_class=None)
     sway = StubSwayAdapter(windows=(shell_window, editor_window))
     terminals = StubTerminalAdapter()
 
@@ -398,8 +398,8 @@ def test_enter_project_session_focuses_lowest_id_shell_on_session_workspace(tmp_
     session_root = tmp_path / "demo"
     session_root.mkdir()
 
-    foreign_shell = SwayWindow(id=10, workspace_name="p:other", app_id="hop:shell", window_class=None)
-    session_shell = SwayWindow(id=20, workspace_name="p:demo", app_id="hop:shell", window_class=None)
+    foreign_shell = SwayWindow(id=10, workspace_name="s:other", app_id="hop:shell", window_class=None)
+    session_shell = SwayWindow(id=20, workspace_name="s:demo", app_id="hop:shell", window_class=None)
     sway = StubSwayAdapter(windows=(foreign_shell, session_shell))
     terminals = StubTerminalAdapter()
 
@@ -449,11 +449,11 @@ def test_enter_project_session_reuses_the_same_directory_session_on_repeat_invoc
 
     assert first_session == second_session
     # The first call switches workspace; the second is a no-op for the switch
-    # since the user is already on `p:src` (skipping the IPC avoids tripping
+    # since the user is already on `s:src` (skipping the IPC avoids tripping
     # sway's `workspace_auto_back_and_forth`). Terminal ensure is still
     # idempotent and fires both times — that's the user-visible "give me
     # another shell" behavior.
-    assert sway.switched_workspaces == [f"p:{session_root.name}"]
+    assert sway.switched_workspaces == [f"s:{session_root.name}"]
     assert terminals.ensured_terminals == [
         ("src", "shell", session_root),
         ("src", "shell", session_root),
@@ -461,12 +461,12 @@ def test_enter_project_session_reuses_the_same_directory_session_on_repeat_invoc
 
 
 def test_switch_session_finds_workspace_by_session_name() -> None:
-    sway = StubSwayAdapter(workspaces=("p:demo",))
+    sway = StubSwayAdapter(workspaces=("s:demo",))
 
     workspace_name = switch_session("demo", sway=sway)
 
-    assert workspace_name == "p:demo"
-    assert sway.switched_workspaces == ["p:demo"]
+    assert workspace_name == "s:demo"
+    assert sway.switched_workspaces == ["s:demo"]
 
 
 def test_switch_session_raises_when_no_matching_session_exists() -> None:
@@ -513,7 +513,7 @@ def test_spawn_session_terminal_skips_used_numbered_shells(tmp_path: Path) -> No
 
 def test_spawn_session_terminal_does_not_switch_workspace(tmp_path: Path) -> None:
     """Spawning a new terminal from inside a session does not switch the workspace —
-    the caller is already on p:<session>."""
+    the caller is already on s:<session>."""
     session_root = tmp_path / "demo"
     session_root.mkdir()
     terminals = StubTerminalAdapter()
@@ -524,7 +524,7 @@ def test_spawn_session_terminal_does_not_switch_workspace(tmp_path: Path) -> Non
 
 
 def test_list_sessions_returns_sorted_listings_with_workspace_and_known_session_roots() -> None:
-    sway = StubSwayAdapter(workspaces=("p:zeta", "scratch", "p:alpha", "p:beta"))
+    sway = StubSwayAdapter(workspaces=("s:zeta", "scratch", "s:alpha", "s:beta"))
 
     listings = list_sessions(
         sway=sway,
@@ -535,7 +535,7 @@ def test_list_sessions_returns_sorted_listings_with_workspace_and_known_session_
     )
 
     assert [listing.name for listing in listings] == ["alpha", "beta", "zeta"]
-    assert [listing.workspace for listing in listings] == ["p:alpha", "p:beta", "p:zeta"]
+    assert [listing.workspace for listing in listings] == ["s:alpha", "s:beta", "s:zeta"]
     assert [listing.session_root for listing in listings] == [
         Path("/projects/alpha"),
         Path("/projects/beta"),

@@ -28,7 +28,7 @@ def _make_session(tmp_path: Path) -> ProjectSession:
     return ProjectSession(
         session_root=session_root,
         session_name=session_root.name,
-        workspace_name=f"p:{session_root.name}",
+        workspace_name=f"s:{session_root.name}",
     )
 
 
@@ -388,7 +388,7 @@ def test_lifecycle_spec_routes_remote_session_through_ssh_and_home_cwd(
     session = ProjectSession(
         session_root=Path("/remote/proj"),
         session_name="proj",
-        workspace_name="p:proj",
+        workspace_name="s:proj",
         host="devbox",
     )
     backend = CommandBackend(

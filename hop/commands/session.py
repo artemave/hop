@@ -12,7 +12,7 @@ from hop.session import ProjectSession, resolve_project_session
 from hop.state import SessionState, load_sessions
 from hop.sway import SwayWindow
 
-SESSION_WORKSPACE_PREFIX = "p:"
+SESSION_WORKSPACE_PREFIX = "s:"
 SHELL_TERMINAL_ROLE = SHELL_ROLE
 ADHOC_SHELL_ROLE_PREFIX = "shell-"
 
@@ -77,7 +77,7 @@ def enter_project_session(
     # reasons: (a) sway's `workspace_auto_back_and_forth yes` flips off the
     # focused workspace when re-targeted, which would yank the user away;
     # (b) the headless first-entry path may have switched eagerly already
-    # (so the prepare popup lands on `p:<session>`), in which case we'd be
+    # (so the prepare popup lands on `s:<session>`), in which case we'd be
     # re-issuing the same switch. The check also re-affirms the target when
     # the user navigated away during a slow prepare popup — kitty windows
     # then bootstrap on the session's workspace rather than wherever the
@@ -123,13 +123,13 @@ def enter_project_session(
     if workspace_layout is not None and focused_on_session:
         # Apply layout *after* the activation sweep, not before: sway reaps
         # empty named workspaces when focus leaves them, and a slow
-        # ``prepare`` (devcontainer up, popup) can leave ``p:<session>`` empty
+        # ``prepare`` (devcontainer up, popup) can leave ``s:<session>`` empty
         # for the gap between the popup closing and the role window
         # registering. If the user has wandered to another workspace by then,
-        # ``p:<session>`` gets destroyed and re-created at sway's default
+        # ``s:<session>`` gets destroyed and re-created at sway's default
         # layout when ``_adopt_role_window_to_workspace`` moves the role
         # window back. Setting layout here — after ``_focus_shell_if_present``
-        # has refocused us onto ``p:<session>``, which now has the shell —
+        # has refocused us onto ``s:<session>``, which now has the shell —
         # guarantees the layout sticks. The one-frame reflow as the shell
         # transitions from default to tabbed/stacking is imperceptible.
         sway.set_workspace_layout(session.workspace_name, workspace_layout)

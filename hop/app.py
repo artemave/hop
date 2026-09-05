@@ -89,7 +89,7 @@ class SwayAdapter(Protocol):
 
     def set_workspace_layout(self, workspace_name: str, layout: str) -> None: ...
 
-    def list_session_workspaces(self, *, prefix: str = "p:") -> Sequence[str]: ...
+    def list_session_workspaces(self, *, prefix: str = "s:") -> Sequence[str]: ...
 
     def list_windows(self) -> Sequence[SwayWindow]: ...
 
@@ -433,7 +433,7 @@ def _enter_or_recreate_session(
     windows manually, the wm crashes, or the machine reboots, and we want
     every cold bootstrap to run the full activation sweep regardless of
     whether the file is stale on disk. This also fires when we *are* focused
-    on `p:<session>` but kitty is dead — typically after `hop kill` leaves us
+    on `s:<session>` but kitty is dead — typically after `hop kill` leaves us
     on the (now-empty) workspace — so recreating the session from there gets
     the same full bootstrap as recreating it from elsewhere.
     """
@@ -441,7 +441,7 @@ def _enter_or_recreate_session(
     # Headless first-entry takes a different path: the popup runs prepare
     # with a visible UI, but it can't do that *after* `resolve_for_entry` has
     # already prepared inline — so we skip the inline prepare, switch
-    # workspace eagerly (so the popup lands on `p:<session>` rather than the
+    # workspace eagerly (so the popup lands on `s:<session>` rather than the
     # user's previous workspace), then dispatch the popup. Re-entry doesn't
     # run prepare in either branch, so the headless path only matters when
     # kitty isn't alive.
@@ -574,7 +574,7 @@ def execute_command(
                 focus=focus,
             )
             if focus and services.sway.get_focused_workspace() != dispatch.session.workspace_name:
-                # Skip the switch when already on p:<session> — sway's
+                # Skip the switch when already on s:<session> — sway's
                 # `workspace_auto_back_and_forth` setting flips to the
                 # previous workspace when re-targeting the focused one,
                 # which would yank the operator out of the session.

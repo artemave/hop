@@ -25,7 +25,7 @@ class StubSwayAdapter:
     def set_workspace_layout(self, workspace_name: str, layout: str) -> None:
         raise AssertionError("set_workspace_layout should not be called for hop run")
 
-    def list_session_workspaces(self, *, prefix: str = "p:") -> tuple[str, ...]:
+    def list_session_workspaces(self, *, prefix: str = "s:") -> tuple[str, ...]:
         return ()
 
     def list_windows(self) -> Sequence[SwayWindow]:

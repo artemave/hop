@@ -73,7 +73,7 @@ def build_session() -> ProjectSession:
     return ProjectSession(
         session_root=session_root,
         session_name="demo",
-        workspace_name="p:demo",
+        workspace_name="s:demo",
     )
 
 
@@ -94,7 +94,7 @@ def test_launch_session_browser_keeps_already_attached_workspace_without_move() 
         sway.windows.append(
             SwayWindow(
                 id=99,
-                workspace_name="p:demo",
+                workspace_name="s:demo",
                 app_id="brave-browser",
                 window_class=None,
                 marks=(),
@@ -327,7 +327,7 @@ def test_session_browser_adapter_falls_back_to_xdg_when_no_browser_window_comman
         sway.windows.append(
             SwayWindow(
                 id=99,
-                workspace_name="p:demo",
+                workspace_name="s:demo",
                 app_id="test-browser",
                 window_class=None,
                 marks=(),
@@ -368,7 +368,7 @@ def test_session_browser_adapter_uses_top_level_browser_window_override() -> Non
         sway.windows.append(
             SwayWindow(
                 id=99,
-                workspace_name="p:demo",
+                workspace_name="s:demo",
                 app_id="custom-browser",
                 window_class=None,
                 marks=(),
@@ -406,19 +406,19 @@ def test_subprocess_runner_invokes_subprocess_run(monkeypatch: pytest.MonkeyPatc
 
 
 def test_matches_browser_executable_needs_a_pid_on_the_window() -> None:
-    window = SwayWindow(id=1, workspace_name="p:demo", app_id="firefox-dev", window_class=None)
+    window = SwayWindow(id=1, workspace_name="s:demo", app_id="firefox-dev", window_class=None)
 
     assert _matches_browser_executable(window, (sys.executable,)) is False
 
 
 def test_matches_browser_executable_needs_an_executable_in_the_command() -> None:
     # An `Exec` line of nothing but env assignments names no binary to compare.
-    window = SwayWindow(id=1, workspace_name="p:demo", app_id="firefox-dev", window_class=None, pid=os.getpid())
+    window = SwayWindow(id=1, workspace_name="s:demo", app_id="firefox-dev", window_class=None, pid=os.getpid())
 
     assert _matches_browser_executable(window, ("env", "MOZ_ENABLE_WAYLAND=1")) is False
 
 
 def test_matches_browser_executable_recognizes_the_running_process() -> None:
-    window = SwayWindow(id=1, workspace_name="p:demo", app_id="firefox-dev", window_class=None, pid=os.getpid())
+    window = SwayWindow(id=1, workspace_name="s:demo", app_id="firefox-dev", window_class=None, pid=os.getpid())
 
     assert _matches_browser_executable(window, (sys.executable,)) is True

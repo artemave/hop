@@ -82,7 +82,7 @@ class StubSwayAdapter:
         # no-op, so we just record the calls in case a future test needs them.
         self.focused_window_ids.append(window_id)
 
-    def list_session_workspaces(self, *, prefix: str = "p:") -> tuple[str, ...]:
+    def list_session_workspaces(self, *, prefix: str = "s:") -> tuple[str, ...]:
         return tuple(workspace for workspace in self.workspaces if workspace.startswith(prefix))
 
     def list_windows(self) -> tuple[SwayWindow, ...]:
@@ -352,7 +352,7 @@ def test_execute_command_enters_project_session_and_bootstraps_shell(tmp_path: P
     services = build_services()
 
     assert execute_command(EnterSessionCommand(), cwd=nested_directory, services=services.as_services()) == 0
-    assert services.sway.switched_workspaces == [f"p:{nested_directory.name}"]
+    assert services.sway.switched_workspaces == [f"s:{nested_directory.name}"]
     assert services.kitty.ensured_roles == [
         ("src", "shell", nested_directory.resolve()),
         ("src", "editor", nested_directory.resolve()),
@@ -385,7 +385,7 @@ def test_execute_command_interactive_trust_prompt_records_and_retries(
 
     assert asked == [(str(config_path), 'workspace_layout = "tabbed"\n')]
     assert trust.is_trusted(str(config_path), 'workspace_layout = "tabbed"\n') is True
-    assert services.sway.switched_workspaces == [f"p:{session_root.name}"]
+    assert services.sway.switched_workspaces == [f"s:{session_root.name}"]
 
 
 def test_execute_command_interactive_trust_prompt_aborts_without_recording(
@@ -432,7 +432,7 @@ def test_execute_command_headless_trust_prompt_uses_popup_and_retries(tmp_path: 
 
     assert popup.trust_prompt_calls == [(session_root.name, str(config_path), 'workspace_layout = "tabbed"\n')]
     assert trust.is_trusted(str(config_path), 'workspace_layout = "tabbed"\n') is True
-    assert services.sway.switched_workspaces == [f"p:{session_root.name}"]
+    assert services.sway.switched_workspaces == [f"s:{session_root.name}"]
 
 
 def test_execute_command_headless_trust_prompt_abort_is_surfaced_by_popup(tmp_path: Path) -> None:
@@ -463,7 +463,7 @@ def test_execute_command_spawns_extra_shell_when_focused_on_session_workspace(tm
     # user explicitly runs `hop term --role editor` (or picks the vicinae
     # `Hop editor` entry). Kitty is alive, which gates the spawn-extra-shell
     # branch.
-    services = build_services(focused_workspace="p:demo", alive_session_names=("demo",))
+    services = build_services(focused_workspace="s:demo", alive_session_names=("demo",))
 
     assert (
         execute_command(
@@ -485,10 +485,10 @@ def test_execute_command_recreates_session_when_on_emptied_workspace(tmp_path: P
     session_root = tmp_path / "demo"
     session_root.mkdir()
 
-    # Focused on `p:demo` but kitty is dead (kill swept it). The spawn-
+    # Focused on `s:demo` but kitty is dead (kill swept it). The spawn-
     # extra-shell branch is gated on kitty being alive, so we fall through
     # to the bootstrap branch and bring the full session up.
-    services = build_services(focused_workspace="p:demo", persisted_session_names=(), alive_session_names=())
+    services = build_services(focused_workspace="s:demo", persisted_session_names=(), alive_session_names=())
 
     assert (
         execute_command(
@@ -514,7 +514,7 @@ def test_execute_command_first_entry_brings_up_both_editor_and_shell(tmp_path: P
     session_root = tmp_path / "demo"
     session_root.mkdir()
 
-    services = build_services(focused_workspace="p:other", persisted_session_names=())
+    services = build_services(focused_workspace="s:other", persisted_session_names=())
 
     assert (
         execute_command(
@@ -524,7 +524,7 @@ def test_execute_command_first_entry_brings_up_both_editor_and_shell(tmp_path: P
         )
         == 0
     )
-    assert services.sway.switched_workspaces == ["p:demo"]
+    assert services.sway.switched_workspaces == ["s:demo"]
     assert services.kitty.ensured_roles == [
         ("demo", "shell", session_root.resolve()),
         ("demo", "editor", session_root.resolve()),
@@ -537,9 +537,9 @@ def test_execute_command_applies_workspace_layout_from_config_on_first_entry(tmp
 
     # Shell window must be visible to sway by the end of the sweep — the
     # layout pass is gated on ``_focus_shell_if_present`` finding it.
-    shell_window = SwayWindow(id=1, workspace_name="p:demo", app_id="hop:shell", window_class=None)
+    shell_window = SwayWindow(id=1, workspace_name="s:demo", app_id="hop:shell", window_class=None)
     services = StubHopServices(
-        sway=StubSwayAdapter(focused_workspace="p:other", windows=(shell_window,)),
+        sway=StubSwayAdapter(focused_workspace="s:other", windows=(shell_window,)),
         kitty=StubKittyAdapter(),
         neovim=StubNeovimAdapter(),
         browser=StubBrowserAdapter(),
@@ -563,7 +563,7 @@ def test_execute_command_applies_workspace_layout_from_config_on_first_entry(tmp
 
     assert execute_command(EnterSessionCommand(), cwd=session_root, services=real_services) == 0
 
-    assert services.sway.layout_calls == [("p:demo", "tabbed")]
+    assert services.sway.layout_calls == [("s:demo", "tabbed")]
 
 
 def test_execute_command_skips_workspace_layout_on_re_entry(tmp_path: Path) -> None:
@@ -571,7 +571,7 @@ def test_execute_command_skips_workspace_layout_on_re_entry(tmp_path: Path) -> N
     session_root.mkdir()
 
     services = StubHopServices(
-        sway=StubSwayAdapter(focused_workspace="p:other"),
+        sway=StubSwayAdapter(focused_workspace="s:other"),
         kitty=StubKittyAdapter(alive_session_names=("demo",)),  # session's kitty is up
         neovim=StubNeovimAdapter(),
         browser=StubBrowserAdapter(),
@@ -609,7 +609,7 @@ def test_execute_command_re_entry_does_not_resurrect_a_closed_editor(tmp_path: P
     session_root.mkdir()
 
     services = build_services(
-        focused_workspace="p:other",
+        focused_workspace="s:other",
         persisted_session_names=("demo",),
     )
 
@@ -621,7 +621,7 @@ def test_execute_command_re_entry_does_not_resurrect_a_closed_editor(tmp_path: P
         )
         == 0
     )
-    assert services.sway.switched_workspaces == ["p:demo"]
+    assert services.sway.switched_workspaces == ["s:demo"]
     assert services.kitty.ensured_roles == [("demo", "shell", session_root.resolve())]
 
 
@@ -636,7 +636,7 @@ def test_execute_command_runs_full_activation_when_state_is_stale_and_kitty_dead
     session_root.mkdir()
 
     services = build_services(
-        focused_workspace="p:other",
+        focused_workspace="s:other",
         persisted_session_names=("demo",),  # state file lingers on disk…
         alive_session_names=(),  # …but kitty isn't reachable.
     )
@@ -656,13 +656,13 @@ def test_execute_command_runs_full_activation_when_state_is_stale_and_kitty_dead
 
 
 def test_execute_command_switches_to_named_session() -> None:
-    services = build_services(workspaces=("p:demo",))
+    services = build_services(workspaces=("s:demo",))
 
     result = execute_command(
         SwitchSessionCommand(session_name="demo"), cwd=Path("/tmp"), services=services.as_services()
     )
     assert result == 0
-    assert services.sway.switched_workspaces == ["p:demo"]
+    assert services.sway.switched_workspaces == ["s:demo"]
 
 
 def test_execute_command_moves_focused_window_to_named_session() -> None:
@@ -673,12 +673,12 @@ def test_execute_command_moves_focused_window_to_named_session() -> None:
         window_class=None,
         focused=True,
     )
-    services = build_services(workspaces=("p:demo",), sway_windows=(focused_window,))
+    services = build_services(workspaces=("s:demo",), sway_windows=(focused_window,))
 
     result = execute_command(MoveCommand(session_name="demo"), cwd=Path("/tmp"), services=services.as_services())
 
     assert result == 0
-    assert services.sway.moved_windows == [(42, "p:demo")]
+    assert services.sway.moved_windows == [(42, "s:demo")]
 
 
 def test_execute_command_move_raises_for_unknown_session() -> None:
@@ -689,7 +689,7 @@ def test_execute_command_move_raises_for_unknown_session() -> None:
         window_class=None,
         focused=True,
     )
-    services = build_services(workspaces=("p:demo",), sway_windows=(focused_window,))
+    services = build_services(workspaces=("s:demo",), sway_windows=(focused_window,))
 
     with pytest.raises(HopError, match="no session named 'ghost'"):
         execute_command(MoveCommand(session_name="ghost"), cwd=Path("/tmp"), services=services.as_services())
@@ -697,7 +697,7 @@ def test_execute_command_move_raises_for_unknown_session() -> None:
 
 
 def test_execute_command_lists_sorted_session_names() -> None:
-    services = build_services(workspaces=("p:zeta", "workspace", "p:alpha"))
+    services = build_services(workspaces=("s:zeta", "workspace", "s:alpha"))
     stdout = io.StringIO()
 
     with redirect_stdout(stdout):
@@ -728,7 +728,7 @@ def test_execute_command_lists_sessions_as_json_with_session_roots(
         )
     )
 
-    services = build_services(workspaces=("p:zeta", "workspace", "p:alpha"))
+    services = build_services(workspaces=("s:zeta", "workspace", "s:alpha"))
     stdout = io.StringIO()
 
     with redirect_stdout(stdout):
@@ -743,8 +743,8 @@ def test_execute_command_lists_sessions_as_json_with_session_roots(
 
     payload = json.loads(stdout.getvalue())
     assert payload == [
-        {"name": "alpha", "workspace": "p:alpha", "session_root": "/projects/alpha", "host": "devbox"},
-        {"name": "zeta", "workspace": "p:zeta", "session_root": None, "host": None},
+        {"name": "alpha", "workspace": "s:alpha", "session_root": "/projects/alpha", "host": "devbox"},
+        {"name": "zeta", "workspace": "s:zeta", "session_root": None, "host": None},
     ]
 
 
@@ -853,7 +853,7 @@ def test_execute_command_run_with_focus_switches_to_session_workspace(
     nested_directory.mkdir(parents=True)
     monkeypatch.setenv("HOP_RUNS_DIR", str(tmp_path / "runs"))
 
-    services = build_services(focused_workspace="p:other")
+    services = build_services(focused_workspace="s:other")
     stdout = io.StringIO()
 
     with redirect_stdout(stdout):
@@ -867,7 +867,7 @@ def test_execute_command_run_with_focus_switches_to_session_workspace(
         )
 
     assert services.kitty.runs == [("src", "server", "bin/dev", nested_directory.resolve(), True)]
-    assert services.sway.switched_workspaces == ["p:src"]
+    assert services.sway.switched_workspaces == ["s:src"]
     run_id = stdout.getvalue().strip()
     assert (tmp_path / "runs" / f"{run_id}.json").is_file()
 
@@ -880,7 +880,7 @@ def test_execute_command_run_with_focus_skips_workspace_switch_when_already_ther
     nested_directory.mkdir(parents=True)
     monkeypatch.setenv("HOP_RUNS_DIR", str(tmp_path / "runs"))
 
-    services = build_services(focused_workspace="p:src")
+    services = build_services(focused_workspace="s:src")
     stdout = io.StringIO()
 
     with redirect_stdout(stdout):
@@ -1004,7 +1004,7 @@ def test_execute_command_uses_invocation_directory_for_browser_sessions(tmp_path
 def test_execute_command_kills_every_window_on_session_workspace(tmp_path: Path) -> None:
     session_root = tmp_path / "demo"
     session_root.mkdir()
-    workspace_name = f"p:{session_root.name}"
+    workspace_name = f"s:{session_root.name}"
 
     session_window = SwayWindow(
         id=11,
@@ -1014,7 +1014,7 @@ def test_execute_command_kills_every_window_on_session_workspace(tmp_path: Path)
     )
     drifted_browser = SwayWindow(
         id=12,
-        workspace_name="p:other",
+        workspace_name="s:other",
         app_id="firefox",
         window_class=None,
         marks=("_hop_browser:demo",),
@@ -1083,7 +1083,7 @@ def test_create_headless_runs_prepare_in_popup_after_eager_workspace_switch(tmp_
     popup = TrackingPopup(is_interactive=False)
     kitty_stub = StubKittyAdapter()
     services = HopServices(
-        sway=TrackingSway(focused_workspace="p:other"),
+        sway=TrackingSway(focused_workspace="s:other"),
         kitty=kitty_stub,
         neovim=StubNeovimAdapter(),
         browser=StubBrowserAdapter(),
@@ -1100,7 +1100,7 @@ def test_create_headless_runs_prepare_in_popup_after_eager_workspace_switch(tmp_
     # The popup ran prepare exactly once with the backend's prepare command.
     assert popup.prepare_calls == [("demo", ("compose up -d devcontainer",))]
     # The eager workspace switch happened BEFORE the popup runs prepare.
-    assert sway_events == [("switch", "p:demo"), ("prepare", "demo")]
+    assert sway_events == [("switch", "s:demo"), ("prepare", "demo")]
     # SessionBackendRegistry's runner skipped the prepare invocation
     # (`flock -o ... sh -c 'compose up -d devcontainer'`) — only activate and
     # workspace_path probes ran.
@@ -1121,7 +1121,7 @@ def test_create_headless_failure_aborts_bootstrap(tmp_path: Path) -> None:
         is_interactive=False,
         prepare_raises=SessionBackendError("prepare failed", surfaced_by_popup=True),
     )
-    sway = StubSwayAdapter(focused_workspace="p:other")
+    sway = StubSwayAdapter(focused_workspace="s:other")
     kitty_stub = StubKittyAdapter()
     neovim_stub = StubNeovimAdapter()
     services = HopServices(
@@ -1144,7 +1144,7 @@ def test_create_headless_failure_aborts_bootstrap(tmp_path: Path) -> None:
     assert excinfo.value.surfaced_by_popup is True
     # Workspace was switched eagerly even though prepare failed — the user
     # is still on the new workspace with the popup visible.
-    assert sway.switched_workspaces == ["p:demo"]
+    assert sway.switched_workspaces == ["s:demo"]
     # Bootstrap was aborted: no kitty / editor ensure calls.
     assert kitty_stub.ensured_roles == []
 
@@ -1161,7 +1161,7 @@ def test_create_interactive_runs_prepare_inline_not_in_popup(tmp_path: Path) -> 
         return _no_subprocess_runner(args, cwd, stdin=stdin)
 
     popup = StubHopPopup(is_interactive=True)
-    sway = StubSwayAdapter(focused_workspace="p:other")
+    sway = StubSwayAdapter(focused_workspace="s:other")
     services = HopServices(
         sway=sway,
         kitty=StubKittyAdapter(),
@@ -1192,7 +1192,7 @@ def test_create_headless_without_prepare_command_still_bootstraps(tmp_path: Path
     session_root.mkdir()
 
     services = build_services(
-        focused_workspace="p:other",
+        focused_workspace="s:other",
         persisted_session_names=(),
     )
     services.popup = StubHopPopup(is_interactive=False)
@@ -1213,7 +1213,7 @@ def test_create_headless_reentry_does_not_run_popup(tmp_path: Path) -> None:
     session_root.mkdir()
 
     services = build_services(
-        focused_workspace="p:other",
+        focused_workspace="s:other",
         persisted_session_names=("demo",),
         alive_session_names=("demo",),
     )
@@ -1227,7 +1227,7 @@ def test_create_headless_reentry_does_not_run_popup(tmp_path: Path) -> None:
 def test_kill_headless_delegates_teardown_to_popup_after_window_close(tmp_path: Path) -> None:
     session_root = tmp_path / "demo"
     session_root.mkdir()
-    workspace_name = f"p:{session_root.name}"
+    workspace_name = f"s:{session_root.name}"
 
     session_window = SwayWindow(id=21, workspace_name=workspace_name, app_id="kitty", window_class=None)
 
@@ -1265,7 +1265,7 @@ def test_kill_headless_delegates_teardown_to_popup_after_window_close(tmp_path: 
 def test_kill_headless_teardown_failure_skips_forget(tmp_path: Path) -> None:
     session_root = tmp_path / "demo"
     session_root.mkdir()
-    workspace_name = f"p:{session_root.name}"
+    workspace_name = f"s:{session_root.name}"
     session_window = SwayWindow(id=21, workspace_name=workspace_name, app_id="kitty", window_class=None)
     sway = StubSwayAdapter(workspaces=(workspace_name,), windows=(session_window,))
 
@@ -1319,7 +1319,7 @@ def _make_session(session_root: Path) -> ProjectSession:
     return ProjectSession(
         session_root=session_root,
         session_name=session_root.name,
-        workspace_name=f"p:{session_root.name}",
+        workspace_name=f"s:{session_root.name}",
     )
 
 
@@ -1751,7 +1751,7 @@ def test_persist_bootstrap_record_writes_session_state(tmp_path: Path, monkeypat
     session = ProjectSession(
         session_root=tmp_path,
         session_name="bootstrap",
-        workspace_name="p:bootstrap",
+        workspace_name="s:bootstrap",
     )
     backend = CommandBackend(
         name="devcontainer",
@@ -1776,7 +1776,7 @@ def test_persist_bootstrap_record_freezes_the_pending_project_config_text(
     session = ProjectSession(
         session_root=tmp_path,
         session_name="bootstrap",
-        workspace_name="p:bootstrap",
+        workspace_name="s:bootstrap",
     )
     backend = CommandBackend(name="host", interactive_prefix="", noninteractive_prefix="")
     registry = SessionBackendRegistry()

@@ -41,7 +41,7 @@ Session name is derived from the session root directory name.
 
 Workspace naming:
 
-`p:<session_name>`
+`s:<session_name>`
 
 ---
 
@@ -101,7 +101,7 @@ For a **non-host** backend (a non-empty `interactive_prefix`), hop launches the 
 
 A session can run on a remote machine reached over ssh. The same project `.hop.toml` drives it — there is **no second config and no ssh in the recipe**. The prefixes (`podman-compose … exec devcontainer`, etc.) are byte-identical to the local case; hop wraps every composed command (window launches and the runner-mediated `prepare`/`teardown`/`paths_exist`/`read_file`/translate/`activate` calls) in an outer `ssh <host> '<cmd>'` keyed off the session's host. The ssh layer is intrinsic: a kitty window is a host GUI surface, so a remote shell inside it requires an ssh client as the window's child — hop builds that, the user never writes it.
 
-A remote session needs **no local directory and no local `.hop.toml`**. It is a session record carrying `(name, host, remote_cwd)`: the name and `p:<name>` workspace come from the remote directory's basename, the `.hop.toml` is fetched from the remote on demand (not read locally), and kitty windows open in the user's home (their child immediately `ssh`'s out). `{session_root}` and the transport's `cd` use the remote path string, which is never touched as a local filesystem path.
+A remote session needs **no local directory and no local `.hop.toml`**. It is a session record carrying `(name, host, remote_cwd)`: the name and `s:<name>` workspace come from the remote directory's basename, the `.hop.toml` is fetched from the remote on demand (not read locally), and kitty windows open in the user's home (their child immediately `ssh`'s out). `{session_root}` and the transport's `cd` use the remote path string, which is never touched as a local filesystem path.
 
 The transport reuses one ssh ControlMaster per host (`ControlMaster=auto` + `ControlPersist`), so a session survives a laptop-sleep / connection drop and redials lazily on the next command. The composed command is base64-encoded behind a fixed decode wrapper so ssh's argv-flattening can't corrupt it and stdin stays free for piped data (the `paths_exist`/`read_file` script-over-stdin path); the decoded command runs under a remote login shell so the remote user's normal PATH resolves with no extra config. See *Remote session setup (`hop ssh`)* for how a session is created.
 
@@ -185,8 +185,8 @@ Each session may have a browser window.
 - browser usage is scoped to the current session
 - `hop` reuses the user's default browser windowing model instead of a dedicated profile
 - the session browser is rediscovered through a session-specific Sway mark rather than by visible title alone
-- when no marked window exists, an unclaimed browser window already on `p:<session>` is promoted to the session browser (marked and reused) instead of launching a second one. A window counts as a browser window when its `app_id`/`class` matches the browser's window identifiers *or* its pid's executable matches the launch command — neither signal alone covers both wrapper-script launchers and desktop entries without a `StartupWMClass`. Windows carrying any session's browser mark are never promoted. Browser windows on other workspaces are the user's and are left alone
-- raw Sway moves of the browser off `p:<session>` clear that mark — `hopd` reconciles marks against current placement on every Sway `window` event. The window stops being the session's browser, and the next `hop browser` launches a fresh one
+- when no marked window exists, an unclaimed browser window already on `s:<session>` is promoted to the session browser (marked and reused) instead of launching a second one. A window counts as a browser window when its `app_id`/`class` matches the browser's window identifiers *or* its pid's executable matches the launch command — neither signal alone covers both wrapper-script launchers and desktop entries without a `StartupWMClass`. Windows carrying any session's browser mark are never promoted. Browser windows on other workspaces are the user's and are left alone
+- raw Sway moves of the browser off `s:<session>` clear that mark — `hopd` reconciles marks against current placement on every Sway `window` event. The window stops being the session's browser, and the next `hop browser` launches a fresh one
 - opening URLs should reuse or create a browser window within the session workspace
 
 ---
@@ -208,7 +208,7 @@ From inside the directory you want to treat as the session root:
 - ensure at least one terminal window exists (role `shell`)
 - reuse the existing `shell` terminal when it already exists
 
-When the focused Sway workspace already matches the cwd-derived session's workspace (`p:<session>`), `hop` switches to the *spawn-additional-terminal* mode instead:
+When the focused Sway workspace already matches the cwd-derived session's workspace (`s:<session>`), `hop` switches to the *spawn-additional-terminal* mode instead:
 
 - use the current working directory as the session root (same rule as above)
 - do not switch workspaces — by definition we're already on the right one
@@ -217,7 +217,7 @@ When the focused Sway workspace already matches the cwd-derived session's worksp
 
 This makes "give me another shell in this session" a single keystroke (`hop`) from any session terminal. The signal is the focused workspace, not env vars — so the same behavior is available to a Sway keybinding that runs `cd <session_root> && hop term`.
 
-When `hop` is invoked without a controlling TTY (e.g. from vicinae's detached `setsid -f hop`, a sway keybinding, or a launcher script), the first-entry path shows a `kitten panel` overlay (`app_id="hop:popup"`) streaming the backend's `prepare` output while the session is being created. Sway is switched to `p:<session>` *before* the popup runs so the user lands on the session-to-be while prepare streams. On prepare failure the panel stays open at a held shell so the user can read the error; on success it closes and the normal kitty / editor bootstrap proceeds. From an interactive terminal, prepare output streams to that terminal as today.
+When `hop` is invoked without a controlling TTY (e.g. from vicinae's detached `setsid -f hop`, a sway keybinding, or a launcher script), the first-entry path shows a `kitten panel` overlay (`app_id="hop:popup"`) streaming the backend's `prepare` output while the session is being created. Sway is switched to `s:<session>` *before* the popup runs so the user lands on the session-to-be while prepare streams. On prepare failure the panel stays open at a held shell so the user can read the error; on success it closes and the normal kitty / editor bootstrap proceeds. From an interactive terminal, prepare output streams to that terminal as today.
 
 ---
 
@@ -247,7 +247,7 @@ hop switch <session>
 
 Behavior:
 
-- focus workspace `p:<session>`
+- focus workspace `s:<session>`
 - create that workspace if it does not exist yet
 
 ---
@@ -260,8 +260,8 @@ hop move <session>
 
 Behavior:
 
-- move the currently-focused Sway window onto the named session's `p:<session>` workspace
-- switch the user's view to `p:<session>` after the move, so the moved window is visible at its destination
+- move the currently-focused Sway window onto the named session's `s:<session>` workspace
+- switch the user's view to `s:<session>` after the move, so the moved window is visible at its destination
 - error if no session named `<session>` is live, or if no window is focused
 
 ---
@@ -275,8 +275,8 @@ hop list --json
 
 Behavior:
 
-- discover live Sway workspaces whose names start with `p:`
-- without `--json`: print session names without the `p:` prefix, one per line, alphabetical
+- discover live Sway workspaces whose names start with `s:`
+- without `--json`: print session names without the `s:` prefix, one per line, alphabetical
 - with `--json`: print a JSON array of records `{name, workspace, session_root}`. `session_root` comes from per-session state files written at bootstrap (`${XDG_RUNTIME_DIR}/hop/sessions/<name>.json`) and is `null` when no record exists (e.g. for workspaces created outside hop). This is the stable machine-readable API external tools should consume for the full session list and their roots — not the kitty user_vars. (`$HOP_SESSION` inside a session shell tells you *which* session you're in, but not its root.)
 
 ---
@@ -341,7 +341,7 @@ Behavior:
 - otherwise → create it
 - terminal lookup is keyed by stable Kitty metadata for the session and role, not by ad hoc window IDs
 - `hop term --role editor` focuses or launches the session's shared Neovim. The editor is a plain role terminal like every other role: `ensure_terminal` launches a shell and types `nvim` into it (or focuses the existing editor window). The singleton — one editor per session — comes from the per-role window mechanism, not a bespoke launch path.
-- `hop term`, `hop open`, `hop run`, and `hop browser` do **not** switch Sway workspaces by default — they assume the caller is already on `p:<session>` (which is true when the command is invoked from any of that session's terminals). Use bare `hop` or `hop switch` to enter a session's workspace. `hop run --focus` is the one explicit opt-in that crosses workspaces, since asking to focus the role terminal is meaningless if the caller is somewhere else.
+- `hop term`, `hop open`, `hop run`, and `hop browser` do **not** switch Sway workspaces by default — they assume the caller is already on `s:<session>` (which is true when the command is invoked from any of that session's terminals). Use bare `hop` or `hop switch` to enter a session's workspace. `hop run --focus` is the one explicit opt-in that crosses workspaces, since asking to focus the role terminal is meaningless if the caller is somewhere else.
 
 `hop term` invoked without `--role` is an alias for bare `hop` — same env-driven branching: spawns a new `shell-<N>` terminal when run from inside a session, otherwise enters the session.
 
@@ -450,8 +450,8 @@ Behavior:
 
 - on startup: regenerate the script set once, then subscribe to `workspace` events.
 - on every workspace event: regenerate the script set.
-- on focused workspace `p:<session>`: emit `hop-window-<role>` per role from the same window resolver `hop windows` uses (built-ins + active layouts + top-level), `hop-kill` for the focused session, and `hop-switch-<other-session>` for every other live session.
-- off any `p:*` workspace: emit only `hop-switch-<session>` per live session.
+- on focused workspace `s:<session>`: emit `hop-window-<role>` per role from the same window resolver `hop windows` uses (built-ins + active layouts + top-level), `hop-kill` for the focused session, and `hop-switch-<other-session>` for every other live session.
+- off any `s:*` workspace: emit only `hop-switch-<session>` per live session.
 - always emit `hop-create` regardless of focused workspace. The script falls through to a second `vicinae dmenu` over directories under `$HOME` (with dot-dirs and well-known build noise pruned) and dispatches `cd <picked> && exec hop`, which creates a session if the directory has none or attaches if one is already running.
 - own the `hop-*` filename namespace in the scripts directory: any `hop-*` file not in the target set is removed; any non-`hop-*` file is left untouched.
 - on Sway IPC failure (refused subscription, dropped connection, malformed reply): print the error and exit non-zero.
@@ -477,9 +477,9 @@ Wire protocol — HTTP/1.0 over `AF_UNIX`:
 The acceptor dispatches by request shape:
 
 - **Remote session entry** — a call carrying a non-empty `host` and *no* args (`hop` with no subcommand, from a `hop ssh`-installed shim). No session exists yet, so identity comes from the shim's `(host, cwd)`, not from focus: hop is run with `HOP_REMOTE_HOST` / `HOP_REMOTE_CWD` set and builds the remote `ProjectSession` from them.
-- **Everything else** — session identity is resolved on the host from existing Sway state, not from the request. The acceptor queries Sway for the focused window: if its workspace name matches `p:<session>`, the suffix is the session name. This covers every kitty role terminal — shell, editor, test/server/console/… — since they all live on the session workspace, plus any other window inside a session workspace; they carry no per-window session identity in Sway, but the workspace tag is hop's canonical session-to-window mapping.
+- **Everything else** — session identity is resolved on the host from existing Sway state, not from the request. The acceptor queries Sway for the focused window: if its workspace name matches `s:<session>`, the suffix is the session name. This covers every kitty role terminal — shell, editor, test/server/console/… — since they all live on the session workspace, plus any other window inside a session workspace; they carry no per-window session identity in Sway, but the workspace tag is hop's canonical session-to-window mapping.
 
-  The session record is then looked up in `$XDG_RUNTIME_DIR/hop/sessions/<name>.json`; the `hop` subprocess is spawned with `cwd` set to that session's `session_root`. Bridge calls from windows that are not on a `p:<session>` workspace are rejected with `400`.
+  The session record is then looked up in `$XDG_RUNTIME_DIR/hop/sessions/<name>.json`; the `hop` subprocess is spawned with `cwd` set to that session's `session_root`. Bridge calls from windows that are not on a `s:<session>` workspace are rejected with `400`.
 
 Dispatch is via subprocess (`python -m hop <argv>`) per request. Output is buffered before the response is written; streaming is out of scope. The protocol is curl-compatible — `curl --unix-socket $XDG_RUNTIME_DIR/hop/api.sock --data-binary @- http://_/call < argv.nul` is sufficient to drive it from the host, which is also how the host-side test suite exercises it.
 
@@ -629,7 +629,7 @@ The editor is whatever command the user configures on the `editor` role; nvim is
 
 - the editor is started when needed (e.g. via `hop term --role editor`, or when `hop open <target>` lands on a file/Rails ref) — as a plain role terminal, a shell with `nvim` typed into it. When the open comes from the `kitten/hints` dispatch (which runs inside the kitty boss loop and can't launch a window synchronously without deadlocking it), a missing editor is re-spawned out of process via a detached `hop open <target>`, which brings the editor up and opens the file in its own process
 - the shared editor is driven by writing keystrokes into kitty's pty via `kitty @ send-text`, matched by the `hop_role=editor` user var on the kitty window — no editor-side remote-control socket is involved, so backends with a private filesystem (devcontainer, ssh) work without any cross-namespace socket coordination
-- the editor window is rediscovered like any role window — by its `hop_role=editor` user var (or `hop:editor` app_id) on `p:<session>` — so `hop open` and `hop term --role editor` always find the one editor per session
+- the editor window is rediscovered like any role window — by its `hop_role=editor` user var (or `hop:editor` app_id) on `s:<session>` — so `hop open` and `hop term --role editor` always find the one editor per session
 - if the editor window is closed, the next `hop term --role editor` launches a fresh one. If the editor is quit (`:qa`) but the window stays open at a shell, the next `hop term --role editor` focuses that shell; it can be recreated by:
 
 ```bash

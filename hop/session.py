@@ -33,7 +33,7 @@ def derive_session_name(session_root: Path | str) -> str:
 
 def derive_workspace_name(session_root: Path | str) -> str:
     root = Path(session_root).expanduser().resolve()
-    return f"p:{root.name}"
+    return f"s:{root.name}"
 
 
 def resolve_project_session(
@@ -69,6 +69,6 @@ def remote_session_from_env() -> ProjectSession | None:
     return ProjectSession(
         session_root=root,
         session_name=root.name,
-        workspace_name=f"p:{root.name}",
+        workspace_name=f"s:{root.name}",
         host=host,
     )

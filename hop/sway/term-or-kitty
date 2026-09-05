@@ -27,8 +27,8 @@ ws=$(swaymsg -t get_workspaces | jq -r '.[] | select(.focused).name')
 session_root=""
 host=""
 
-if [[ $ws == p:* ]]; then
-    listing=$("${hop[@]}" list --json 2>/dev/null | jq -c --arg s "${ws#p:}" '
+if [[ $ws == s:* ]]; then
+    listing=$("${hop[@]}" list --json 2>/dev/null | jq -c --arg s "${ws#s:}" '
         .[] | select(.name == $s)
     ' || true)
     if [[ -n $listing ]]; then

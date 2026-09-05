@@ -1,7 +1,7 @@
 """Reconcile session-window marks against current Sway workspace placement.
 
 `hopd` runs this on every Sway `window` event so that raw Sway moves of the
-session editor or browser off `p:<session>` clear the corresponding mark —
+session editor or browser off `s:<session>` clear the corresponding mark —
 the window becomes a regular Sway window with no hop affiliation, and the
 next `hop open` / `hop browser` launches a fresh one rather than yanking
 the moved window back.
