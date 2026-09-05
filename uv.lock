@@ -3,7 +3,7 @@ revision = 3
 requires-python = ">=3.12"
 
 [options]
-exclude-newer = "2026-04-19T16:20:48.241544861Z"
+exclude-newer = "2026-08-29T21:06:45.716629332Z"
 exclude-newer-span = "P7D"
 
 [[package]]
@@ -101,7 +101,6 @@ wheels = [
 
 [[package]]
 name = "hop"
-version = "0.1.0"
 source = { editable = "." }
 
 [package.dev-dependencies]

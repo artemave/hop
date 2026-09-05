@@ -53,6 +53,7 @@ def test_main_returns_execute_command_result(monkeypatch: pytest.MonkeyPatch) ->
 
     monkeypatch.setattr("hop.cli.parse_command", fake_parse_command)
     monkeypatch.setattr("hop.cli.build_default_services", fake_build_default_services)
+    monkeypatch.setattr("hop.cli._warn_if_hopd_version_stale", lambda: None)
 
     def fake_execute_command(command: object, *, cwd: Path, services: object) -> int:
         execution["command"] = command
@@ -89,6 +90,7 @@ def test_main_prints_hop_errors_to_stderr(
 
     monkeypatch.setattr("hop.cli.parse_command", fake_parse_command)
     monkeypatch.setattr("hop.cli.build_default_services", _ServicesStub)
+    monkeypatch.setattr("hop.cli._warn_if_hopd_version_stale", lambda: None)
 
     def raise_hop_error(command: object, *, cwd: Path, services: object) -> int:
         raise ExplodingHopError("boom")

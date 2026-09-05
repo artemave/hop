@@ -1,0 +1,53 @@
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: part to bump (ignored if 'version' is set)
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+      version:
+        description: exact version, e.g. 1.4.0 (overrides bump)
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute next version
+        id: v
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.version }}" ]; then
+            next="${{ inputs.version }}"
+          else
+            latest=$(git tag --list 'v*' --sort=-v:refname | head -n1 | sed 's/^v//')
+            latest=${latest:-0.0.0}
+            IFS=. read -r major minor patch <<< "$latest"
+            case "${{ inputs.bump }}" in
+              major) major=$((major + 1)); minor=0; patch=0 ;;
+              minor) minor=$((minor + 1)); patch=0 ;;
+              patch) patch=$((patch + 1)) ;;
+            esac
+            next="$major.$minor.$patch"
+          fi
+          echo "tag=v$next" >> "$GITHUB_OUTPUT"
+
+      - name: Tag and release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git tag "${{ steps.v.outputs.tag }}"
+          git push origin "${{ steps.v.outputs.tag }}"
+          gh release create "${{ steps.v.outputs.tag }}" --generate-notes
