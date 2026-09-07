@@ -1,6 +1,6 @@
 <img src="./hop/assets/hop-social-card.png" />
 
-hop is a context switcher for terminal work. hop facilitates working on multiple things at the same time.
+hop is a project session manager built on Sway and Kitty.
 
 <details>
   <summary>Demo</summary>
