@@ -66,8 +66,8 @@ exec hopd
 Day-to-day, [Vicinae](https://www.vicinae.com/) is the primary surface. What you see when you type `hop` in Vicinae's main search depends on where you are:
 
 - **On a hop session's workspace** (`s:<session>`): one entry per declared window - `Hop editor`, `Hop browser`, `Hop shell`, etc. Plus `Hop kill` for the focused session and `Hop switch to <other-session>` for every other live session.
-- **Off any hop workspace**: only `Hop switch to <session>` per live session - no `Hop kill`, no per-window entries to clutter unrelated workspaces.
-- **Always**: `Hop create session` - falls through to a second Vicinae search over directories under `$HOME` (skips dot-dirs and common build noise like `node_modules`, `target`, `dist`). Picking a directory creates a fresh session for it, or - if it's already the root of a hop session - switches to it.
+- **Off any hop workspace**: only `Hop switch to <session>` per live session.
+- **Always**: `Hop create session` - falls through to a second Vicinae search over directories. Picking a directory creates a fresh session for it, or - if it's already the root of a hop session - switches to it.
 
 Two complementary surfaces are described in their own sections below:
 
@@ -78,7 +78,7 @@ Everything Vicinae's entries dispatch to is also reachable directly via the `hop
 
 ## Sway shortcuts
 
-Bind this helper script in your Sway config to spawn a new shell in the focused hop session (or a plain kitty when not on a hop workspace). Run `hop path sway/term-or-kitty` once and paste its output - using `$(...)` here would re-run hop on every keypress:
+Bind this helper script in your Sway config to spawn a new shell in the focused hop session (or a plain kitty when not on a hop workspace). Run `hop path sway/term-or-kitty` once and paste its output:
 
 ```conf
 bindsym $mod+Return exec /printed/by/hop/path
@@ -86,7 +86,7 @@ bindsym $mod+Return exec /printed/by/hop/path
 
 ## Open visible-output targets from Kitty
 
-<kbd>Ctrl-Shift-O</kbd> in any hop session window runs the `hints` kitten with hop's custom processor - bound automatically at session bootstrap, no `kitty.conf` entry needed (hop injects it as a `--override`, same as the [paste keys](#special-windows)). Change or disable the key with [`[keys].open_selection`](#global-config).
+<kbd>Ctrl-Shift-O</kbd> in any hop session window runs the visible-output picker. Change or disable the key with [`[keys].open_selection`](#global-config).
 
 The picker scans visible terminal output and dispatches supported selections to the session editor or browser:
 
@@ -96,19 +96,19 @@ The picker scans visible terminal output and dispatches supported selections to 
 - `https://example.com`
 - `Processing UsersController#index`
 
-File-shaped tokens that don't exist (per the focused session's backend) are not highlighted. The kitten asks `hop.focused.paths_exist`, which queries the focused session's backend through `noninteractive_prefix` - so paths inside a devcontainer or remote ssh host are checked in the right namespace.
+File-shaped tokens that don't exist in the focused session's backend - including inside a devcontainer or on a remote ssh host - are not highlighted.
 
 ### Binary files open on the host
 
-Choosing a `.png` in the open-selection kitten opens the file with your host's `xdg-open` instead of nvim - so PNGs land in your image viewer, PDFs in your reader, archives in your file manager, all using the tools you've already configured on your machine. This seamlessly works over ssh as well.
+Choosing a `.png` (or similar) in the open-selection kitten opens the file with your host's `xdg-open` instead of nvim - so PNGs land in your image viewer, PDFs in your reader, archives in your file manager, etc. This seamlessly works over ssh as well.
 
 ## Configuration
 
 A hop config has several named sections plus a few scalar settings, all optional:
 
-- `[backends.<name>]` - backend lifecycle (`prepare` / `teardown` / translate helpers) plus two prefixes: `interactive_prefix` for interactive launches and `noninteractive_prefix` for hop's piped queries (file-existence checks).
-- `[layouts.<name>]` - a named layout with one required `activate` shell-snippet probe and a list of windows that come up together when the probe matches.
-- `[windows.<role>]` - top-level windows (always active unless `activate = "false"`).
+- `[backends.<name>]` - a named backend. Keys: `activate` (auto-detect probe), `prepare` / `teardown` (lifecycle commands), `port_translate` / `host_translate` (rewrite `localhost` URLs on dispatch), `interactive_prefix` / `noninteractive_prefix` (command wrappers). See [Session backends](#session-backends).
+- `[layouts.<name>]` - a named layout: an `activate` probe plus `[layouts.<name>.windows.<role>]` sub-tables that come up together when the probe matches. See [Layouts and windows](#layouts-and-windows).
+- `[windows.<role>]` - a top-level window. Keys: `command`, `activate`, and for the editor `open_keys` / `open_keys_with_line`. See [Layouts and windows](#layouts-and-windows).
 - `[keys]` - session-kitty keybindings hop injects at bootstrap; each is a kitty key spec or a list of them, and an empty string or list disables it. `paste` (default `["ctrl+v", "ctrl+shift+v"]`) binds the [clipboard-image paste kitten](#special-windows); `open_selection` (default `["ctrl+shift+o"]`) binds the [visible-output picker](#open-visible-output-targets-from-kitty).
 - `[clipboard]` - `allow_read` (bool, default `true`) controls whether hop injects a `clipboard_control` override permitting OSC 52 clipboard reads without a per-paste prompt.
 - `workspace_layout = "<mode>"` - sway workspace layout applied at first session entry. One of `splith`, `splitv`, `stacking`, `tabbed`.
@@ -118,31 +118,17 @@ A hop config has several named sections plus a few scalar settings, all optional
 
 ### Trusting `.hop.toml`
 
-A project's `.hop.toml` can declare shell commands (`activate`, `prepare`, `teardown`, translate helpers, window `command`, `open_keys`) that hop runs on your behalf. hop only runs a project's `.hop.toml` once you've trusted it - `git clone <repo> && cd <repo> && hop` prompts first:
-
-```
-hop: /home/you/projects/foo/.hop.toml is not trusted.
-It can run shell commands (backend activate/prepare/teardown, port translation,
-window commands, editor keystrokes).
-
-  [t]   trust it and continue
-  [s]   show it
-  Ctrl-C / Ctrl-D to abort (no session created)
-```
-
-The prompt is inline with a tty, or a floating kitty panel when hop runs detached (vicinae, a sway keybinding). Trust is keyed on the file's exact content - any edit drops out of trust and re-prompts.
-
-Trust is frozen into the session record at creation and used for the session's whole life: `.hop.toml` edits have no effect until you either kill and re-enter the session, or run **`hop trust`** in the project directory, which re-trusts the current file and - if the session is still live - refreshes its snapshot immediately, no teardown needed. `hop trust --list` shows every trusted config and flags drift; `hop trust --revoke [path]` drops one.
+As project's `.hop.toml` can declare shell commands (`activate`, `prepare`, `teardown`, translate helpers, window `command`, `open_keys`) that hop runs on your behalf. hop only runs a project's `.hop.toml` once you've trusted it with `hop trust`. Changes to `.hop.toml` on a live session have no effect unless explicitly `hop trust`ed again.
 
 ## Session backends
 
-A session has a **backend** that decides what kind of environment its windows run in. The default is **host**. Other backends - docker container (devcontainer) or anything else describable as a chain of commands - are configured as named entries in the config file. Running a backend on a *remote* machine is a separate axis - the ssh transport (`hop ssh`, see [Remote sessions over ssh](#remote-sessions-over-ssh)) - not a backend of its own.
+A session has a **backend** that decides what kind of environment its terminals run in. The default is **host**. Other backends - docker container or anything else describable as a chain of commands - are configured as named entries in the config file. Running a backend on a *remote* machine is a separate axis - the ssh transport (`hop ssh`, see [Remote sessions over ssh](#remote-sessions-over-ssh)) - not a backend of its own.
 
 Every window runs on the backend, not on the host - the editor included (unless the backend *is* the host). The one exception is the browser, which is always a host GUI app; see [Special windows](#special-windows) for what that implies for both.
 
 ### Remote sessions over ssh
 
-Run any project's session on a remote machine with **`hop ssh <host>`**: it sets up the ssh transport (ControlMaster, the reverse-forwarded bridge socket, the installed shim) and drops you into a remote shell, where `cd <project> && hop` starts the session there. The project's own `.hop.toml` drives it - the *same* recipe runs a container locally or on the remote, with no ssh in the config and no local stub directory. hop wraps each command in the ssh transport for you, and `{host}` resolves to the remote (or `localhost` locally) for host-dependent values like `LOCAL_HOSTNAME={host}`. See **[docs/hop-ssh.md](docs/hop-ssh.md)** for the usage guide (and troubleshooting, e.g. raising sshd `MaxSessions`).
+Run any project's session on a remote machine with **`hop ssh <host>`**: it sets up the ssh transport and drops you into a remote shell, where `cd <project> && hop` starts the session there. The project's own `.hop.toml` drives it - the *same* recipe runs a container locally or on the remote, with no ssh in the config and no local stub directory. `{host}` resolves to the remote (or `localhost` locally) for host-dependent values like `LOCAL_HOSTNAME={host}`. See **[docs/hop-ssh.md](docs/hop-ssh.md)** for the usage guide (and troubleshooting, e.g. raising sshd `MaxSessions`).
 
 ### Auto-detection
 
@@ -212,22 +198,22 @@ The active backend's `interactive_prefix` wraps each window's `command` at launc
 
 Per-window fields:
 
-- `command` (string) - the role command, **without** any backend wrap. Every terminal role launches the session shell (kitty-native on the host, `kitten run-shell` in a non-host backend - see below); the role's `command`, if any, is then typed into that shell via `send-text`, so it lands in shell history and the window stays a usable shell after it exits. An empty string (e.g. `[layouts.rails.windows.test] command = ""`) is just that bare shell.
+- `command` (string) - the role command, **without** any backend wrap. It's typed into the role's session shell, so it lands in shell history and the window stays a usable shell after the command exits. An empty string (e.g. `[layouts.rails.windows.test] command = ""`) is just that bare shell.
 - `activate` (string, optional) - shell probe; the window auto-launches when it exits 0. Defaults to `"true"`.
 
-Activation runs at session creation, and "creation" means the session's kitty is unreachable - not that hop has no record of the session. So a session that outlived its windows, after `hop kill` or a crash or a reboot, activates everything again on the next `hop` rather than coming back half-empty.
+A session that outlived its windows - after `hop kill`, a crash, or a reboot - re-activates every window on the next `hop` rather than coming back half-empty.
 
 Built-in roles `shell`, `editor`, and `browser` ship with hop defaults:
 
 | role    | command default                         | activate default |
 |---------|-----------------------------------------|------------------|
-| shell   | login shell — kitty's native login shell on host; a base64 `$SHELL -lc` login-wrap inside a backend `interactive_prefix` (container / ssh) | active     |
+| shell   | login shell                             | active           |
 | editor  | `nvim`                                  | active           |
 | browser | xdg-detected default browser            | inactive         |
 
 To change a built-in, declare it as a top-level window: `[windows.editor] activate = "false"` opts out of the editor for this config; `[windows.browser] activate = "true"` activates the browser; `[windows.shell] command = "/usr/bin/zsh"` overrides the shell. The editor and the browser carry extra fields and behavior of their own - see [Special windows](#special-windows).
 
-Kitty shell integration (OSC 133 prompt marks, which power `hop tail` and other OSC-133-dependent features) is **automatic** - no shell-role config needed. On the host, kitty integrates the shell it spawns directly. Inside a non-host backend (a container, or a shell over ssh) kitty's integration can't reach across the boundary, so hop runs `kitten run-shell` for you. In a container, `kitten` has to be there already - make it available with an install step in the backend's `prepare` (see [devcontainer](docs/devcontainer.md)); if it isn't, the shell still opens but prints a one-line warning that integration is off. For a remote *host*, hop handles it: `hop ssh` installs the kitten matching your kitty version into the remote's `~/.cache/hop/`, and fails with the reason if it can't (see [hop ssh](docs/hop-ssh.md)). To use a different shell, override the built-in: `[windows.shell] command = "/usr/bin/fish"` (kitty/kitten still auto-detect it).
+Kitty shell integration (OSC 133 prompt marks, which power `hop tail` and other OSC-133-dependent features) is **automatic** - no shell-role config needed. Inside a container backend, `kitten` must be installed in the container - add an install step to the backend's `prepare` (see [devcontainer](docs/devcontainer.md)); without it the shell still opens but prints a one-line warning that integration is off. For a remote *host*, `hop ssh` handles it (see [hop ssh](docs/hop-ssh.md)). To use a different shell, override the built-in: `[windows.shell] command = "/usr/bin/fish"`.
 
 Multiple matching layouts compose: a Rails project that also has `vite.config.ts` activates both layouts and gets their windows.
 
@@ -238,7 +224,7 @@ A window `command` is typed into the role's shell as if you ran it there - so it
 command = "fuser -k 3000/tcp 2>/dev/null; bin/dev"
 ```
 
-The command runs in the role's interactive shell, in the same namespace as the session - inside the container for a devcontainer backend, on the remote over ssh - so the cleanup clears an instance that outlived the previous window before `bin/dev` rebinds the port. Use whatever the image has: `pkill -f bin/dev`, `lsof -ti:3000 | xargs -r kill`, etc.
+The command runs in the same namespace as the session - inside the container for a devcontainer backend, on the remote over ssh - so use whatever the image has for the cleanup: `pkill -f bin/dev`, `lsof -ti:3000 | xargs -r kill`, etc.
 
 ### Per-invocation override
 
@@ -250,7 +236,7 @@ Forces a backend at session creation regardless of auto-detect. Use `hop --backe
 
 ## Special windows
 
-Most roles are interchangeable - a kitty window running the session shell with the role's `command` typed into it. Two are not. The editor and the browser are dispatch *targets*: `hop open` and the Kitty kitten route what they find to one or the other, so hop has to track which window is which, and each has a lifecycle the generic role machinery doesn't cover.
+Most roles are interchangeable - a kitty window running the session shell with the role's `command` typed into it. The editor and the browser are not: they are dispatch *targets* that `hop open` and the Kitty kitten route files and URLs to, and each carries extra fields and behavior of its own.
 
 ### Editor
 
@@ -259,13 +245,15 @@ A session has exactly one editor window, shared by everything that opens a file 
 - **Active by default.** `[windows.editor] activate = "false"` opts out for a config.
 - **Any TUI editor works.** `[windows.editor] command = "helix"` swaps it - along with the [keystroke templates](#keystroke-templates) that drive file-open dispatch, which are written for vim by default.
 - **It's the target for every file-shaped dispatch** - `hop open <file>[:<line>]`, a Rails `Controller#action` ref, and any file token picked by the [Kitty kitten](#open-visible-output-targets-from-kitty). Binary files are the exception: they open on the host, see [Binary files open on the host](#binary-files-open-on-the-host).
-- **It runs on the backend**, inside the container or on the remote host - which is what makes the clipboard need help.
+- **It runs on the backend**, inside the container or on the remote host.
 
-**Pasting a clipboard image.** <kbd>Ctrl-V</kbd> (and <kbd>Ctrl-Shift-V</kbd>) in any hop session window runs a bundled kitten. It checks (in-process, non-blocking) whether kitty's clipboard holds an image; if so it launches a short-lived, kitty-supervised background process that reads the image with `wl-paste` and writes it into the focused window's filesystem (a local temp file for a host session, pushed over the backend's command channel for a container/remote one), then pastes the path. Claude Code and Codex attach the file it points at; a plain shell or editor just receives the path. Anything other than an image falls through to kitty's native paste. If the read or backend write fails or times out (e.g. a dropped ssh link), a one-line notice appears in the window instead of a silent no-op.
+**Pasting a clipboard image.** <kbd>Ctrl-V</kbd> (and <kbd>Ctrl-Shift-V</kbd>) in any hop session window writes a clipboard image into the focused window's filesystem - inside the container or on the remote host when that's where the window runs - and pastes its path. Claude Code and Codex attach the file it points at; a plain shell or editor just receives the path. Anything other than an image falls through to kitty's native paste. If the paste fails or times out (e.g. a dropped ssh link), a one-line notice appears in the window.
 
-The host needs `wl-clipboard` (`wl-paste`) installed for image paste. Change or disable the keys with [`[keys].paste`](#global-config). No `kitty.conf` changes are needed — hop injects the keybindings (and `allow_remote_control` / the listen socket) into every session kitty at bootstrap.
+The host needs `wl-clipboard` (`wl-paste`) installed for image paste. Change or disable the keys with [`[keys].paste`](#global-config). No `kitty.conf` changes are needed.
 
-**System clipboard for the editor on non-host backends.** With nvim on a remote host or inside a container there's no local display for `wl-copy` to reach, so its `+` register clipboard goes through OSC 52, which Kitty relays back to your real clipboard over the terminal. Point nvim's clipboard provider at OSC 52 whenever no display is present:
+#### System clipboard for the editor on non-host backends
+
+With nvim on a remote host or inside a container, point its clipboard provider at OSC 52 whenever no display is present:
 
 ```vim
 if empty($WAYLAND_DISPLAY) && empty($DISPLAY)
@@ -273,9 +261,7 @@ if empty($WAYLAND_DISPLAY) && empty($DISPLAY)
 endif
 ```
 
-Naming the provider explicitly is required when `'clipboard'` is set to `unnamed`/`unnamedplus` - that otherwise suppresses nvim's automatic OSC 52 detection, leaving the clipboard with no provider at all. Also clear any stale `DISPLAY` / `WAYLAND_DISPLAY` the container inherits — a non-empty but unreachable value makes this guard skip `osc52` and fall back to a tool that hangs.
-
-Copy works with that alone. **Paste** (`"+p`) issues an OSC 52 *read*, which Kitty gates behind `clipboard_control` - the default `read-clipboard-ask` prompts on every paste. hop injects `clipboard_control … read-clipboard read-primary` into the session kitty for you (controlled by [`[clipboard].allow_read`](#global-config), default `true`), so `"+p` just works. The trade-off is the one Kitty documents: any program in the session's kitty can then read the system clipboard over OSC 52. Set `allow_read = false` to opt out and take the per-paste prompt back.
+Copy works with that alone. Paste (`"+p`) also works out of the box: hop allows OSC 52 clipboard reads in the session kitty ([`[clipboard].allow_read`](#global-config), default `true`), so nvim isn't prompted on every paste. The trade-off is that any program in the session's kitty can then read the system clipboard. Set `allow_read = false` to opt out and take the per-paste prompt back.
 
 #### Keystroke templates
 
@@ -302,35 +288,30 @@ open_keys           = "\u001b:open {path}\r"
 open_keys_with_line = "\u001b:open {path}:{line}\r"
 ```
 
-TOML basic strings disallow literal control bytes, so Escape has to be written as `\u001b` - TOML only defines `\b \t \n \f \r \" \\ \uXXXX \UXXXXXXXX`. Reading the helix template: `\u001b` drops the editor out of insert mode in case the kitten dispatched while the user was mid-edit, `:` enters command mode, `open {path}` is the open-file command, `\r` submits.
+TOML basic strings disallow literal control bytes, so Escape has to be written as `\u001b` - TOML only defines `\b \t \n \f \r \" \\ \uXXXX \UXXXXXXXX`. Reading the helix template: `\u001b` drops the editor out of insert mode, `:` enters command mode, `open {path}` is the open-file command, `\r` submits.
 
-The substitution layer doubles literal single quotes in `{path}` before formatting so the nvim default (which embeds `{path}` inside a single-quoted vim string) handles paths containing `'`. Templates that don't wrap `{path}` in `'...'` aren't affected - the doubling is a no-op for paths without `'`, which is the overwhelmingly common case.
-
-One semantic caveat: vim's `:drop` reuses an existing buffer when the file is already open; not every editor has that equivalent. Templates targeting editors without a "reuse" command may open a new buffer per call.
+Literal single quotes in `{path}` are doubled before formatting, so a template that embeds `{path}` inside a single-quoted string (as the nvim default does) handles paths containing `'`. Templates that don't wrap `{path}` in `'...'` are unaffected.
 
 ### Browser
 
 The browser is the one window that isn't a kitty terminal. hop doesn't own the process - it launches (or adopts) a window of your existing default browser and tracks it with a Sway mark, so tabs, profile, and extensions are the ones you already have.
 
 - **Inactive by default** - the only built-in role that is. `[windows.browser] activate = "true"` turns it on for a config.
-- **The default command is xdg-detected**: hop reads the default browser's desktop entry for its `Exec` line and `StartupWMClass`. `[windows.browser] command = "..."` overrides the detection.
-- **Recognizing a browser window** uses both the name (`app_id` / `class` against those desktop-entry identifiers) and the owning process (the window's pid resolved through `/proc`, against the launch command). Either signal alone misses real browsers: wrapper-script launchers run a differently-named binary, and generated `userapp-*.desktop` entries carry no `StartupWMClass` to match a name against.
-- **It always runs on the host**, even when the session's backend is a container or a remote machine. That's why a URL printed inside a container can't be handed over as-is: `hop open <url>` runs it through the backend's [`port_translate` / `host_translate`](#backend-example) first, so `http://localhost:3000` inside the container becomes the host-reachable address.
+- **The default command is xdg-detected** from the default browser's desktop entry. `[windows.browser] command = "..."` overrides the detection.
+- **It always runs on the host**, even when the session's backend is a container or a remote machine. `hop open <url>` runs a URL through the backend's [`port_translate` / `host_translate`](#backend-example) first, so `http://localhost:3000` inside the container becomes the host-reachable address.
 - **`hop browser [<url>]`** focuses the session's browser window, creating it if there is none, and moves it back onto `s:<session>` if it drifted. With a URL, the URL goes to that window.
 
 #### When the browser restarts
 
-The mark lives on the window, so it survives the window being moved around - but not the window going away. A browser restart (relaunching after an update, or a reboot) destroys every window and takes the marks with it. The browser's own session restore brings your tabs back, but as ordinary windows with no hop affiliation.
+A browser restart (relaunching after an update, or a reboot) loses the hop affiliation of every window; the browser's own session restore brings your tabs back as ordinary windows.
 
-hop picks them back up: when a session has no marked browser window, `hop browser` promotes an unclaimed browser window that's already on `s:<session>` instead of launching a second one next to your restored tabs. After a restart, move the restored window onto the session's workspace (or just run the session where it already landed) and `hop browser` adopts it - marks it, focuses it, and dispatches any URL to it from then on.
+hop picks them back up. When a session has no marked browser window, `hop browser` adopts an unclaimed browser window already on `s:<session>` instead of launching a second one next to your restored tabs. After a restart, move the restored window onto the session's workspace and run `hop browser` - it marks it, focuses it, and dispatches URLs to it from then on. A window already marked for another session is never taken, so a browser window on another workspace stays yours.
 
-Only the session's own workspace is searched, and a window already marked for some session is never taken - so a browser window sitting on another workspace stays yours.
-
-The same promotion covers the reverse case: moving the session browser off `s:<session>` by raw Sway means clears its mark (`hopd` reconciles marks against placement on every Sway `window` event), and moving it back re-adopts it on the next `hop browser`.
+Moving the session browser off `s:<session>` with raw Sway commands clears its mark; moving it back re-adopts it on the next `hop browser`.
 
 ## Automation
 
-The `hop` CLI runs on the host. In a devcontainer session it's not available inside the container - scripts that drive a session run on the host side. The commands below are the integration surface for external tools.
+The commands below are the integration surface for external tools. `hop` runs on the host; using the CLI from inside a container backend requires a shim (see [docs/devcontainer.md](docs/devcontainer.md)).
 
 ### `hop run` and `hop tail`
 
@@ -343,7 +324,7 @@ hop run --role server --focus "bin/dev"
 
 The command must be a single CLI argument. The default role is `shell`. `hop run` dispatches the command, prints an opaque run id, and returns immediately - it does not wait for completion.
 
-By default `hop run` keeps the current focus, which is what automated callers like `vigun` want. Pass `--focus` to focus the role terminal and switch Sway to the session's workspace - useful when you're driving `hop run` interactively and want to immediately watch the role you just dispatched into.
+By default `hop run` keeps the current focus. Pass `--focus` to focus the role terminal and switch Sway to the session's workspace.
 
 ```bash
 id=$(hop run --role test "python3 -m pytest -q")
@@ -351,8 +332,6 @@ hop tail "$id"
 ```
 
 `hop tail` blocks until the dispatched command returns to its shell prompt, then writes the combined output to stdout. This two-step protocol is what [vigun](https://github.com/artemave/vigun) uses to send a test run from the editor to a dedicated terminal in the session and collect its output once the run finishes.
-
-Prompt detection uses Kitty's shell integration (OSC 133), which is on by default for `bash`, `zsh`, and `fish`.
 
 ### Other commands
 
