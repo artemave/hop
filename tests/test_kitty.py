@@ -255,6 +255,8 @@ def test_ensure_terminal_bootstraps_session_kitty_when_socket_is_not_listening()
         "hop:shell",
         "--override",
         "allow_remote_control=yes",
+        "--override",
+        _cmd_events_watcher_override(),
     )
 
 
@@ -312,6 +314,12 @@ def _hints_kitten_path() -> Path:
     return Path(hop.__file__).parent / "kitten" / "hints" / "main.py"
 
 
+def _cmd_events_watcher_override() -> str:
+    import hop
+
+    return f"watcher {Path(hop.__file__).parent / 'kitten' / 'cmd_events' / 'main.py'}"
+
+
 def test_bootstrap_injects_extra_overrides_after_allow_remote_control() -> None:
     factory = StubKittyFactory(
         [
@@ -332,10 +340,12 @@ def test_bootstrap_injects_extra_overrides_after_allow_remote_control() -> None:
     adapter.ensure_terminal(build_session(), role="shell")
 
     args, _env = launcher.calls[0]
-    # allow_remote_control comes first, then the injected overrides, each as its
-    # own --override <value> pair.
+    # allow_remote_control comes first, then the always-on cmd-events watcher,
+    # then the injected overrides, each as its own --override <value> pair.
     tail = args[args.index("allow_remote_control=yes") + 1 :]
     assert list(tail) == [
+        "--override",
+        _cmd_events_watcher_override(),
         "--override",
         "map ctrl+v kitten /x/main.py",
         "--override",
@@ -358,7 +368,12 @@ def test_bootstrap_with_no_extra_overrides_matches_plain_argv() -> None:
     adapter.ensure_terminal(build_session(), role="shell")
 
     args, _env = launcher.calls[0]
-    assert args[-2:] == ("--override", "allow_remote_control=yes")
+    assert args[-4:] == (
+        "--override",
+        "allow_remote_control=yes",
+        "--override",
+        _cmd_events_watcher_override(),
+    )
 
 
 def test_bootstrap_exports_hop_session_env_var() -> None:
@@ -1027,7 +1042,7 @@ def test_close_window_addresses_session_socket() -> None:
     assert factory.calls == [(SESSION_SOCKET, "close-window", {"match": "id:17"})]
 
 
-def test_get_window_state_extracts_at_prompt_and_exit_status() -> None:
+def test_get_window_state_extracts_last_cmd_exit_status() -> None:
     factory = StubKittyFactory(
         [
             {
@@ -1039,7 +1054,6 @@ def test_get_window_state_extracts_at_prompt_and_exit_status() -> None:
                                 "windows": [
                                     {
                                         "id": 31,
-                                        "at_prompt": False,
                                         "last_cmd_exit_status": 2,
                                     }
                                 ]
@@ -1057,7 +1071,7 @@ def test_get_window_state_extracts_at_prompt_and_exit_status() -> None:
     assert factory.calls == [
         (SESSION_SOCKET, "ls", {"match": "id:31", "output_format": "json"}),
     ]
-    assert state == KittyWindowState(at_prompt=False, last_cmd_exit_status=2)
+    assert state == KittyWindowState(last_cmd_exit_status=2)
 
 
 def test_get_window_state_raises_when_window_missing() -> None:
@@ -1083,7 +1097,6 @@ def test_get_window_state_skips_empty_tabs_empty_windows_and_other_ids() -> None
                                 "windows": [
                                     {
                                         "id": 7,
-                                        "at_prompt": False,
                                         "last_cmd_exit_status": 1,
                                     }
                                 ]
@@ -1096,7 +1109,7 @@ def test_get_window_state_skips_empty_tabs_empty_windows_and_other_ids() -> None
     )
     adapter = KittyRemoteControlAdapter(transport_factory=factory, launcher=StubLauncher())
 
-    assert adapter.get_window_state("demo", 7) == KittyWindowState(at_prompt=False, last_cmd_exit_status=1)
+    assert adapter.get_window_state("demo", 7) == KittyWindowState(last_cmd_exit_status=1)
 
 
 def test_get_last_cmd_output_returns_data_text() -> None:

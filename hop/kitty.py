@@ -23,6 +23,8 @@ from hop.sway import SwayWindow
 # overrides hop injects at session bootstrap. Same values ``hop path`` prints.
 _PASTE_KITTEN_PATH = Path(hop.__file__).parent / "kitten" / "paste" / "main.py"
 _HINTS_KITTEN_PATH = Path(hop.__file__).parent / "kitten" / "hints" / "main.py"
+# kitty watcher that logs shell command start/stop events for ``hop wait``.
+_CMD_EVENTS_WATCHER_PATH = Path(hop.__file__).parent / "kitten" / "cmd_events" / "main.py"
 # kitty ``clipboard_control`` value that permits OSC 52 reads without a
 # per-paste permission prompt — injected when ``[clipboard].allow_read``.
 _CLIPBOARD_CONTROL_ALLOW_READ = "clipboard_control write-clipboard write-primary read-clipboard read-primary"
@@ -130,7 +132,6 @@ class KittyWindowContext:
 
 @dataclass(frozen=True, slots=True)
 class KittyWindowState:
-    at_prompt: bool
     last_cmd_exit_status: int
 
 
@@ -339,7 +340,6 @@ class KittyRemoteControlAdapter:
                     if window_entry.get("id") != window_id:
                         continue
                     return KittyWindowState(
-                        at_prompt=bool(window_entry["at_prompt"]),
                         last_cmd_exit_status=int(window_entry["last_cmd_exit_status"]),
                     )
 
@@ -483,6 +483,10 @@ class KittyRemoteControlAdapter:
             _os_window_name(role),
             "--override",
             "allow_remote_control=yes",
+            # Watcher on every window in this session's kitty: it logs shell
+            # command start/stop events that `hop wait` blocks on.
+            "--override",
+            f"watcher {_CMD_EVENTS_WATCHER_PATH}",
         ]
         for override in self._extra_overrides_for(session):
             kitty_args.extend(("--override", override))

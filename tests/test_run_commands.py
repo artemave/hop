@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from hop.cmd_events import append_event
 from hop.commands.run import DEFAULT_RUN_ROLE, default_runs_dir, run_command
 from hop.session import ProjectSession
 
@@ -37,6 +38,7 @@ def test_run_command_routes_to_role_terminal(tmp_path: Path) -> None:
         role="server",
         command="bin/dev",
         runs_dir=tmp_path / "runs",
+        events_dir=tmp_path / "events",
     )
 
     assert dispatch.session.session_name == "src"
@@ -49,6 +51,27 @@ def test_run_command_routes_to_role_terminal(tmp_path: Path) -> None:
     assert state["session"] == "src"
     assert state["role"] == "server"
     assert isinstance(state["dispatched_at"], (int, float))
+    assert state["events_cursor"] == 0
+
+
+def test_run_command_records_existing_event_count_as_wait_cursor(tmp_path: Path) -> None:
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
+    kitty = StubKittyAdapter(window_id=42)
+    events_dir = tmp_path / "events"
+    append_event(42, is_start=True, cmdline="earlier", at=1.0, base=events_dir)
+    append_event(42, is_start=False, cmdline="earlier", at=2.0, base=events_dir)
+
+    dispatch = run_command(
+        session_root,
+        terminals=kitty,
+        command="pytest",
+        runs_dir=tmp_path / "runs",
+        events_dir=events_dir,
+    )
+
+    state = json.loads((tmp_path / "runs" / f"{dispatch.run_id}.json").read_text())
+    assert state["events_cursor"] == 2
 
 
 def test_run_command_defaults_to_shell_role(tmp_path: Path) -> None:
@@ -63,6 +86,7 @@ def test_run_command_defaults_to_shell_role(tmp_path: Path) -> None:
         terminals=kitty,
         command="ls",
         runs_dir=tmp_path / "runs",
+        events_dir=tmp_path / "events",
     )
 
     assert kitty.runs == [("src", DEFAULT_RUN_ROLE, "ls", nested_directory, False)]
@@ -83,6 +107,7 @@ def test_run_command_forwards_focus_to_kitty(tmp_path: Path) -> None:
         command="ls",
         focus=True,
         runs_dir=tmp_path / "runs",
+        events_dir=tmp_path / "events",
     )
 
     assert kitty.runs == [("src", DEFAULT_RUN_ROLE, "ls", nested_directory, True)]
@@ -96,8 +121,9 @@ def test_run_command_emits_unique_run_ids(tmp_path: Path) -> None:
     kitty = StubKittyAdapter()
     runs_dir = tmp_path / "runs"
 
-    first = run_command(nested_directory, terminals=kitty, command="ls", runs_dir=runs_dir)
-    second = run_command(nested_directory, terminals=kitty, command="ls", runs_dir=runs_dir)
+    events_dir = tmp_path / "events"
+    first = run_command(nested_directory, terminals=kitty, command="ls", runs_dir=runs_dir, events_dir=events_dir)
+    second = run_command(nested_directory, terminals=kitty, command="ls", runs_dir=runs_dir, events_dir=events_dir)
 
     assert first.run_id != second.run_id
 

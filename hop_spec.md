@@ -107,7 +107,7 @@ The transport reuses one ssh ControlMaster per host (`ControlMaster=auto` + `Con
 
 ### Shell integration
 
-Kitty's shell integration (OSC 133 prompt marks) is what `hop tail` and other prompt-aware features depend on. hop enables it implicitly per backend — there is no shell-role config to write:
+Kitty's shell integration (OSC 133 prompt marks) is what `hop wait` and other prompt-aware features depend on. hop enables it implicitly per backend — there is no shell-role config to write:
 
 - **In-place local host** (no `interactive_prefix`, no ssh host): the shell is kitty's direct child, which kitty integrates natively. The implicit shell is empty, so `wrap("")` returns empty argv and kitty spawns the user's login shell.
 - **A container** (any backend with an `interactive_prefix`, including one behind ssh — the shell lands inside the container either way): kitty's integration env doesn't cross the `podman exec` boundary, so the implicit shell is a snippet that runs `kitten run-shell` when `kitten` is on the container's PATH, and otherwise opens a plain shell after printing a one-line "integration off" warning to stderr. It degrades because providing `kitten` is the user's step here — an install command in the recipe's `prepare` — and hop has no way to do it for them. The check and the degrade live inside the launched shell (no bootstrap probe), and the login-wrap runs the snippet under `$SHELL -lc`, so even the degraded shell has the login environment.
@@ -370,7 +370,7 @@ Behavior:
 - default behavior keeps the current focus while routing the command into the target role terminal
 - `--focus` opts in to focusing the role terminal: the role's Kitty window receives focus and Sway switches to the session's workspace, so the operator can dispatch and watch the role from any workspace in one step
 - print a fresh **run id** to stdout and return; `hop run` does not wait for the dispatched command to finish or proxy its exit status
-- the run id is opaque to callers and is the input to `hop tail`
+- the run id is opaque to callers and is the input to `hop wait`
 - by default `hop run` does not switch Sway workspaces — the caller is expected to already be in the session's workspace (the canonical entry points for that are bare `hop` and `hop switch`); `--focus` is the explicit opt-in that does switch
 
 Default role: `shell`
@@ -381,21 +381,21 @@ The `<command>` value is a single CLI argument, so shell callers must quote it.
 
 ---
 
-### Tail command output
+### Wait for command output
 
 ```bash
-hop tail <run-id>
+hop wait <run-id>
 ```
 
 Behavior:
 
 - look up the dispatch state persisted by the matching `hop run` invocation
 - block until the dispatched command has returned to its shell prompt
-- write the captured combined output of that command to stdout and exit
-- `hop tail` exits 0 on successful delivery; it does not propagate the inner command's exit status
-- detection relies on Kitty's shell integration (OSC 133 prompt boundaries) for the role terminal; `hop tail` requires the shell in the role terminal to support it
+- write the captured output of that command to stdout, then exit with the command's own exit status
+- exit `124` if it gives up before the command finishes (10-minute default timeout)
+- completion is detected from the shell command start/stop events a bundled kitty watcher logs off Kitty's shell integration (OSC 133); the shell in the role terminal must support it
 
-The intended consumer is `vigun`, which dispatches with `hop run` and then streams the output via `hop tail <id>`.
+The intended consumer is `vigun`, which dispatches with `hop run` and then collects the result via `hop wait <id>`.
 
 ---
 

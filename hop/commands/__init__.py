@@ -49,7 +49,7 @@ class RunCommand:
 
 
 @dataclass(frozen=True, slots=True)
-class TailCommand:
+class WaitCommand:
     run_id: str
 
 
@@ -93,7 +93,7 @@ Command = (
     | OpenCommand
     | TermCommand
     | RunCommand
-    | TailCommand
+    | WaitCommand
     | BrowserCommand
     | KillCommand
     | BridgeShimCommand

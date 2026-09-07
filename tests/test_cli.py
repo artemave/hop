@@ -16,9 +16,9 @@ from hop.commands import (
     RunCommand,
     SshCommand,
     SwitchSessionCommand,
-    TailCommand,
     TermCommand,
     TrustCommand,
+    WaitCommand,
 )
 
 
@@ -50,7 +50,7 @@ from hop.commands import (
             ["run", "--focus", "--role", "server", "bin/dev"],
             RunCommand(role="server", command_text="bin/dev", focus=True),
         ),
-        (["tail", "abc123"], TailCommand(run_id="abc123")),
+        (["wait", "abc123"], WaitCommand(run_id="abc123")),
         (["browser"], BrowserCommand()),
         (["browser", "https://example.com"], BrowserCommand(url="https://example.com")),
         (["kill"], KillCommand()),
@@ -111,7 +111,7 @@ def test_backend_flag_rejected_on_term_with_role() -> None:
         ["--backend", "host", "list"],
         ["--backend", "host", "open", "foo.rb"],
         ["--backend", "host", "run", "ls"],
-        ["--backend", "host", "tail", "abc"],
+        ["--backend", "host", "wait", "abc"],
         ["--backend", "host", "browser"],
         ["--backend", "host", "kill"],
     ],

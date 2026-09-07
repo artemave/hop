@@ -168,7 +168,7 @@ literal: `ssh -R` can't expand a remote env var in the bind path.
 ### 7. kitten
 
 hop runs `kitten run-shell` implicitly inside the container to enable Kitty
-shell integration (OSC 133 prompt marks, which `hop tail` depends on), so
+shell integration (OSC 133 prompt marks, which `hop wait` depends on), so
 `kitten` must exist in the container — install it in `prepare` (step 3 above),
 same as the [devcontainer bridge setup](devcontainer.md). Without it the shell
 still opens, but integration is off and it prints a one-line warning. (This is

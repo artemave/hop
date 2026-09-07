@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from hop.cmd_events import event_count
 from hop.session import ProjectSession, remote_session_from_env, resolve_project_session
 
 DEFAULT_RUN_ROLE = "shell"
@@ -46,9 +47,15 @@ def run_command(
     role: str = DEFAULT_RUN_ROLE,
     focus: bool = False,
     runs_dir: Path | None = None,
+    events_dir: Path | None = None,
 ) -> RunDispatch:
     session = remote_session_from_env() or resolve_project_session(cwd)
     window_id = terminals.run_in_terminal(session, role=role, command=command, focus=focus)
+
+    # Events already logged for this window belong to earlier runs; `hop wait`
+    # starts reading past them so it can't mistake a prior command's exit for
+    # this one's.
+    events_cursor = event_count(window_id, base=events_dir)
 
     run_id = uuid.uuid4().hex
     target_dir = runs_dir if runs_dir is not None else default_runs_dir()
@@ -58,6 +65,7 @@ def run_command(
         "session": session.session_name,
         "role": role,
         "dispatched_at": time.time(),
+        "events_cursor": events_cursor,
     }
     (target_dir / f"{run_id}.json").write_text(json.dumps(state))
 

@@ -11,6 +11,7 @@ import pytest
 from hop.app import HopServices, execute_command
 from hop.backends import CommandBackend, SessionBackend, SessionBackendError
 from hop.bridge import BRIDGE_SHIM, render_bridge_shim
+from hop.cmd_events import append_event
 from hop.commands import (
     BridgeShimCommand,
     BrowserCommand,
@@ -23,9 +24,9 @@ from hop.commands import (
     RunCommand,
     SshCommand,
     SwitchSessionCommand,
-    TailCommand,
     TermCommand,
     TrustCommand,
+    WaitCommand,
 )
 from hop.config import BackendConfig, HopConfig
 from hop.errors import HopError
@@ -107,6 +108,7 @@ class StubKittyAdapter:
         self,
         *,
         last_cmd_output: str = "",
+        last_cmd_exit_status: int = 0,
         alive_session_names: tuple[str, ...] = (),
     ) -> None:
         self.ensured_roles: list[tuple[str, str, Path]] = []
@@ -114,7 +116,7 @@ class StubKittyAdapter:
         self.runs: list[tuple[str, str, str, Path, bool]] = []
         self.closed_windows: list[int] = []
         self._last_cmd_output = last_cmd_output
-        self._state_calls = 0
+        self._last_cmd_exit_status = last_cmd_exit_status
         self._alive_session_names = frozenset(alive_session_names)
 
     def is_alive(self, session: ProjectSession) -> bool:
@@ -145,8 +147,7 @@ class StubKittyAdapter:
         self.closed_windows.append(window_id)
 
     def get_window_state(self, session_name: str, window_id: int) -> KittyWindowState:
-        self._state_calls += 1
-        return KittyWindowState(at_prompt=self._state_calls > 1, last_cmd_exit_status=0)
+        return KittyWindowState(last_cmd_exit_status=self._last_cmd_exit_status)
 
     def get_last_cmd_output(self, session_name: str, window_id: int) -> str:
         return self._last_cmd_output
@@ -249,6 +250,7 @@ def build_services(
     workspaces: tuple[str, ...] = (),
     focused_workspace: str = "",
     last_cmd_output: str = "",
+    last_cmd_exit_status: int = 0,
     sway_windows: tuple[SwayWindow, ...] = (),
     persisted_session_names: tuple[str, ...] = (),
     alive_session_names: tuple[str, ...] | None = None,
@@ -267,6 +269,7 @@ def build_services(
         ),
         kitty=StubKittyAdapter(
             last_cmd_output=last_cmd_output,
+            last_cmd_exit_status=last_cmd_exit_status,
             alive_session_names=alive_session_names,
         ),
         neovim=StubNeovimAdapter(),
@@ -896,28 +899,55 @@ def test_execute_command_run_with_focus_skips_workspace_switch_when_already_ther
     assert services.sway.switched_workspaces == []
 
 
-def test_execute_command_tails_run_output_to_stdout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_execute_command_wait_writes_output_and_returns_command_exit_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     runs_dir = tmp_path / "runs"
     runs_dir.mkdir()
     (runs_dir / "abc.json").write_text(
-        json.dumps({"window_id": 1, "session": "demo", "role": "test", "dispatched_at": 0.0})
+        json.dumps({"window_id": 1, "session": "demo", "role": "test", "dispatched_at": 0.0, "events_cursor": 0})
     )
     monkeypatch.setenv("HOP_RUNS_DIR", str(runs_dir))
+    monkeypatch.setenv("HOP_CMD_EVENTS_DIR", str(tmp_path / "events"))
+    append_event(1, is_start=True, cmdline="pytest", at=1.0)
+    append_event(1, is_start=False, cmdline="pytest", at=2.0)
 
-    services = build_services(last_cmd_output="hello\n")
+    services = build_services(last_cmd_output="hello\n", last_cmd_exit_status=2)
     stdout = io.StringIO()
 
     with redirect_stdout(stdout):
         assert (
             execute_command(
-                TailCommand(run_id="abc"),
+                WaitCommand(run_id="abc"),
                 cwd=tmp_path,
                 services=services.as_services(),
             )
-            == 0
+            == 2
         )
 
     assert stdout.getvalue() == "hello\n"
+
+
+def test_execute_command_wait_returns_124_and_reports_on_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    runs_dir = tmp_path / "runs"
+    runs_dir.mkdir()
+    (runs_dir / "abc.json").write_text(
+        json.dumps({"window_id": 1, "session": "demo", "role": "test", "dispatched_at": 0.0, "events_cursor": 0})
+    )
+    monkeypatch.setenv("HOP_RUNS_DIR", str(runs_dir))
+    monkeypatch.setenv("HOP_CMD_EVENTS_DIR", str(tmp_path / "events"))
+    monkeypatch.setattr("hop.commands.wait.WAIT_TIMEOUT_SECONDS", 0.0)
+
+    result = execute_command(
+        WaitCommand(run_id="abc"),
+        cwd=tmp_path,
+        services=build_services().as_services(),
+    )
+
+    assert result == 124
+    assert "timed out" in capsys.readouterr().err
 
 
 def test_execute_command_focuses_editor_via_term_role_editor(tmp_path: Path) -> None:

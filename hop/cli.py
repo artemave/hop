@@ -21,9 +21,9 @@ from hop.commands import (
     RunCommand,
     SshCommand,
     SwitchSessionCommand,
-    TailCommand,
     TermCommand,
     TrustCommand,
+    WaitCommand,
 )
 from hop.commands.run import DEFAULT_RUN_ROLE
 from hop.config import load_global_config
@@ -67,8 +67,8 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--focus", action="store_true", dest="focus")
     run_parser.add_argument("command_text")
 
-    tail_parser = subparsers.add_parser("tail")
-    tail_parser.add_argument("run_id")
+    wait_parser = subparsers.add_parser("wait")
+    wait_parser.add_argument("run_id")
 
     browser_parser = subparsers.add_parser("browser")
     browser_parser.add_argument("url", nargs="?")
@@ -155,8 +155,8 @@ def parse_command(argv: Sequence[str] | None = None) -> Command:
                 command_text=namespace.command_text,
                 focus=bool(namespace.focus),
             )
-        case "tail":
-            return TailCommand(run_id=namespace.run_id)
+        case "wait":
+            return WaitCommand(run_id=namespace.run_id)
         case "browser":
             return BrowserCommand(url=namespace.url)
         case "kill":

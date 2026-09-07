@@ -213,7 +213,7 @@ Built-in roles `shell`, `editor`, and `browser` ship with hop defaults:
 
 To change a built-in, declare it as a top-level window: `[windows.editor] activate = "false"` opts out of the editor for this config; `[windows.browser] activate = "true"` activates the browser; `[windows.shell] command = "/usr/bin/zsh"` overrides the shell. The editor and the browser carry extra fields and behavior of their own - see [Special windows](#special-windows).
 
-Kitty shell integration (OSC 133 prompt marks, which power `hop tail` and other OSC-133-dependent features) is **automatic** - no shell-role config needed. Inside a container backend, `kitten` must be installed in the container - add an install step to the backend's `prepare` (see [devcontainer](docs/devcontainer.md)); without it the shell still opens but prints a one-line warning that integration is off. For a remote *host*, `hop ssh` handles it (see [hop ssh](docs/hop-ssh.md)). To use a different shell, override the built-in: `[windows.shell] command = "/usr/bin/fish"`.
+Kitty shell integration (OSC 133 prompt marks, which power `hop wait` and other OSC-133-dependent features) is **automatic** - no shell-role config needed. Inside a container backend, `kitten` must be installed in the container - add an install step to the backend's `prepare` (see [devcontainer](docs/devcontainer.md)); without it the shell still opens but prints a one-line warning that integration is off. For a remote *host*, `hop ssh` handles it (see [hop ssh](docs/hop-ssh.md)). To use a different shell, override the built-in: `[windows.shell] command = "/usr/bin/fish"`.
 
 Multiple matching layouts compose: a Rails project that also has `vite.config.ts` activates both layouts and gets their windows.
 
@@ -313,7 +313,7 @@ Moving the session browser off `s:<session>` with raw Sway commands clears its m
 
 The commands below are the integration surface for external tools. `hop` runs on the host; using the CLI from inside a container backend requires a shim (see [docs/devcontainer.md](docs/devcontainer.md)).
 
-### `hop run` and `hop tail`
+### `hop run` and `hop wait`
 
 ```bash
 hop run "ls"
@@ -328,10 +328,10 @@ By default `hop run` keeps the current focus. Pass `--focus` to focus the role t
 
 ```bash
 id=$(hop run --role test "python3 -m pytest -q")
-hop tail "$id"
+hop wait "$id"
 ```
 
-`hop tail` blocks until the dispatched command returns to its shell prompt, then writes the combined output to stdout. This two-step protocol is what [vigun](https://github.com/artemave/vigun) uses to send a test run from the editor to a dedicated terminal in the session and collect its output once the run finishes.
+`hop wait` blocks until the dispatched command returns to its shell prompt, then writes its output to stdout and exits with the command's own exit status. It exits `124` if it gives up first (10 minutes by default). This two-step protocol is what [vigun](https://github.com/artemave/vigun) uses to send a test run from the editor to a dedicated terminal in the session and collect its result once the run finishes.
 
 ### Other commands
 
@@ -357,7 +357,7 @@ In-depth guides live under [`docs/`](docs/):
 
 - [`docs/devcontainer.md`](docs/devcontainer.md) - step-by-step devcontainer backend setup and troubleshooting.
 - [`docs/hop-ssh.md`](docs/hop-ssh.md) - running a session on a remote machine with `hop ssh`.
-- [`docs/vigun.md`](docs/vigun.md) - the `hop run` / `hop tail` contract behind the vigun editor integration.
+- [`docs/vigun.md`](docs/vigun.md) - the `hop run` / `hop wait` contract behind the vigun editor integration.
 - [`docs/ssh.md`](docs/ssh.md) and [`docs/ssh-devcontainer.md`](docs/ssh-devcontainer.md) - the hand-wired ssh recipes that `hop ssh` supersedes.
 
 ## Development

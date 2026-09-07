@@ -35,9 +35,9 @@ from hop.commands import (
     RunCommand,
     SshCommand,
     SwitchSessionCommand,
-    TailCommand,
     TermCommand,
     TrustCommand,
+    WaitCommand,
 )
 from hop.commands.browser import focus_browser
 from hop.commands.kill import kill_session
@@ -52,9 +52,9 @@ from hop.commands.session import (
     switch_session,
 )
 from hop.commands.ssh import run_hop_ssh
-from hop.commands.tail import tail_command
 from hop.commands.term import focus_terminal
 from hop.commands.trust import trust_command
+from hop.commands.wait import WaitTimeoutError, wait_command
 from hop.config import (
     PROJECT_CONFIG_FILE,
     HopConfig,
@@ -580,9 +580,14 @@ def execute_command(
                 # which would yank the operator out of the session.
                 services.sway.switch_to_workspace(dispatch.session.workspace_name)
             print(dispatch.run_id)
-        case TailCommand(run_id=run_id):
-            output = tail_command(run_id, kitty=services.kitty)
+        case WaitCommand(run_id=run_id):
+            try:
+                output, exit_status = wait_command(run_id, kitty=services.kitty)
+            except WaitTimeoutError as error:
+                print(str(error), file=sys.stderr)
+                return 124
             sys.stdout.write(output)
+            return exit_status
         case BrowserCommand(url=url):
             focus_browser(
                 current_directory,
