@@ -1,6 +1,6 @@
 <img src="./hop/assets/hop-social-card.png" />
 
-hop is a project session manager built on Sway and Kitty.
+hop is a project session manager built on [Sway](https://swaywm.org/) and [Kitty](https://sw.kovidgoyal.net/kitty/).
 
 <details>
   <summary>Demo</summary>
@@ -11,15 +11,15 @@ https://github.com/user-attachments/assets/e20d8280-6a7e-4a13-ab6d-9540b74498ac
 
 </details>
 
-Each stream of work gets its own **hop session** - a dedicated Sway workspace identified by its working directory, holding the editor, terminals, and browser open for it. Moving between sessions is a single jump. hop also takes care of session lifecycle (prepare, teardown).
+Each project gets its own **hop session** - a dedicated Sway workspace identified by its working directory, holding the editor, terminals, and browser open for it. Moving between sessions is a single jump. hop also takes care of session lifecycle (prepare, teardown).
 
-A hop session is conceptually similar to a tmux session, except session/window management is delegated to an actual system window manager (and optionally an app launcher). That means:
+A hop session is conceptually similar to a tmux session, except window management is delegated to Sway (and optionally an app launcher). That means:
 
 - **Single window manager** - sway's normal shortcuts apply directly, no second layered keymap, no prefix key.
-- **GUI apps are part of the session** - browser, etc., not just terminals.
+- **GUI apps are part of the session** - sessions can include browsers and other GUI apps, not just terminals.
 - **No multiplexer in the way** - native terminal features work without lossy passthrough; system clipboard and scrollback are the real ones, not a copy-mode buffer.
 
-hop is built on top of [Sway](https://swaywm.org/) window manager and [Kitty](https://sw.kovidgoyal.net/kitty/) terminal emulator and a TUI editor ([Neovim](https://neovim.io/) by default). Optional [Vicinae](https://www.vicinae.com/) launcher integration turns hop into a true "zero new key bindings" solution.
+A TUI editor is also required (Neovim by default). Optional Vicinae integration turns hop into a true "zero new key bindings" solution.
 
 ## Features
 
