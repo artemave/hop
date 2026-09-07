@@ -2,6 +2,15 @@
 
 hop is a context switcher for terminal work. hop facilitates working on multiple things at the same time.
 
+<details>
+  <summary>Demo</summary>
+
+
+https://github.com/user-attachments/assets/e20d8280-6a7e-4a13-ab6d-9540b74498ac
+
+
+</details>
+
 Each stream of work gets its own **hop session** - a dedicated Sway workspace identified by its working directory, holding the editor, terminals, and browser open for it. Moving between sessions is a single jump. hop also takes care of session lifecycle (prepare, teardown).
 
 A hop session is conceptually similar to a tmux session, except session/window management is delegated to an actual system window manager (and optionally an app launcher). That means:
