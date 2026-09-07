@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import pydoc
 from typing import Callable
 
 PromptInput = Callable[[str], str]
 PromptOutput = Callable[[str], object]
+Pager = Callable[[str], object]
 
 _BANNER = (
     "It can run shell commands (backend activate/prepare/teardown, port translation,\n"
@@ -18,6 +20,7 @@ def ask(
     *,
     prompt_input: PromptInput = input,
     output: PromptOutput = print,
+    show: Pager = pydoc.pager,
 ) -> bool:
     output(f"hop: {config_path} is not trusted.")
     output(_BANNER)
@@ -31,6 +34,6 @@ def ask(
         if line == "t":
             return True
         if line == "s":
-            output(content)
+            show(content)
             continue
         output(f"hop: unrecognized input {line!r} — press t, s, or Ctrl-C/Ctrl-D to abort.")

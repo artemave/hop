@@ -18,18 +18,19 @@ def test_trust_key_returns_true() -> None:
     assert ask("/proj/.hop.toml", "content", prompt_input=_inputs("t"), output=lambda _line: None) is True
 
 
-def test_show_key_prints_content_then_reprompts() -> None:
-    printed: list[str] = []
+def test_show_key_pages_content_then_reprompts() -> None:
+    paged: list[str] = []
 
     result = ask(
         "/proj/.hop.toml",
         "activate = true",
         prompt_input=_inputs("s", "t"),
-        output=printed.append,
+        output=lambda _line: None,
+        show=paged.append,
     )
 
     assert result is True
-    assert "activate = true" in printed
+    assert paged == ["activate = true"]
 
 
 def test_unrecognized_input_reprompts_without_trusting_or_aborting() -> None:
