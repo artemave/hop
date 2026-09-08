@@ -32,6 +32,14 @@ A TUI editor is also required (Neovim by default). Optional Vicinae integration 
 - **Vicinae-driven workflow** - sessions, windows, and switches surface as direct entries in the launcher's main search; a single `exec hopd` line in the Sway config wires it up.
 - **Scriptable** - everything Vicinae dispatches to is also a `hop` CLI subcommand.
 
+## Why does this exist?
+
+Every project I work on ends up with a bunch of related browser tabs. tmux, being terminal-only, can't keep those close to home. Keeping them in a shared browser was manageable in the pre-LLM era, when I was rarely working on more than two things at a time, but really started getting out of hand once coding agents took hold.
+
+Another thing I've started taking seriously recently is working in sandboxed environments, e.g. Docker containers. But tmux isn't great at managing sessions across different environments - it wants a tmux server everywhere.
+
+And finally, I built hop because I could. I'd never have dared to take on something like this without a coding agent by my side. Even so, it has taken a lot more faffing about than I thought it would to get to the point where it just works, and does so exactly as I always wanted something like this to work.
+
 ## Requirements
 
 - Linux
