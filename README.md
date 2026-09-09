@@ -38,7 +38,9 @@ Every project I work on ends up with a bunch of related browser tabs. tmux, bein
 
 Another thing I've started taking seriously recently is working in sandboxed environments, e.g. Docker containers. But tmux isn't great at managing sessions across different environments - it wants a tmux server everywhere.
 
-And finally, I built hop because I could. I'd never have dared to take on something like this without a coding agent by my side. Even so, it has taken a lot more faffing about than I thought it would to get to the point where it just works, and does so exactly as I always wanted something like this to work.
+There are other annoying things about tmux, but those were the tipping point. After about a decade of total reliance on tmux, and having written a lot of automation around it (some of which I'm quite proud of), I was done with it.
+
+And so hop was born. Let's be honest, in no small part I built it because I could. I'd never have dared to take on anything like this without a coding agent by my side. Even so, it has taken a lot more faffing about than I thought it would to get to the point where it reliably works, and does so exactly as I always wanted a tool like this to work.
 
 ## Requirements
 
