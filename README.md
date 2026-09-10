@@ -21,17 +21,15 @@ This alone has a few practical consequences:
 - **GUI apps are part of the session** - sessions can include browsers and other GUI apps, not just terminals.
 - **No multiplexer in the way** - native terminal features work without lossy passthrough; system clipboard and scrollback are the real ones, not a copy-mode buffer.
 
-A TUI editor is also required (Neovim by default). Optional Vicinae integration turns hop into a true "zero new key bindings" solution.
-
 ## Features
 
 - **Session terminals start in the session directory** - spawn a shell anywhere in a session and it's already `cd`-ed into the session root.
 - **Dedicated session browser** - to keep project specific pages close to home.
-- **Open from terminal output** - bundled Kitty kitten picks file paths and URLs from visible output and dispatches them to the session's editor or browser.
+- **Dedicated editor** - (neovim by default) receives "open file from terminal output" sent via bundled Kitty plugin.
 - **Pluggable backends** - shells and editor can run on the host, inside a docker container, or anywhere describable as a chain of commands - without changing how you drive the session.
 - **Remote sessions over ssh** - run any of those backends on a remote machine with `hop ssh`; the same project config drives it whether you're local or remote.
 - **Layouts** - configure certain projects to start with extra windows (e.g. "server" or "console" for rails).
-- **Vicinae-driven workflow** - sessions, windows, and switches surface as direct entries in the launcher's main search; a single `exec hopd` line in the Sway config wires it up.
+- **Vicinae-driven workflow** - sessions, windows, and switches surface as direct entries in the launcher's main search, turning hop into a true "zero new key bindings" solution.
 - **Scriptable** - everything Vicinae dispatches to is also a `hop` CLI subcommand.
 
 ## Why does this exist?
