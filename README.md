@@ -34,13 +34,9 @@ This alone has a few practical consequences:
 
 ## Why does this exist?
 
-Every project I work on ends up with a bunch of related browser tabs. tmux, being terminal-only, can't keep those close to home. Keeping them in a shared browser was manageable in the pre-LLM era, when I was rarely working on more than two things at a time, but really started getting out of hand once coding agents took hold.
+hop started from a frustration: every project I work on accumulates browser tabs, while tmux sessions can only contain terminals. This really started getting out of hand once coding agents took hold.
 
-Another thing I've started taking seriously recently is working in sandboxed environments, e.g. Docker containers. But tmux isn't great at managing sessions across different environments - it wants a tmux server everywhere.
-
-There are other annoying things about tmux, but those were the tipping point. After about a decade of total reliance on tmux, and having written a lot of automation around it (some of which I'm quite proud of), I was done with it.
-
-And so hop was born. Let's be honest, in no small part I built it because I could. I'd never have dared to take on anything like this without a coding agent by my side. Even so, it has taken a lot more faffing about than I thought it would to get to the point where it reliably works, and does so exactly as I always wanted a tool like this to work.
+On top of that, I've started doing more work in sandboxed environments, and tmux isn't great at managing sessions across different environments - it wants a tmux server everywhere.
 
 ## Requirements
 
