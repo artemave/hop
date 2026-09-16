@@ -226,12 +226,16 @@ def test_window_commands_use_sway_criteria_by_container_id() -> None:
     sway.move_window_to_workspace(17, "s:demo")
     sway.mark_window(17, "_hop_browser:demo")
     sway.unmark_window(17, "_hop_browser:demo")
+    sway.move_container_left(17)
+    sway.move_container_right(17)
 
     assert transport.requests == [
         (SwayMessageType.RUN_COMMAND, b"[con_id=17] focus"),
         (SwayMessageType.RUN_COMMAND, b'[con_id=17] move container to workspace "s:demo"'),
         (SwayMessageType.RUN_COMMAND, b'[con_id=17] mark --add "_hop_browser:demo"'),
         (SwayMessageType.RUN_COMMAND, b'[con_id=17] unmark "_hop_browser:demo"'),
+        (SwayMessageType.RUN_COMMAND, b"[con_id=17] move left"),
+        (SwayMessageType.RUN_COMMAND, b"[con_id=17] move right"),
     ]
 
 

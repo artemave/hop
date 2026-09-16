@@ -13,6 +13,7 @@ from hop.config import BROWSER_ROLE
 from hop.errors import HopError
 from hop.session import ProjectSession
 from hop.sway import SwayWindow
+from hop.window_position import apply_sticky_position
 
 if TYPE_CHECKING:
     from hop.layouts import WindowSpec
@@ -42,6 +43,10 @@ class BrowserSwayAdapter(Protocol):
     def move_window_to_workspace(self, window_id: int, workspace_name: str) -> None: ...
 
     def mark_window(self, window_id: int, mark: str) -> None: ...
+
+    def move_container_left(self, window_id: int) -> None: ...
+
+    def move_container_right(self, window_id: int) -> None: ...
 
 
 class BrowserLauncher(Protocol):
@@ -144,8 +149,29 @@ class SessionBrowserAdapter:
         window = self._wait_for_new_window(known_window_ids=known_window_ids)
         if window.workspace_name != session.workspace_name:
             self._sway.move_window_to_workspace(window.id, session.workspace_name)
-        self._sway.mark_window(window.id, _session_browser_mark(session))
+        self._sway.mark_window(window.id, session_browser_mark(session))
+        self._apply_sticky_position(session, window_id=window.id)
         return window
+
+    def _apply_sticky_position(self, session: ProjectSession, *, window_id: int) -> None:
+        """Move a just-launched session browser into its sticky ``position``
+        slot — shared row math with the kitty adapter's role terminals, see
+        ``hop.window_position.apply_sticky_position``. A no-op when nobody
+        in the session has a configured position."""
+
+        apply_sticky_position(
+            self._sway,
+            workspace_name=session.workspace_name,
+            window_id=window_id,
+            role=BROWSER_ROLE,
+            position_by_role=self._position_by_role(session),
+            browser_mark=session_browser_mark(session),
+        )
+
+    def _position_by_role(self, session: ProjectSession) -> Mapping[str, int | None]:
+        if self._session_windows_for is None:
+            return {}
+        return {spec.role: spec.position for spec in self._session_windows_for(session)}
 
     def _wait_for_new_window(
         self,
@@ -163,7 +189,7 @@ class SessionBrowserAdapter:
         raise BrowserCommandError(msg)
 
     def _find_session_window(self, session: ProjectSession) -> SwayWindow | None:
-        session_mark = _session_browser_mark(session)
+        session_mark = session_browser_mark(session)
         windows = [window for window in self._sway.list_windows() if session_mark in window.marks]
         if not windows:
             return self._adopt_workspace_browser_window(session)
@@ -198,7 +224,7 @@ class SessionBrowserAdapter:
             return None
 
         window = min(candidates, key=lambda window: window.id)
-        self._sway.mark_window(window.id, _session_browser_mark(session))
+        self._sway.mark_window(window.id, session_browser_mark(session))
         return window
 
     def _browser_spec_for_session(self, session: ProjectSession) -> BrowserLaunchSpec:
@@ -441,5 +467,10 @@ def _executable_for_pid(pid: int) -> Path | None:
         return None
 
 
-def _session_browser_mark(session: ProjectSession) -> str:
+def session_browser_mark(session: ProjectSession) -> str:
+    """The Sway mark ``SessionBrowserAdapter`` claims the session browser
+    with. Public because ``hop.window_position.role_of_window`` (and, via
+    it, the kitty adapter's sticky-position step) also needs it to recognize
+    the browser window in the workspace's row — it carries no ``hop:<role>``
+    app_id the way kitty role terminals do."""
     return f"{DEFAULT_BROWSER_MARK_PREFIX}{session.session_name}"

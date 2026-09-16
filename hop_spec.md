@@ -137,14 +137,21 @@ Each window declaration carries:
   - **Built-in window** (shell / editor / browser) with no top-level override: hop's default (active for shell/editor, inactive for browser).
   - **Top-level window**: defaults active unless the entry sets `activate = "false"`.
   - **Layout window**: gated by the layout's `activate` probe; the window can carry `activate = "false"` to opt out of even the matched layout (declared but not auto-launched).
+- `position` (integer, optional) — sticks the window to a slot in the row of windows on the session's workspace: positive counts from the left (`1` = leftmost), negative counts from the right (`-1` = rightmost). `None` leaves the window unpositioned — it fills the middle, in creation order, rather than a fixed slot. Valid on both `[windows.<role>]` and `[layouts.<name>.windows.<role>]`, following the same layered-override rules as `command`. Enforced only when a window is newly created (session entry, `hop term --role <name>`, an ad-hoc `shell-<N>` spawn, the session browser's first launch): hop repositions just that window relative to whatever is already on the workspace, via Sway's `move left` / `move right`, rather than re-sorting the whole row. The session browser shares this row with kitty role terminals — it's identified by its session browser mark (`_hop_browser:<session>`) rather than a `hop:<role>` app_id, since it isn't a kitty window, but participates in the same position math (`hop.window_position.apply_sticky_position`). Positioning is best-effort: it relies on `move left`/`move right` swapping with the adjacent sibling in the workspace's tiling container, so a stray third-party window interleaved in the tiling tree can throw the step count off.
+
+  Top-level `sticky_positions` (bool, optional, default `true`) is a global kill switch for the whole feature: when it resolves to `false` (explicitly set, in either config file, project overriding global), every `position` — built-in or explicitly configured — is ignored and Sway's default tiling placement is left untouched.
+
+  Two roles declaring the same nonzero `position` is not a parse error. The tie resolves deterministically but by window *creation* order rather than declaration order — since only the newly-created window is ever moved, whichever role's window opens first claims the slot, and the next one to open a colliding position is inserted adjacent to it (`hop.window_position.compute_insert_index`; note the resulting bias is not symmetric between positive and negative positions — a later arrival at a shared positive position is bumped toward the middle, while a later arrival at a shared negative position displaces the earlier one from the true edge). `resolve_windows` logs one line per colliding pair, naming both roles, to hop's opt-in debug log (top-level `debug_log` config, see README) whenever `sticky_positions` is enabled and it detects the collision — it does not raise.
 
 Built-in defaults:
 
-| role     | command default                      | activate default | runtime adapter         |
-|----------|--------------------------------------|------------------|-------------------------|
-| shell    | `""` (kitty's platform default shell on host; `${SHELL:-sh}` falls back inside a `interactive_prefix`) | active | kitty terminal |
-| editor   | `nvim`                               | active           | shared nvim adapter     |
-| browser  | xdg-detected default browser         | inactive         | session browser adapter |
+| role     | command default                      | activate default | position default | runtime adapter         |
+|----------|--------------------------------------|------------------|-------------------|-------------------------|
+| shell    | `""` (kitty's platform default shell on host; `${SHELL:-sh}` falls back inside a `interactive_prefix`) | active | `1` | kitty terminal |
+| editor   | `nvim`                               | active           | `2`               | shared nvim adapter     |
+| browser  | xdg-detected default browser         | inactive         | `3`               | session browser adapter |
+
+Since unpositioned windows fill the middle bucket (which sorts after every positive position, regardless of magnitude), the built-in `1`/`2`/`3` defaults put shell, editor, and browser leftmost-to-rightmost ahead of any other window — an additional declared or ad-hoc window with no explicit `position` lands to the right of all three, not between editor and browser.
 
 For user-defined roles (anything other than shell / editor / browser), top-level windows default to active (the always-on rule above). To declare a user role for `hop term --role <name>` without auto-launching it on entry, either set `activate = "false"` on the top-level entry, or move it into a layout whose probe is the gate.
 

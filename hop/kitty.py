@@ -13,11 +13,13 @@ from typing import Any, Callable, Mapping, Protocol, Sequence, cast
 import hop
 from hop import debug
 from hop.backends import CommandBackend, SessionBackend
+from hop.browser import session_browser_mark
 from hop.config import SHELL_ROLE, HopConfig
 from hop.errors import HopError
 from hop.layouts import WindowSpec, find_window
 from hop.session import ProjectSession
 from hop.sway import SwayWindow
+from hop.window_position import apply_sticky_position
 
 # Absolute paths to the bundled kittens, baked into the ``map <key> kitten …``
 # overrides hop injects at session bootstrap. Same values ``hop path`` prints.
@@ -226,6 +228,10 @@ class KittyAdapterSwayAdapter(Protocol):
     def list_windows(self) -> Sequence[SwayWindow]: ...
 
     def move_window_to_workspace(self, window_id: int, workspace_name: str) -> None: ...
+
+    def move_container_left(self, window_id: int) -> None: ...
+
+    def move_container_right(self, window_id: int) -> None: ...
 
 
 class KittyRemoteControlAdapter:
@@ -438,7 +444,9 @@ class KittyRemoteControlAdapter:
                 already_prepared=already_prepared,
             )
             return
-        self._adopt_role_window_to_workspace(session, role, pre_snapshot_ids=pre_snapshot)
+        window = self._adopt_role_window_to_workspace(session, role, pre_snapshot_ids=pre_snapshot)
+        if window is not None:
+            self._apply_sticky_position(session, role, window_id=window.id)
 
     def _bootstrap_session_kitty(
         self,
@@ -512,7 +520,9 @@ class KittyRemoteControlAdapter:
             "set-user-vars",
             {"match": "all", "var": [f"{HOP_ROLE_VAR}={role}"]},
         )
-        self._adopt_role_window_to_workspace(session, role, pre_snapshot_ids=pre_snapshot)
+        window = self._adopt_role_window_to_workspace(session, role, pre_snapshot_ids=pre_snapshot)
+        if window is not None:
+            self._apply_sticky_position(session, role, window_id=window.id)
         self._on_session_bootstrap(session, backend)
 
     def _wait_for_session_kitty(self, addr: str) -> None:
@@ -551,7 +561,7 @@ class KittyRemoteControlAdapter:
         role: str,
         *,
         pre_snapshot_ids: set[int],
-    ) -> None:
+    ) -> SwayWindow | None:
         """Poll Sway for a newly-appeared ``hop:<role>`` window, then move it
         to ``session.workspace_name`` if it landed elsewhere.
 
@@ -567,13 +577,15 @@ class KittyRemoteControlAdapter:
            it isn't already on the session workspace.
 
         Best-effort: if no new window appears within
-        ``ROLE_WINDOW_ADOPT_TIMEOUT_SECONDS`` the call returns. The role
-        terminal still works via kitty IPC; it just stays wherever Sway put
-        it. A no-op when no Sway adapter is configured.
+        ``ROLE_WINDOW_ADOPT_TIMEOUT_SECONDS`` the call returns ``None``. The
+        role terminal still works via kitty IPC; it just stays wherever Sway
+        put it. A no-op when no Sway adapter is configured. Returns the
+        adopted window (as last seen by ``list_windows``, i.e. before the
+        move) so the caller can apply a sticky ``position`` against it.
         """
 
         if self._sway is None:
-            return
+            return None
         target_app_id = _os_window_name(role)
         deadline = self._clock() + ROLE_WINDOW_ADOPT_TIMEOUT_SECONDS
         while self._clock() < deadline:
@@ -586,11 +598,36 @@ class KittyRemoteControlAdapter:
                 window = min(new_candidates, key=lambda candidate: candidate.id)
                 if window.workspace_name != session.workspace_name:
                     self._sway.move_window_to_workspace(window.id, session.workspace_name)
-                return
+                return window
             self._sleep(ROLE_WINDOW_ADOPT_POLL_INTERVAL_SECONDS)
         debug.log(
             f"kitty: role terminal {role!r} for {session.session_name!r} "
             "did not register with Sway in time; skipping workspace adopt"
+        )
+        return None
+
+    def _apply_sticky_position(self, session: ProjectSession, role: str, *, window_id: int) -> None:
+        """Move a just-adopted role window into its sticky ``position`` slot.
+
+        Delegates the row math to ``hop.window_position.apply_sticky_position``
+        — shared with ``SessionBrowserAdapter`` so a role terminal and the
+        session browser (identified there by its Sway mark rather than a
+        kitty app_id) land in one consistent row.
+
+        Callers only reach this after ``_adopt_role_window_to_workspace``
+        returned a window, which itself requires a configured Sway adapter —
+        so ``self._sway`` is narrowed via ``cast`` rather than re-checked.
+        """
+
+        sway = cast(KittyAdapterSwayAdapter, self._sway)
+        position_by_role = {spec.role: spec.position for spec in self._session_windows_for(session)}
+        apply_sticky_position(
+            sway,
+            workspace_name=session.workspace_name,
+            window_id=window_id,
+            role=role,
+            position_by_role=position_by_role,
+            browser_mark=session_browser_mark(session),
         )
 
     def _send_to(

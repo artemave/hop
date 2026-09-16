@@ -72,6 +72,7 @@ class StubSwayAdapter:
     def __init__(self, timeline: Sequence[Sequence[SwayWindow]] = ((),)) -> None:
         self._timeline: list[tuple[SwayWindow, ...]] = [tuple(s) for s in timeline] or [()]
         self.moves: list[tuple[int, str]] = []
+        self.container_moves: list[tuple[int, str]] = []
         self.list_calls = 0
 
     def list_windows(self) -> Sequence[SwayWindow]:
@@ -81,6 +82,12 @@ class StubSwayAdapter:
 
     def move_window_to_workspace(self, window_id: int, workspace_name: str) -> None:
         self.moves.append((window_id, workspace_name))
+
+    def move_container_left(self, window_id: int) -> None:
+        self.container_moves.append((window_id, "left"))
+
+    def move_container_right(self, window_id: int) -> None:
+        self.container_moves.append((window_id, "right"))
 
 
 def build_session() -> ProjectSession:
@@ -1519,3 +1526,154 @@ def test_bootstrap_path_adopts_new_role_terminal_to_session_workspace() -> None:
     adapter.ensure_terminal(build_session(), role="shell")
 
     assert sway.moves == [(7, "s:demo")]
+
+
+# --- sticky position ------------------------------------------------------
+
+
+def test_sticky_position_noop_when_nobody_in_session_has_a_position() -> None:
+    """No role in the session declares ``position`` — Sway's own tiling
+    placement is left untouched, and no container-move commands fire."""
+    factory = StubKittyFactory([{"ok": True, "data": []}, {"ok": True}])
+    sway = StubSwayAdapter(
+        timeline=[
+            (),
+            (
+                _hop_role_window(window_id=1, role="shell", workspace_name="s:demo"),
+                _hop_role_window(window_id=42, role="test", workspace_name="s:demo"),
+            ),
+        ]
+    )
+    adapter = KittyRemoteControlAdapter(
+        transport_factory=factory,
+        launcher=StubLauncher(),
+        sway=sway,
+        sleep=lambda _: None,
+    )
+
+    adapter.ensure_terminal(build_session(), role="test")
+
+    assert sway.container_moves == []
+
+
+def test_sticky_negative_position_moves_new_window_right_past_unpositioned_siblings() -> None:
+    """A new window pinned to position -1 (rightmost) must move past every
+    unpositioned sibling already sitting to its right in the tiling tree."""
+    from hop.layouts import WindowSpec
+
+    factory = StubKittyFactory(
+        [
+            {"ok": True, "data": []},  # find → none
+            {"ok": True},  # launch
+            _role_window_listing("server", 42),  # require_window (typing "bin/dev" in)
+            {"ok": True},  # send-text
+        ]
+    )
+    sway = StubSwayAdapter(
+        timeline=[
+            (),
+            (
+                _hop_role_window(window_id=1, role="shell", workspace_name="s:demo"),
+                _hop_role_window(window_id=42, role="server", workspace_name="s:demo"),
+                _hop_role_window(window_id=2, role="editor", workspace_name="s:demo"),
+            ),
+        ]
+    )
+    adapter = KittyRemoteControlAdapter(
+        transport_factory=factory,
+        launcher=StubLauncher(),
+        sway=sway,
+        sleep=lambda _: None,
+        session_windows_for=lambda _session: (WindowSpec(role="server", command="bin/dev", active=True, position=-1),),
+    )
+
+    adapter.ensure_terminal(build_session(), role="server")
+
+    assert sway.container_moves == [(42, "right")]
+
+
+def test_sticky_positive_position_moves_new_window_left_past_unpositioned_siblings() -> None:
+    """A new window pinned to position 1 (leftmost) must move past every
+    unpositioned sibling already sitting to its left."""
+    from hop.layouts import WindowSpec
+
+    factory = StubKittyFactory([{"ok": True, "data": []}, {"ok": True}])
+    sway = StubSwayAdapter(
+        timeline=[
+            (),
+            (
+                _hop_role_window(window_id=5, role="console", workspace_name="s:demo"),
+                _hop_role_window(window_id=42, role="shell", workspace_name="s:demo"),
+            ),
+        ]
+    )
+    adapter = KittyRemoteControlAdapter(
+        transport_factory=factory,
+        launcher=StubLauncher(),
+        sway=sway,
+        sleep=lambda _: None,
+        session_windows_for=lambda _session: (WindowSpec(role="shell", command="", active=True, position=1),),
+    )
+
+    adapter.ensure_terminal(build_session(), role="shell")
+
+    assert sway.container_moves == [(42, "left")]
+
+
+def test_sticky_position_noop_when_new_window_already_in_target_slot() -> None:
+    """The very first window in a session, pinned to a position, is already
+    at index 0 — no container-move commands are needed."""
+    from hop.layouts import WindowSpec
+
+    factory = StubKittyFactory([{"ok": True, "data": []}, {"ok": True}])
+    sway = StubSwayAdapter(
+        timeline=[
+            (),
+            (_hop_role_window(window_id=42, role="shell", workspace_name="s:demo"),),
+        ]
+    )
+    adapter = KittyRemoteControlAdapter(
+        transport_factory=factory,
+        launcher=StubLauncher(),
+        sway=sway,
+        sleep=lambda _: None,
+        session_windows_for=lambda _session: (WindowSpec(role="shell", command="", active=True, position=1),),
+    )
+
+    adapter.ensure_terminal(build_session(), role="shell")
+
+    assert sway.container_moves == []
+
+
+def test_sticky_position_skips_reposition_when_window_not_found_on_session_workspace() -> None:
+    """The adopt step just moved the window onto the session workspace, but
+    Sway hasn't reflected that yet by the time the sticky-position step
+    re-lists windows. Best-effort: skip silently rather than crash."""
+    from hop.layouts import WindowSpec
+
+    factory = StubKittyFactory(
+        [
+            {"ok": True, "data": []},  # find → none
+            {"ok": True},  # launch
+            _role_window_listing("server", 42),  # require_window (typing "bin/dev" in)
+            {"ok": True},  # send-text
+        ]
+    )
+    sway = StubSwayAdapter(
+        timeline=[
+            (),
+            (_hop_role_window(window_id=42, role="server", workspace_name="s:other"),),
+        ]
+    )
+    adapter = KittyRemoteControlAdapter(
+        transport_factory=factory,
+        launcher=StubLauncher(),
+        sway=sway,
+        sleep=lambda _: None,
+        session_windows_for=lambda _session: (WindowSpec(role="server", command="bin/dev", active=True, position=-1),),
+    )
+
+    adapter.ensure_terminal(build_session(), role="server")
+
+    assert sway.moves == [(42, "s:demo")]
+    assert sway.container_moves == []

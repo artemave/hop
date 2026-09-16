@@ -57,6 +57,12 @@ class WindowConfig:
     dispatching a file. Only meaningful on the ``editor`` role; the parser
     rejects them elsewhere. Both default to nvim-shaped sequences when
     omitted (see ``hop/editor.py``).
+
+    ``position`` sticks the window at a slot in the row of windows on the
+    session's workspace: positive counts from the left (1 = leftmost),
+    negative counts from the right (-1 = rightmost). ``None`` leaves the
+    window unpositioned — it fills the middle, in creation order, rather
+    than a fixed slot.
     """
 
     role: str
@@ -64,6 +70,7 @@ class WindowConfig:
     activate: str | None = None
     open_keys: str | None = None
     open_keys_with_line: str | None = None
+    position: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,6 +142,13 @@ class HopConfig:
     backend command runs and kitty bootstrap output. ``True`` uses the
     default path (``$XDG_RUNTIME_DIR/hop/debug.log``); a string is taken
     as a custom path. ``None`` leaves debug logging disabled.
+
+    ``sticky_positions`` toggles the whole sticky-``position`` feature
+    (built-in default positions on shell/editor/browser, and every
+    explicitly configured ``position`` field) on or off. ``None`` ⇒ unset,
+    which the resolver treats as enabled — the feature is on by default.
+    ``False`` makes every window unpositioned regardless of config, leaving
+    Sway's own tiling placement untouched.
     """
 
     backends: tuple[BackendConfig, ...] = ()
@@ -152,6 +166,7 @@ class HopConfig:
     # override that permits OSC 52 clipboard reads without a per-paste prompt.
     # ``None`` ⇒ unset (consumer defaults to enabled).
     clipboard_allow_read: bool | None = None
+    sticky_positions: bool | None = None
 
 
 # Hop's built-in ``host`` backend — the implicit auto-detect fallback. Lives
@@ -217,6 +232,9 @@ def merge_configs(project: HopConfig, global_: HopConfig) -> HopConfig:
             if project.clipboard_allow_read is not None
             else global_with_builtin.clipboard_allow_read
         ),
+        sticky_positions=(
+            project.sticky_positions if project.sticky_positions is not None else global_with_builtin.sticky_positions
+        ),
     )
 
 
@@ -250,6 +268,7 @@ def _layer_builtin_backends(global_: HopConfig) -> HopConfig:
         paste_keys=global_.paste_keys,
         open_selection_keys=global_.open_selection_keys,
         clipboard_allow_read=global_.clipboard_allow_read,
+        sticky_positions=global_.sticky_positions,
     )
 
 
@@ -362,6 +381,7 @@ def _merge_window_pair(project: WindowConfig, global_: WindowConfig) -> WindowCo
         open_keys_with_line=(
             project.open_keys_with_line if project.open_keys_with_line is not None else global_.open_keys_with_line
         ),
+        position=project.position if project.position is not None else global_.position,
     )
 
 
@@ -375,12 +395,21 @@ _BACKEND_FIELDS = (
     "noninteractive_prefix",
 )
 _LAYOUT_FIELDS = ("activate", "windows")
-_WINDOW_FIELDS = ("command", "activate", "open_keys", "open_keys_with_line")
+_WINDOW_FIELDS = ("command", "activate", "open_keys", "open_keys_with_line", "position")
 _EDITOR_ONLY_WINDOW_FIELDS = ("open_keys", "open_keys_with_line")
 _LEGACY_FLAT_BACKEND_FIELDS = ("shell", "editor")
 _LEGACY_BACKEND_WINDOWS_FIELD = "windows"
 _LEGACY_WORKSPACE_FIELD = "workspace"
-_TOP_LEVEL_KEYS = ("backends", "layouts", "windows", "workspace_layout", "debug_log", "keys", "clipboard")
+_TOP_LEVEL_KEYS = (
+    "backends",
+    "layouts",
+    "windows",
+    "workspace_layout",
+    "debug_log",
+    "keys",
+    "clipboard",
+    "sticky_positions",
+)
 _KEYS_FIELDS = ("paste", "open_selection")
 _CLIPBOARD_FIELDS = ("allow_read",)
 
@@ -419,6 +448,7 @@ def _parse_top_level(data: dict[str, Any], *, source: Path) -> HopConfig:
     debug_log = _parse_debug_log(data.get("debug_log"), source=source)
     paste_keys, open_selection_keys = _parse_keys_table(data.get("keys"), source=source)
     clipboard_allow_read = _parse_clipboard_allow_read(data.get("clipboard"), source=source)
+    sticky_positions = _parse_sticky_positions(data.get("sticky_positions"), source=source)
     return HopConfig(
         backends=backends,
         layouts=layouts,
@@ -428,7 +458,20 @@ def _parse_top_level(data: dict[str, Any], *, source: Path) -> HopConfig:
         paste_keys=paste_keys,
         open_selection_keys=open_selection_keys,
         clipboard_allow_read=clipboard_allow_read,
+        sticky_positions=sticky_positions,
     )
+
+
+def _parse_sticky_positions(raw: object, *, source: Path) -> bool | None:
+    """Parse the top-level ``sticky_positions`` toggle — a boolean, or
+    ``None`` when absent (the resolver treats that as enabled)."""
+
+    if raw is None:
+        return None
+    if not isinstance(raw, bool):
+        msg = f"{source}: top-level 'sticky_positions' must be a boolean, got {type(raw).__name__}"
+        raise HopConfigError(msg)
+    return raw
 
 
 def _parse_keys_table(raw: object, *, source: Path) -> tuple[tuple[str, ...] | None, tuple[str, ...] | None]:
@@ -679,13 +722,31 @@ def _parse_window(role: str, table: dict[str, Any], *, context: str, source: Pat
     activate_raw = _parse_command(table, key="activate", context=context, source=source)
     open_keys = _parse_command(table, key="open_keys", context=context, source=source)
     open_keys_with_line = _parse_command(table, key="open_keys_with_line", context=context, source=source)
+    position = _parse_position(table, context=context, source=source)
     return WindowConfig(
         role=role,
         command=command,
         activate=activate_raw,
         open_keys=open_keys,
         open_keys_with_line=open_keys_with_line,
+        position=position,
     )
+
+
+def _parse_position(table: dict[str, Any], *, context: str, source: Path) -> int | None:
+    if "position" not in table:
+        return None
+    value = table["position"]
+    if isinstance(value, bool) or not isinstance(value, int):
+        msg = f"{source}: {context} field 'position' must be an integer, got {type(value).__name__}"
+        raise HopConfigError(msg)
+    if value == 0:
+        msg = (
+            f"{source}: {context} field 'position' must not be 0 "
+            "(positive counts from the left, negative counts from the right)"
+        )
+        raise HopConfigError(msg)
+    return value
 
 
 def _parse_command(

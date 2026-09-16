@@ -55,12 +55,39 @@ def test_resolve_windows_defaults_when_config_is_empty(tmp_path: Path) -> None:
     runner = RecordingRunner()
     windows = resolve_windows(HopConfig(), build_session(tmp_path), runner=runner)
 
+    # Sticky positions default to enabled: shell=1, editor=2, browser=3.
+    assert windows == (
+        WindowSpec(role="shell", command="", active=True, position=1),
+        WindowSpec(role="editor", command="nvim", active=True, position=2),
+        WindowSpec(role="browser", command="", active=False, position=3),
+    )
+    assert runner.calls == []
+
+
+def test_resolve_windows_built_in_positions_are_off_when_sticky_positions_disabled(tmp_path: Path) -> None:
+    runner = RecordingRunner()
+    windows = resolve_windows(HopConfig(sticky_positions=False), build_session(tmp_path), runner=runner)
+
     assert windows == (
         WindowSpec(role="shell", command="", active=True),
         WindowSpec(role="editor", command="nvim", active=True),
         WindowSpec(role="browser", command="", active=False),
     )
-    assert runner.calls == []
+
+
+def test_resolve_windows_disabling_sticky_positions_overrides_explicit_position(tmp_path: Path) -> None:
+    """The global toggle is a kill switch: it nulls out every position, even
+    one explicitly declared in config."""
+    config = HopConfig(
+        sticky_positions=False,
+        windows=(WindowConfig(role="server", command="bin/dev", position=1),),
+    )
+
+    windows = resolve_windows(config, build_session(tmp_path), runner=RecordingRunner())
+
+    server = find_window(windows, "server")
+    assert server is not None
+    assert server.position is None
 
 
 # --- top-level window overrides -----------------------------------------
@@ -155,6 +182,148 @@ def test_layout_editor_window_propagates_open_keys_templates(tmp_path: Path) -> 
     assert editor is not None
     assert editor.open_keys == "\x1b:open {path}\r"
     assert editor.open_keys_with_line == "\x1b:open {path}:{line}\r"
+
+
+def test_top_level_window_propagates_position(tmp_path: Path) -> None:
+    config = HopConfig(windows=(WindowConfig(role="server", command="bin/dev", position=-1),))
+
+    windows = resolve_windows(config, build_session(tmp_path), runner=RecordingRunner())
+
+    server = find_window(windows, "server")
+    assert server is not None
+    assert server.position == -1
+
+
+def test_layout_window_propagates_position(tmp_path: Path) -> None:
+    config = HopConfig(
+        layouts=(
+            LayoutConfig(
+                name="rails",
+                activate="true",
+                windows=(WindowConfig(role="server", command="bin/dev", position=1),),
+            ),
+        )
+    )
+
+    windows = resolve_windows(config, build_session(tmp_path), runner=RecordingRunner())
+
+    server = find_window(windows, "server")
+    assert server is not None
+    assert server.position == 1
+
+
+def test_second_matching_layout_overrides_first_layouts_position(tmp_path: Path) -> None:
+    """Exercises the merge branch in ``_apply_layout_window`` where a role
+    declared by an earlier matching layout is overridden by a later one."""
+    config = HopConfig(
+        layouts=(
+            LayoutConfig(
+                name="rails",
+                activate="true",
+                windows=(WindowConfig(role="server", command="bin/dev", position=1),),
+            ),
+            LayoutConfig(
+                name="vite",
+                activate="true",
+                windows=(WindowConfig(role="server", position=-1),),
+            ),
+        ),
+    )
+
+    windows = resolve_windows(config, build_session(tmp_path), runner=RecordingRunner())
+
+    server = find_window(windows, "server")
+    assert server is not None
+    assert server.position == -1
+
+
+def test_top_level_window_overrides_layout_position(tmp_path: Path) -> None:
+    config = HopConfig(
+        layouts=(
+            LayoutConfig(
+                name="rails",
+                activate="true",
+                windows=(WindowConfig(role="server", command="bin/dev", position=1),),
+            ),
+        ),
+        windows=(WindowConfig(role="server", position=-1),),
+    )
+
+    windows = resolve_windows(config, build_session(tmp_path), runner=RecordingRunner())
+
+    server = find_window(windows, "server")
+    assert server is not None
+    assert server.position == -1
+
+
+def test_window_with_no_configured_position_resolves_to_none(tmp_path: Path) -> None:
+    config = HopConfig(windows=(WindowConfig(role="server", command="bin/dev"),))
+
+    windows = resolve_windows(config, build_session(tmp_path), runner=RecordingRunner())
+
+    server = find_window(windows, "server")
+    assert server is not None
+    assert server.position is None
+
+
+def test_resolve_windows_logs_warning_when_two_roles_share_a_position(tmp_path: Path) -> None:
+    from hop import debug
+
+    target = tmp_path / "debug.log"
+    debug.configure(str(target))
+    try:
+        config = HopConfig(
+            windows=(
+                WindowConfig(role="server", command="bin/dev", position=5),
+                WindowConfig(role="console", command="bin/rails console", position=5),
+            ),
+        )
+
+        resolve_windows(config, build_session(tmp_path), runner=RecordingRunner())
+
+        contents = target.read_text()
+        assert "'server' and 'console' both declare position 5" in contents
+        assert "tie resolves by window creation order" in contents
+    finally:
+        debug.configure(None)
+
+
+def test_resolve_windows_does_not_log_when_positions_are_unique(tmp_path: Path) -> None:
+    from hop import debug
+
+    target = tmp_path / "debug.log"
+    debug.configure(str(target))
+    try:
+        config = HopConfig(windows=(WindowConfig(role="server", command="bin/dev", position=-1),))
+
+        resolve_windows(config, build_session(tmp_path), runner=RecordingRunner())
+
+        assert not target.exists() or target.read_text() == ""
+    finally:
+        debug.configure(None)
+
+
+def test_resolve_windows_does_not_log_when_sticky_positions_disabled(tmp_path: Path) -> None:
+    """Duplicate positions are harmless noise once the feature is off —
+    every position resolves to None, so there's nothing to collide."""
+    from hop import debug
+
+    target = tmp_path / "debug.log"
+    debug.configure(str(target))
+    try:
+        config = HopConfig(
+            sticky_positions=False,
+            windows=(
+                WindowConfig(role="server", command="bin/dev", position=1),
+                WindowConfig(role="console", command="bin/rails console", position=1),
+            ),
+        )
+
+        resolve_windows(config, build_session(tmp_path), runner=RecordingRunner())
+
+        assert not target.exists() or target.read_text() == ""
+    finally:
+        debug.configure(None)
 
 
 def test_top_level_window_with_activate_false_is_declared_but_inactive(tmp_path: Path) -> None:

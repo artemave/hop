@@ -236,6 +236,12 @@ class SwayIpcAdapter:
     def move_window_to_workspace(self, window_id: int, workspace_name: str) -> None:
         self.run_command(f"[con_id={window_id}] move container to workspace {json.dumps(workspace_name)}")
 
+    def move_container_left(self, window_id: int) -> None:
+        self.run_command(f"[con_id={window_id}] move left")
+
+    def move_container_right(self, window_id: int) -> None:
+        self.run_command(f"[con_id={window_id}] move right")
+
     def mark_window(self, window_id: int, mark: str) -> None:
         self.run_command(f"[con_id={window_id}] mark --add {json.dumps(mark)}")
 

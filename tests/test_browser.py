@@ -15,6 +15,13 @@ class StubSwayAdapter:
         self.focused_window_ids: list[int] = []
         self.moves: list[tuple[int, str]] = []
         self.marks: list[tuple[int, str]] = []
+        self.container_moves: list[tuple[int, str]] = []
+
+    def move_container_left(self, window_id: int) -> None:
+        self.container_moves.append((window_id, "left"))
+
+    def move_container_right(self, window_id: int) -> None:
+        self.container_moves.append((window_id, "right"))
 
     def list_windows(self) -> tuple[SwayWindow, ...]:
         return tuple(self.windows)

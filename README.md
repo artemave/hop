@@ -123,9 +123,10 @@ A hop config has several named sections plus a few scalar settings, all optional
 
 - `[backends.<name>]` - a named backend. Keys: `activate` (auto-detect probe), `prepare` / `teardown` (lifecycle commands), `port_translate` / `host_translate` (rewrite `localhost` URLs on dispatch), `interactive_prefix` / `noninteractive_prefix` (command wrappers). See [Session backends](#session-backends).
 - `[layouts.<name>]` - a named layout: an `activate` probe plus `[layouts.<name>.windows.<role>]` sub-tables that come up together when the probe matches. See [Layouts and windows](#layouts-and-windows).
-- `[windows.<role>]` - a top-level window. Keys: `command`, `activate`, and for the editor `open_keys` / `open_keys_with_line`. See [Layouts and windows](#layouts-and-windows).
+- `[windows.<role>]` - a top-level window. Keys: `command`, `activate`, `position`, and for the editor `open_keys` / `open_keys_with_line`. See [Layouts and windows](#layouts-and-windows).
 - `[keys]` - session-kitty keybindings hop injects at bootstrap; each is a kitty key spec or a list of them, and an empty string or list disables it. `paste` (default `["ctrl+v", "ctrl+shift+v"]`) binds the [clipboard-image paste kitten](#special-windows); `open_selection` (default `["ctrl+shift+o"]`) binds the [visible-output picker](#open-visible-output-targets-from-kitty).
 - `[clipboard]` - `allow_read` (bool, default `true`) controls whether hop injects a `clipboard_control` override permitting OSC 52 clipboard reads without a per-paste prompt.
+- `sticky_positions` (bool, default `true`) - global on/off switch for the sticky-`position` feature. See [Layouts and windows](#layouts-and-windows).
 - `workspace_layout = "<mode>"` - sway workspace layout applied at first session entry. One of `splith`, `splitv`, `stacking`, `tabbed`.
 - `debug_log = true` - opt-in diagnostic log; see [Troubleshooting](#troubleshooting).
 
@@ -215,16 +216,34 @@ Per-window fields:
 
 - `command` (string) - the role command, **without** any backend wrap. It's typed into the role's session shell, so it lands in shell history and the window stays a usable shell after the command exits. An empty string (e.g. `[layouts.rails.windows.test] command = ""`) is just that bare shell.
 - `activate` (string, optional) - shell probe; the window auto-launches when it exits 0. Defaults to `"true"`.
+- `position` (integer, optional) - sticks the window to a slot in the row of windows on the session's workspace. Positive counts from the left (`1` = leftmost), negative counts from the right (`-1` = rightmost). Unpositioned windows fill the middle, in creation order:
+
+  ```toml
+  [windows.shell]
+  position = 1
+
+  [windows.server]
+  command  = "bin/dev"
+  position = -1
+  ```
+
+  With this config, `shell` always opens leftmost and `server` always opens rightmost; any other window (declared or ad hoc, like the `shell-2` spawned by re-running `hop` from inside the session) opens between them. Only the newly-created window is repositioned - existing windows keep their relative order. The session browser participates in the same row as the kitty role terminals, even though it isn't a kitty window.
+
+  Sticky positioning is **on by default**: shell, editor, and browser ship with built-in positions `1`, `2`, and `3` respectively, so a fresh session always lays out shell, editor, and browser leftmost-to-rightmost in that order, ahead of any other window (any additional window without an explicit position lands after all three, since unpositioned windows fill the middle bucket, which always sorts after every positive position). Set the top-level `sticky_positions = false` to turn the whole feature off - every position, built-in or explicitly configured, is then ignored and Sway's own tiling placement is left alone:
+
+  ```toml
+  sticky_positions = false
+  ```
 
 A session that outlived its windows - after `hop kill`, a crash, or a reboot - re-activates every window on the next `hop` rather than coming back half-empty.
 
 Built-in roles `shell`, `editor`, and `browser` ship with hop defaults:
 
-| role    | command default                         | activate default |
-|---------|-----------------------------------------|------------------|
-| shell   | login shell                             | active           |
-| editor  | `nvim`                                  | active           |
-| browser | xdg-detected default browser            | inactive         |
+| role    | command default                         | activate default | position default |
+|---------|-----------------------------------------|-------------------|-------------------|
+| shell   | login shell                             | active            | `1`               |
+| editor  | `nvim`                                  | active            | `2`               |
+| browser | xdg-detected default browser            | inactive          | `3`               |
 
 To change a built-in, declare it as a top-level window: `[windows.editor] activate = "false"` opts out of the editor for this config; `[windows.browser] activate = "true"` activates the browser; `[windows.shell] command = "/usr/bin/zsh"` overrides the shell. The editor and the browser carry extra fields and behavior of their own - see [Special windows](#special-windows).
 

@@ -340,6 +340,80 @@ open_keys_with_line = "\u001b:open {path}:{line}\r"
         load_global_config(config_file)
 
 
+def test_load_global_config_parses_window_position(tmp_path: Path) -> None:
+    config_file = write(
+        tmp_path / "config.toml",
+        """
+[windows.shell]
+position = 1
+
+[windows.server]
+command  = "bin/dev"
+position = -1
+""",
+    )
+
+    assert load_global_config(config_file).windows == (
+        WindowConfig(role="shell", position=1),
+        WindowConfig(role="server", command="bin/dev", position=-1),
+    )
+
+
+def test_load_global_config_parses_layout_window_position(tmp_path: Path) -> None:
+    config_file = write(
+        tmp_path / "config.toml",
+        """
+[layouts.rails]
+activate = "true"
+
+[layouts.rails.windows.server]
+command  = "bin/dev"
+position = 2
+""",
+    )
+
+    assert load_global_config(config_file).layouts[0].windows[0].position == 2
+
+
+def test_load_global_config_rejects_zero_window_position(tmp_path: Path) -> None:
+    config_file = write(
+        tmp_path / "config.toml",
+        """
+[windows.shell]
+position = 0
+""",
+    )
+
+    with pytest.raises(HopConfigError, match="field 'position' must not be 0"):
+        load_global_config(config_file)
+
+
+def test_load_global_config_rejects_non_integer_window_position(tmp_path: Path) -> None:
+    config_file = write(
+        tmp_path / "config.toml",
+        """
+[windows.shell]
+position = "1"
+""",
+    )
+
+    with pytest.raises(HopConfigError, match="field 'position' must be an integer, got str"):
+        load_global_config(config_file)
+
+
+def test_load_global_config_rejects_boolean_window_position(tmp_path: Path) -> None:
+    config_file = write(
+        tmp_path / "config.toml",
+        """
+[windows.shell]
+position = true
+""",
+    )
+
+    with pytest.raises(HopConfigError, match="field 'position' must be an integer, got bool"):
+        load_global_config(config_file)
+
+
 def test_load_global_config_accepts_arbitrary_activate_probe_on_top_level_window(tmp_path: Path) -> None:
     config_file = write(
         tmp_path / "config.toml",
@@ -439,6 +513,45 @@ def test_merge_configs_debug_log_inherits_from_global() -> None:
     global_ = HopConfig(debug_log=True)
 
     assert merge_configs(project, global_).debug_log is True
+
+
+def test_load_global_config_parses_sticky_positions_false(tmp_path: Path) -> None:
+    config_file = write(tmp_path / "config.toml", "sticky_positions = false\n")
+
+    assert load_global_config(config_file).sticky_positions is False
+
+
+def test_load_global_config_parses_sticky_positions_true(tmp_path: Path) -> None:
+    config_file = write(tmp_path / "config.toml", "sticky_positions = true\n")
+
+    assert load_global_config(config_file).sticky_positions is True
+
+
+def test_load_global_config_sticky_positions_omitted_is_none(tmp_path: Path) -> None:
+    config_file = write(tmp_path / "config.toml", "# nothing\n")
+
+    assert load_global_config(config_file).sticky_positions is None
+
+
+def test_load_global_config_rejects_non_bool_sticky_positions(tmp_path: Path) -> None:
+    config_file = write(tmp_path / "config.toml", 'sticky_positions = "yes"\n')
+
+    with pytest.raises(HopConfigError, match="top-level 'sticky_positions' must be a boolean, got str"):
+        load_global_config(config_file)
+
+
+def test_merge_configs_sticky_positions_project_wins() -> None:
+    project = HopConfig(sticky_positions=False)
+    global_ = HopConfig(sticky_positions=True)
+
+    assert merge_configs(project, global_).sticky_positions is False
+
+
+def test_merge_configs_sticky_positions_inherits_from_global() -> None:
+    project = HopConfig()
+    global_ = HopConfig(sticky_positions=False)
+
+    assert merge_configs(project, global_).sticky_positions is False
 
 
 # --- [keys].paste / [clipboard].allow_read -----------------------------
@@ -1050,6 +1163,15 @@ def test_merge_top_level_windows_per_field() -> None:
         WindowConfig(role="worker", command="project-jobs"),  # project-only
         WindowConfig(role="logger", command="tail -f log"),  # global-only, appended last
     )
+
+
+def test_merge_top_level_window_position_project_wins() -> None:
+    project = HopConfig(windows=(WindowConfig(role="shell", position=1),))
+    global_ = HopConfig(windows=(WindowConfig(role="shell", command="/usr/bin/zsh", position=-1),))
+
+    merged = merge_windows(project, global_)
+
+    assert merged == (WindowConfig(role="shell", command="/usr/bin/zsh", position=1),)
 
 
 def test_merge_configs_combines_all_three_sections() -> None:

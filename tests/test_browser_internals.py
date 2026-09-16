@@ -54,6 +54,7 @@ class StubSwayAdapter:
         self.moves: list[tuple[int, str]] = []
         self.focused_window_ids: list[int] = []
         self.marks: list[tuple[int, str]] = []
+        self.container_moves: list[tuple[int, str]] = []
 
     def list_windows(self) -> tuple[SwayWindow, ...]:
         return tuple(self.windows)
@@ -66,6 +67,12 @@ class StubSwayAdapter:
 
     def mark_window(self, window_id: int, mark: str) -> None:
         self.marks.append((window_id, mark))
+
+    def move_container_left(self, window_id: int) -> None:
+        self.container_moves.append((window_id, "left"))
+
+    def move_container_right(self, window_id: int) -> None:
+        self.container_moves.append((window_id, "right"))
 
 
 def build_session() -> ProjectSession:
@@ -110,6 +117,53 @@ def test_launch_session_browser_keeps_already_attached_workspace_without_move() 
     assert sway.moves == []
     assert sway.marks == [(99, "_hop_browser:demo")]
     assert sway.focused_window_ids == [99]
+
+
+def test_launch_session_browser_applies_sticky_position() -> None:
+    """The browser shares row math with kitty role terminals: a browser
+    pinned to position -2 must move left past an already-open role terminal
+    pinned to position -1 (further right), even though the browser landed
+    at the end of the tree (sway's default placement for a new window)."""
+    from hop.layouts import WindowSpec
+
+    sway = StubSwayAdapter(
+        [
+            SwayWindow(id=1, workspace_name="s:demo", app_id="hop:shell", window_class=None),
+            SwayWindow(id=2, workspace_name="s:demo", app_id="hop:server", window_class=None),
+        ]
+    )
+
+    def launch(args: Sequence[str], *, cwd: Path) -> None:
+        # This stub's `mark_window` records the call but doesn't mutate
+        # `.windows` (unlike test_browser.py's), so the mark hop applies
+        # after discovery wouldn't otherwise show up on a re-list — set it
+        # up front here to simulate that mark already having landed.
+        sway.windows.append(
+            SwayWindow(
+                id=99,
+                workspace_name="s:demo",
+                app_id="brave-browser",
+                window_class=None,
+                marks=("_hop_browser:demo",),
+            )
+        )
+
+    launcher = StubBrowserLauncher()
+    launcher.launch = launch  # type: ignore[method-assign]
+    adapter = SessionBrowserAdapter(
+        sway=sway,
+        launcher=launcher,
+        browser_spec=build_browser_spec(),
+        session_windows_for=lambda _session: (
+            WindowSpec(role="shell", command="", active=True, position=1),
+            WindowSpec(role="server", command="bin/dev", active=True, position=-1),
+            WindowSpec(role="browser", command="", active=False, position=-2),
+        ),
+    )
+
+    adapter.ensure_browser(build_session(), url=None)
+
+    assert sway.container_moves == [(99, "left")]
 
 
 @pytest.mark.parametrize(

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence
 
+from hop import debug
 from hop.backends import Transport, local_transport, substitute
 from hop.config import (
     BROWSER_ROLE,
@@ -21,13 +22,15 @@ from hop.session import ProjectSession
 #   host; ${SHELL:-sh} fallback when wrapped through a backend prefix).
 # - editor command is plain `nvim`; the backend prefix wraps it.
 # - browser command "" leaves SessionBrowserAdapter to xdg-detect a default.
-# Third tuple element is the default `active` flag.
-_BUILTIN_DEFAULTS: tuple[tuple[str, str, bool], ...] = (
-    (SHELL_ROLE, "", True),
-    (EDITOR_ROLE, "nvim", True),
-    (BROWSER_ROLE, "", False),
+# Third tuple element is the default `active` flag; fourth is the default
+# sticky `position` (shell=1, editor=2, browser=3) — in effect only while
+# `sticky_positions` is enabled (see `resolve_windows`).
+_BUILTIN_DEFAULTS: tuple[tuple[str, str, bool, int], ...] = (
+    (SHELL_ROLE, "", True, 1),
+    (EDITOR_ROLE, "nvim", True, 2),
+    (BROWSER_ROLE, "", False, 3),
 )
-_BUILTIN_ROLES = frozenset(role for role, _, _ in _BUILTIN_DEFAULTS)
+_BUILTIN_ROLES = frozenset(role for role, _, _, _ in _BUILTIN_DEFAULTS)
 
 CommandRunner = Callable[[Sequence[str], Path], subprocess.CompletedProcess[str]]
 # A layout/window ``activate`` probe: returns True when the command exits 0.
@@ -53,6 +56,9 @@ class WindowSpec:
     keystroke templates verbatim from config. ``None`` means "use the
     editor adapter's built-in nvim default"; the parser already rejects
     these fields on non-editor roles.
+
+    ``position`` carries the role's sticky position verbatim from config
+    (see ``WindowConfig``); ``None`` means unpositioned.
     """
 
     role: str
@@ -60,6 +66,7 @@ class WindowSpec:
     active: bool
     open_keys: str | None = None
     open_keys_with_line: str | None = None
+    position: int | None = None
 
 
 def resolve_windows(
@@ -91,6 +98,11 @@ def resolve_windows(
     local runner cwd — the project root locally, the host home for a remote
     session whose project root only exists on the remote; the remote cd rides
     inside the transport).
+
+    ``config.sticky_positions`` (default-enabled when unset) gates the whole
+    sticky-``position`` feature: when it resolves false, every ``WindowSpec``
+    comes back with ``position=None`` regardless of built-in defaults or
+    explicit ``position`` fields in config.
     """
 
     probe_cwd = cwd if cwd is not None else session.session_root
@@ -99,14 +111,16 @@ def resolve_windows(
         substituted = substitute(command, session=session, host=host)
         return runner(transport(substituted), probe_cwd).returncode == 0
 
+    sticky_positions_enabled = config.sticky_positions if config.sticky_positions is not None else True
+
     specs: dict[str, _MutableSpec] = {}
     # Pre-load built-in specs so layout / top-level windows that override
     # them by role find an existing spec to merge into. The order of
     # built-ins in the final output is decided after the config walk:
     # shell pinned slot 1, editor pinned slot 2, browser appended at the
     # end if the user never declared it.
-    for role, command, active in _BUILTIN_DEFAULTS:
-        specs[role] = _MutableSpec(role=role, command=command, active=active)
+    for role, command, active, position in _BUILTIN_DEFAULTS:
+        specs[role] = _MutableSpec(role=role, command=command, active=active, position=position)
 
     declared_order: list[str] = []
     for layout in config.layouts:
@@ -140,9 +154,34 @@ def resolve_windows(
                 active=spec.active,
                 open_keys=spec.open_keys,
                 open_keys_with_line=spec.open_keys_with_line,
+                position=spec.position if sticky_positions_enabled else None,
             )
         )
+    _warn_duplicate_positions(result)
     return tuple(result)
+
+
+def _warn_duplicate_positions(windows: Sequence[WindowSpec]) -> None:
+    """Two roles sharing the same sticky ``position`` aren't rejected — the
+    row math resolves the tie deterministically but by window *creation*
+    order (see ``hop.window_position.compute_insert_index``), which is easy
+    to get surprised by. Flag it in the debug log rather than fail the
+    session over it.
+    """
+
+    roles_by_position: dict[int, str] = {}
+    for window in windows:
+        if window.position is None:
+            continue
+        colliding_role = roles_by_position.get(window.position)
+        if colliding_role is not None:
+            debug.log(
+                f"layouts: roles {colliding_role!r} and {window.role!r} both declare "
+                f"position {window.position} — the tie resolves by window creation order, "
+                "not declaration order"
+            )
+            continue
+        roles_by_position[window.position] = window.role
 
 
 @dataclass
@@ -152,6 +191,7 @@ class _MutableSpec:
     active: bool
     open_keys: str | None = None
     open_keys_with_line: str | None = None
+    position: int | None = None
 
 
 def _layout_matches(
@@ -187,6 +227,7 @@ def _apply_layout_window(
             active=active,
             open_keys=window.open_keys,
             open_keys_with_line=window.open_keys_with_line,
+            position=window.position,
         )
         return
     if window.command is not None:
@@ -196,6 +237,8 @@ def _apply_layout_window(
         existing.open_keys = window.open_keys
     if window.open_keys_with_line is not None:
         existing.open_keys_with_line = window.open_keys_with_line
+    if window.position is not None:
+        existing.position = window.position
 
 
 def _apply_top_level_window(
@@ -216,6 +259,7 @@ def _apply_top_level_window(
             active=active,
             open_keys=window.open_keys,
             open_keys_with_line=window.open_keys_with_line,
+            position=window.position,
         )
         return
     if window.command is not None:
@@ -226,6 +270,8 @@ def _apply_top_level_window(
         existing.open_keys = window.open_keys
     if window.open_keys_with_line is not None:
         existing.open_keys_with_line = window.open_keys_with_line
+    if window.position is not None:
+        existing.position = window.position
 
 
 def _resolve_window_activate(
