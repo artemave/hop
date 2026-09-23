@@ -1,9 +1,30 @@
+import logging
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Iterator
 
 import pytest
 
+from hop.kitten.dispatch import LOGGER_NAME
 from hop.kitten.hints import main
+
+
+@pytest.fixture(autouse=True)
+def _isolate_kitten_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:  # pyright: ignore[reportUnusedFunction]
+    """``handle_result`` configures the kitten's logger for the life of the
+    process: a file handler under ``$XDG_RUNTIME_DIR`` and ``propagate =
+    False``. Point the file at ``tmp_path`` and undo both afterwards, so the
+    real log stays clean and later tests' ``caplog`` still sees the records."""
+
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    log = logging.getLogger(LOGGER_NAME)
+    handlers, level, propagate = list(log.handlers), log.level, log.propagate
+    yield
+    for handler in log.handlers:
+        if handler not in handlers:
+            handler.close()
+    log.handlers[:] = handlers
+    log.setLevel(level)
+    log.propagate = propagate
 
 
 @pytest.fixture(autouse=True)
