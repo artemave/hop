@@ -264,6 +264,8 @@ def test_ensure_terminal_bootstraps_session_kitty_when_socket_is_not_listening()
         "allow_remote_control=yes",
         "--override",
         _cmd_events_watcher_override(),
+        "--override",
+        _hover_links_watcher_override(),
     )
 
 
@@ -327,6 +329,12 @@ def _cmd_events_watcher_override() -> str:
     return f"watcher {Path(hop.__file__).parent / 'kitten' / 'cmd_events' / 'main.py'}"
 
 
+def _hover_links_watcher_override() -> str:
+    import hop
+
+    return f"watcher {Path(hop.__file__).parent / 'kitten' / 'hover_links' / 'main.py'}"
+
+
 def test_bootstrap_injects_extra_overrides_after_allow_remote_control() -> None:
     factory = StubKittyFactory(
         [
@@ -347,12 +355,14 @@ def test_bootstrap_injects_extra_overrides_after_allow_remote_control() -> None:
     adapter.ensure_terminal(build_session(), role="shell")
 
     args, _env = launcher.calls[0]
-    # allow_remote_control comes first, then the always-on cmd-events watcher,
+    # allow_remote_control comes first, then the always-on watchers,
     # then the injected overrides, each as its own --override <value> pair.
     tail = args[args.index("allow_remote_control=yes") + 1 :]
     assert list(tail) == [
         "--override",
         _cmd_events_watcher_override(),
+        "--override",
+        _hover_links_watcher_override(),
         "--override",
         "map ctrl+v kitten /x/main.py",
         "--override",
@@ -375,11 +385,13 @@ def test_bootstrap_with_no_extra_overrides_matches_plain_argv() -> None:
     adapter.ensure_terminal(build_session(), role="shell")
 
     args, _env = launcher.calls[0]
-    assert args[-4:] == (
+    assert args[-6:] == (
         "--override",
         "allow_remote_control=yes",
         "--override",
         _cmd_events_watcher_override(),
+        "--override",
+        _hover_links_watcher_override(),
     )
 
 

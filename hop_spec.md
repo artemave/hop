@@ -574,6 +574,17 @@ Kitty is used as the terminal backend.
 - selection should allow choosing file paths, URLs, and other matches
 - this replaces `tmux_super_fingers`
 
+### Hover links
+
+- the hints targets are also offered as hyperlinks under the mouse, via the kitty watcher `hop/kitten/hover_links/main.py`, injected at session bootstrap as `--override watcher <path>` next to the cmd-events watcher
+- it relies on a kitty build whose watchers get `on_mouse_move` (the hovered cell) and whose `Screen` has `set_hyperlink_for_range()`; upstream kitty has neither, and there the watcher is never called
+- extraction and existence filtering are the hints kitten's (`hop.targets.existing_visible_output_targets`), run over the hovered logical line: the hovered row joined with the visible rows soft-wrapped onto it. A target spanning rows is linked on each of them; a wrapped row's trailing empty cells (left when a wide character didn't fit) are skipped. Rows scrolled out of view aren't read
+- `screen.visual_line(y)` returns one shared `Line` that the next call overwrites, so each row is copied into a `hop.hover_links.Row` snapshot as soon as it is read
+- the watcher runs on kitty's boss thread, so it names its own session (from the kitty's `--listen-on` socket) rather than asking sway and kitty IPC for the focused one, and relative paths resolve against the same base cwd a click dispatches with (`hop.focused.selection_base_cwd`)
+- existence checks may cross a container or ssh boundary, so they run on a single worker thread and are cached per (session, cwd, line text); a line's links are painted on the first mouse move after its lookup lands
+- a target already carrying exactly its hop link is left alone, so repeated moves don't redraw; any other link overlapping it — a stale paint or the program's own OSC 8 link — is cleared across the whole logical line before the hop link is painted
+- links are `hop://<action>/<argument>` URLs, the argument percent-encoded except for `/` and `:`; the only action is `open`, whose argument is the selection (`hop://open/app/models/user.rb:42`). The watcher installs itself as the window's `open_url_handler`: a click on a `hop://` link runs its action — `open` runs the hints kitten's dispatch — and every other URL falls through to kitty
+
 ### Window control
 
 Kitty must be used to:

@@ -4,7 +4,7 @@ import os.path
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 from urllib.parse import urlparse
 
 if TYPE_CHECKING:
@@ -161,6 +161,42 @@ def resolve_target(
         path=resolve_file_candidate(syntactic.path_text, terminal_cwd=terminal_directory),
         line_number=syntactic.line_number,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class VisibleOutputMatch:
+    start: int
+    end: int
+    selection: str
+
+
+def find_visible_output_targets(text: str) -> list[VisibleOutputMatch]:
+    """Every target-shaped token in ``text``, with its span in ``text``."""
+
+    matches: list[VisibleOutputMatch] = []
+    for match in VISIBLE_OUTPUT_TARGET_PATTERN.finditer(text):
+        group_name = next(name for name in ("url", "rails", "rails_bare", "file") if match.group(name))
+        start, end = match.span(group_name)
+        selection = match.group(group_name).replace("\0", "").replace("\n", "")
+        matches.append(VisibleOutputMatch(start=start, end=end, selection=selection))
+    return matches
+
+
+def existing_visible_output_targets(
+    text: str,
+    paths_exist: Callable[[list[str]], set[str]],
+) -> list[VisibleOutputMatch]:
+    """The targets in ``text`` worth offering: every URL, plus the file and
+    Rails refs ``paths_exist`` confirms."""
+
+    matches = find_visible_output_targets(text)
+    candidates = [m.selection for m in matches if not _is_url_selection(m.selection)]
+    existing: set[str] = paths_exist(candidates) if candidates else set()
+    return [m for m in matches if _is_url_selection(m.selection) or m.selection in existing]
+
+
+def _is_url_selection(selection: str) -> bool:
+    return selection.startswith(("http://", "https://"))
 
 
 def _normalize_url(selection: str) -> str | None:

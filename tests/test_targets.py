@@ -11,6 +11,9 @@ from hop.targets import (
     SyntacticFileTarget,
     SyntacticRailsRefTarget,
     SyntacticUrlTarget,
+    VisibleOutputMatch,
+    existing_visible_output_targets,
+    find_visible_output_targets,
     parse_visible_output_target,
     resolve_target,
 )
@@ -270,3 +273,39 @@ def _as_backend(stub: StubBackend) -> SessionBackend:
     # cast just lets pyright accept the assignment without complaining about
     # nominal type mismatch.
     return stub  # type: ignore[return-value]
+
+
+# ---------------------------------------------------------------------------
+# Extraction — the candidates both the hints kitten and hover links offer.
+# ---------------------------------------------------------------------------
+
+
+def test_find_visible_output_targets_reports_the_target_group_span() -> None:
+    text = "require(foo.js) https://example.com"
+
+    assert find_visible_output_targets(text) == [
+        VisibleOutputMatch(start=8, end=14, selection="foo.js"),
+        VisibleOutputMatch(start=16, end=35, selection="https://example.com"),
+    ]
+
+
+def test_existing_visible_output_targets_keeps_urls_and_confirmed_files() -> None:
+    asked: list[list[str]] = []
+
+    def paths_exist(candidates: list[str]) -> set[str]:
+        asked.append(candidates)
+        return {"real.rb"}
+
+    matches = existing_visible_output_targets("real.rb gone.rb https://example.com", paths_exist)
+
+    assert [m.selection for m in matches] == ["real.rb", "https://example.com"]
+    assert asked == [["real.rb", "gone.rb"]]
+
+
+def test_existing_visible_output_targets_skips_the_existence_check_without_file_candidates() -> None:
+    def paths_exist(candidates: list[str]) -> set[str]:
+        raise AssertionError(f"unexpected existence check for {candidates}")
+
+    matches = existing_visible_output_targets("https://example.com", paths_exist)
+
+    assert [m.selection for m in matches] == ["https://example.com"]

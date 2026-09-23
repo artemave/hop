@@ -113,6 +113,12 @@ The picker scans visible terminal output and dispatches supported selections to 
 
 File-shaped tokens that don't exist in the focused session's backend - including inside a devcontainer or on a remote ssh host - are not highlighted.
 
+### Hover links
+
+The same targets also become hyperlinks under the mouse: hover one and click to dispatch it, no picker needed. Targets soft-wrapped across rows are linked as a whole. A hop link replaces any link the program printed itself (OSC 8) that overlaps it.
+
+This needs a kitty build whose watchers support `on_mouse_move` and `screen.set_hyperlink_for_range()` - upstream kitty has neither. hop registers the watcher in every session kitty regardless; kitty builds without these features never call it.
+
 ### Binary files open on the host
 
 Choosing a `.png` (or similar) in the open-selection kitten opens the file with your host's `xdg-open` instead of nvim - so PNGs land in your image viewer, PDFs in your reader, archives in your file manager, etc. This seamlessly works over ssh as well.

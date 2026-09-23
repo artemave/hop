@@ -27,6 +27,8 @@ _PASTE_KITTEN_PATH = Path(hop.__file__).parent / "kitten" / "paste" / "main.py"
 _HINTS_KITTEN_PATH = Path(hop.__file__).parent / "kitten" / "hints" / "main.py"
 # kitty watcher that logs shell command start/stop events for ``hop wait``.
 _CMD_EVENTS_WATCHER_PATH = Path(hop.__file__).parent / "kitten" / "cmd_events" / "main.py"
+# kitty watcher that turns visible-output targets under the mouse into hyperlinks.
+_HOVER_LINKS_WATCHER_PATH = Path(hop.__file__).parent / "kitten" / "hover_links" / "main.py"
 # kitty ``clipboard_control`` value that permits OSC 52 reads without a
 # per-paste permission prompt — injected when ``[clipboard].allow_read``.
 _CLIPBOARD_CONTROL_ALLOW_READ = "clipboard_control write-clipboard write-primary read-clipboard read-primary"
@@ -495,6 +497,8 @@ class KittyRemoteControlAdapter:
             # command start/stop events that `hop wait` blocks on.
             "--override",
             f"watcher {_CMD_EVENTS_WATCHER_PATH}",
+            "--override",
+            f"watcher {_HOVER_LINKS_WATCHER_PATH}",
         ]
         for override in self._extra_overrides_for(session):
             kitty_args.extend(("--override", override))

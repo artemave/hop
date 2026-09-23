@@ -91,6 +91,64 @@ def paths_exist(
     else:
         base_cwd = state.session_root
 
+    return _verified_candidates(candidate_list, session=session, backend=backend, base_cwd=base_cwd)
+
+
+def session_paths_exist(
+    candidates: Iterable[str],
+    *,
+    session_name: str,
+    source_cwd: str | None,
+    sessions_loader: Callable[[], dict[str, SessionState]] | None = None,
+    backend_loader: Callable[[SessionState], SessionBackend | None] | None = None,
+) -> set[str]:
+    """Return the subset of ``candidates`` that exist for a named session.
+
+    The hover-links watcher's entry point: it runs inside the session's
+    kitty boss, so it names its session instead of asking sway and kitty
+    IPC (which would deadlock against the boss). Relatives resolve the way
+    a click on them dispatches — see ``selection_base_cwd``. Empty when the
+    session's state or backend is gone.
+    """
+
+    state = (sessions_loader or load_sessions)().get(session_name)
+    if state is None:
+        return set()
+    backend = (backend_loader or _default_backend_loader)(state)
+    if backend is None:
+        return set()
+    return _verified_candidates(
+        list(candidates),
+        session=session_from_state(state),
+        backend=backend,
+        base_cwd=selection_base_cwd(state, source_cwd),
+    )
+
+
+def selection_base_cwd(state: SessionState, source_cwd: Path | str | None) -> Path:
+    """The cwd a selection picked from a session window resolves against.
+
+    ``source_cwd`` is kitty's ``window.cwd_of_child`` — the foreground
+    process's /proc cwd. For container/ssh backends that's the host launch
+    directory, not the in-backend path, so the backend's ``workspace_path``
+    (probed via ``<noninteractive_prefix> pwd`` at bootstrap) wins whenever
+    the backend has one.
+    """
+
+    if state.backend.workspace_path is not None:
+        return Path(state.backend.workspace_path)
+    if source_cwd is not None:
+        return Path(source_cwd)
+    return state.session_root
+
+
+def _verified_candidates(
+    candidates: list[str],
+    *,
+    session: ProjectSession,
+    backend: SessionBackend,
+    base_cwd: Path,
+) -> set[str]:
     # Two checks happen here. Plain file refs flow through ``backend.paths_exist``
     # in one batched call. Rails refs run through ``resolve_target``, which
     # reads the controller file via ``backend.read_file`` and scans for
@@ -100,7 +158,7 @@ def paths_exist(
     # already proved existence).
     plain_files_to_check: dict[str, Path] = {}
     verified: set[str] = set()
-    for candidate in candidate_list:
+    for candidate in candidates:
         syntactic = parse_visible_output_target(candidate)
         if isinstance(syntactic, SyntacticFileTarget):
             path = resolve_file_candidate(syntactic.path_text, terminal_cwd=base_cwd)
@@ -206,4 +264,4 @@ def _local_fallback(candidates: list[str], *, base_cwd: Path) -> set[str]:
     return surviving
 
 
-__all__ = ["focused_session_and_backend", "paths_exist"]
+__all__ = ["focused_session_and_backend", "paths_exist", "selection_base_cwd", "session_paths_exist"]

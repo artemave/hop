@@ -6,6 +6,7 @@ from typing import Callable
 
 from hop.backends import CommandBackend, SessionBackend
 from hop.commands.open import HostOpener, OpenBrowserAdapter, OpenNeovimAdapter, dispatch_resolved_target
+from hop.focused import selection_base_cwd
 from hop.kitty import session_name_from_listen_on
 from hop.session import ProjectSession
 from hop.state import SessionState, load_sessions, session_from_state
@@ -46,21 +47,7 @@ def open_selection_in_window(
     session = session_from_state(state)
     backend = session_backend_for(session)
 
-    # Pick the cwd against which relative candidates resolve. ``source_cwd``
-    # comes from kitty's ``window.cwd_of_child`` which is the foreground
-    # process's /proc cwd — for container/ssh backends that's the host
-    # launch directory, not the in-backend path, so resolving against it
-    # gives paths the backend can't see. Prefer ``backend.workspace_path``
-    # (probed via ``<noninteractive_prefix> pwd`` at bootstrap) whenever
-    # the backend has one; for the host backend fall back to ``source_cwd``
-    # (which is meaningful there) or the project root as a last resort.
-    backend_workspace = getattr(state.backend, "workspace_path", None)
-    if backend_workspace is not None:
-        base_cwd: Path = Path(backend_workspace)
-    elif source_cwd is not None:
-        base_cwd = Path(source_cwd)
-    else:
-        base_cwd = state.session_root
+    base_cwd = selection_base_cwd(state, source_cwd)
 
     syntactic = parse_visible_output_target(selection)
     if syntactic is None:

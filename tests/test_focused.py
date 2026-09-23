@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Sequence
 
-from hop.focused import paths_exist
+from hop.focused import paths_exist, session_paths_exist
 from hop.session import ProjectSession
 from hop.state import CommandBackendRecord, SessionState
 
@@ -484,3 +484,90 @@ def test_focused_session_and_backend_none_when_backend_unresolvable(tmp_path: Pa
         )
         is None
     )
+
+
+# --- session_paths_exist -----------------------------------------------------
+
+
+def test_session_paths_exist_resolves_relatives_against_source_cwd_on_host(tmp_path: Path) -> None:
+    session_root = (tmp_path / "demo").resolve()
+    fake_backend = _FakeBackend(existing={session_root / "src" / "app.rb"})
+
+    result = session_paths_exist(
+        ["app.rb", "missing.rb"],
+        session_name="demo",
+        source_cwd=str(session_root / "src"),
+        sessions_loader=lambda: {"demo": _state("demo", session_root)},
+        backend_loader=lambda _state: fake_backend,
+    )
+
+    assert result == {"app.rb"}
+
+
+def test_session_paths_exist_prefers_backend_workspace_path_over_source_cwd(tmp_path: Path) -> None:
+    fake_backend = _FakeBackend(existing={Path("/workspace/app.rb")})
+    state = SessionState(
+        name="demo",
+        session_root=tmp_path,
+        backend=CommandBackendRecord(
+            name="devcontainer",
+            interactive_prefix="podman exec -it dev",
+            noninteractive_prefix="podman exec dev",
+            workspace_path="/workspace",
+        ),
+    )
+
+    result = session_paths_exist(
+        ["app.rb"],
+        session_name="demo",
+        source_cwd=str(tmp_path),
+        sessions_loader=lambda: {"demo": state},
+        backend_loader=lambda _state: fake_backend,
+    )
+
+    assert result == {"app.rb"}
+
+
+def test_session_paths_exist_falls_back_to_session_root_without_source_cwd(tmp_path: Path) -> None:
+    session_root = tmp_path.resolve()
+    fake_backend = _FakeBackend(existing={session_root / "app.rb"})
+
+    result = session_paths_exist(
+        ["app.rb"],
+        session_name="demo",
+        source_cwd=None,
+        sessions_loader=lambda: {"demo": _state("demo", session_root)},
+        backend_loader=lambda _state: fake_backend,
+    )
+
+    assert result == {"app.rb"}
+
+
+def test_session_paths_exist_empty_when_session_state_is_gone() -> None:
+    assert session_paths_exist(["app.rb"], session_name="demo", source_cwd=None, sessions_loader=lambda: {}) == set()
+
+
+def test_session_paths_exist_empty_when_backend_unresolvable(tmp_path: Path) -> None:
+    result = session_paths_exist(
+        ["app.rb"],
+        session_name="demo",
+        source_cwd=None,
+        sessions_loader=lambda: {"demo": _state("demo", tmp_path)},
+        backend_loader=lambda _state: None,
+    )
+
+    assert result == set()
+
+
+def test_session_paths_exist_uses_the_recorded_backend_by_default(tmp_path: Path) -> None:
+    session_root = tmp_path.resolve()
+    (session_root / "app.rb").write_text("")
+
+    result = session_paths_exist(
+        ["app.rb", "missing.rb"],
+        session_name="demo",
+        source_cwd=None,
+        sessions_loader=lambda: {"demo": _state("demo", session_root)},
+    )
+
+    assert result == {"app.rb"}
