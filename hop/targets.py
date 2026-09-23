@@ -119,7 +119,7 @@ def resolve_target(
     """Turn a syntactic target into a dispatchable ``ResolvedTarget``.
 
     ``terminal_cwd`` is the namespace against which a relative file path
-    absolutizes. Pass the in-shell cwd (e.g. kitty's ``cwd_of_child``)
+    absolutizes. Pass a cwd (e.g. ``hop.focused.selection_base_cwd``)
     when the caller knows the editor's filesystem namespace; pass ``None``
     to keep the path text untouched and let the editor resolve relatives
     against its own cwd (the CLI's case — hop runs on the host but nvim

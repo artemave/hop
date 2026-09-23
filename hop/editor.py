@@ -204,9 +204,9 @@ class SharedNeovimEditorAdapter:
 
     def open_target(self, session: ProjectSession, *, target: str) -> None:
         # ``target`` is in the active backend's namespace already (the kitten
-        # resolves candidates against the source window's in-shell cwd via
-        # OSC 7, and the open path filter runs through ``backend.paths_exist``
-        # without translating namespaces). Pass it through unchanged.
+        # resolves candidates against ``hop.focused.selection_base_cwd``, and
+        # the open path filter runs through ``backend.paths_exist`` without
+        # translating namespaces). Pass it through unchanged.
         if self._terminals is not None:
             # CLI path: bring the editor up like any role terminal if it's gone.
             self._terminals.ensure_terminal(session, role=EDITOR_ROLE)

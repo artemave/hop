@@ -2,7 +2,7 @@
 
 The open-selection kitten asks hop "do these path-shaped tokens exist?" via
 ``paths_exist``. Inside, hop resolves the currently focused hop session,
-asks kitty for the focused window's in-shell cwd, reconstructs the session's
+asks kitty for the focused window's cwd, reconstructs the session's
 backend, and consults ``backend.paths_exist``. The kitten never touches sway,
 kitty IPC, or backend internals.
 
@@ -44,8 +44,8 @@ def paths_exist(
 ) -> set[str]:
     """Return the subset of ``candidates`` that exist for the focused session.
 
-    Relative candidates are resolved against the focused window's in-shell
-    cwd (via kitty's per-session socket). Absolute candidates are checked
+    Relative candidates resolve the way a selection from the focused window
+    dispatches — see ``selection_base_cwd``. Absolute candidates are checked
     as-is. The backend's ``paths_exist`` does the actual filesystem check.
 
     Returns the original input strings (not resolved Paths), so callers
@@ -73,24 +73,8 @@ def paths_exist(
     if resolved is None:
         return _local_fallback(candidate_list, base_cwd=Path.cwd())
     state, session, backend = resolved
-    session_name = session.session_name
 
-    # Pick the base cwd against which relative candidates resolve. OSC 7
-    # from the in-shell shell is the ground truth (cd-aware). If the shell
-    # isn't emitting it, fall back to the backend's cached ``workspace_path``
-    # (its default cwd, captured at bootstrap via ``<noninteractive_prefix>
-    # pwd``) — works for the at-default-cwd case without any in-shell setup.
-    # Last resort is the host-side project root, which is the wrong namespace
-    # for non-host backends but is preserved here as a fallback so the host
-    # backend (no workspace_path) still resolves relatives.
-    in_shell_cwd = cwd_fn(session_name)
-    if in_shell_cwd is not None:
-        base_cwd = in_shell_cwd
-    elif state.backend.workspace_path is not None:
-        base_cwd = Path(state.backend.workspace_path)
-    else:
-        base_cwd = state.session_root
-
+    base_cwd = selection_base_cwd(state, cwd_fn(session.session_name))
     return _verified_candidates(candidate_list, session=session, backend=backend, base_cwd=base_cwd)
 
 
@@ -128,11 +112,11 @@ def session_paths_exist(
 def selection_base_cwd(state: SessionState, source_cwd: Path | str | None) -> Path:
     """The cwd a selection picked from a session window resolves against.
 
-    ``source_cwd`` is kitty's ``window.cwd_of_child`` — the foreground
-    process's /proc cwd. For container/ssh backends that's the host launch
-    directory, not the in-backend path, so the backend's ``workspace_path``
-    (probed via ``<noninteractive_prefix> pwd`` at bootstrap) wins whenever
-    the backend has one.
+    ``source_cwd`` is the window's process cwd as kitty sees it. For
+    container/ssh backends that's the host launch directory, not the
+    in-backend path, so the backend's ``workspace_path`` (probed via
+    ``<noninteractive_prefix> pwd`` at bootstrap) wins whenever the backend
+    has one.
     """
 
     if state.backend.workspace_path is not None:

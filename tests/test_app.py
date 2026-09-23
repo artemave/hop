@@ -1515,8 +1515,8 @@ def test_session_base_registry_skip_prepare_omits_prepare_and_probe(tmp_path: Pa
 
 def test_session_base_registry_captures_workspace_path_from_probe(tmp_path: Path) -> None:
     """When the workspace_path probe returns a path, it's captured on the
-    backend so the persisted record carries it and ``focused.paths_exist``
-    can fall back to it for OSC-7-less shells."""
+    backend so the persisted record carries it and relative selections can
+    resolve against it."""
     import subprocess
 
     from hop.app import SessionBackendRegistry

@@ -31,9 +31,9 @@ class CommandBackendRecord:
     teardown: tuple[str, ...] | None = None
     port_translate_command: tuple[str, ...] | None = None
     host_translate_command: tuple[str, ...] | None = None
-    # Cached result of ``<noninteractive_prefix> pwd`` captured at bootstrap.
-    # Used as a fallback base cwd in ``hop.focused.paths_exist`` when the
-    # focused window's OSC-7-driven ``cwd_of_child`` is unset.
+    # Cached result of ``<noninteractive_prefix> pwd`` captured at bootstrap:
+    # the base cwd relative selections resolve against — see
+    # ``hop.focused.selection_base_cwd``.
     workspace_path: str | None = None
     # The ssh target when this session runs on a remote machine; ``None`` for a
     # local session. Round-trips so later commands (the open-selection kitten's

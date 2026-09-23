@@ -101,9 +101,9 @@ def _state(name: str, session_root: Path) -> SessionState:
 
 
 def test_paths_exist_resolves_relative_candidates_against_focused_cwd(tmp_path: Path) -> None:
-    """Relative candidates from terminal output are resolved against the
-    focused window's in-shell cwd before being checked. The injected
-    ``cwd_loader`` simulates kitty's OSC 7 reply."""
+    """On the host backend, relative candidates from terminal output are
+    resolved against the focused window's cwd before being checked. The
+    injected ``cwd_loader`` simulates kitty's ``ls`` reply."""
     session_root = tmp_path / "demo"
     shell_cwd = session_root / "src"
     shell_cwd.mkdir(parents=True)
@@ -285,11 +285,11 @@ def test_paths_exist_falls_back_to_state_session_root_when_kitty_socket_dead(tmp
     assert result == {"foo.rb"}
 
 
-def test_paths_exist_uses_backend_workspace_path_when_kitty_cwd_unavailable(tmp_path: Path) -> None:
-    """Without OSC 7 (cwd_loader returns ``None``), relative candidates
-    resolve against the backend's cached ``workspace_path`` — the in-backend
-    default cwd captured at bootstrap. That's the at-default-cwd fallback
-    for container/ssh shells that don't emit OSC 7."""
+def test_paths_exist_prefers_backend_workspace_path_over_kitty_cwd(tmp_path: Path) -> None:
+    """For a container backend kitty's cwd is the host launch directory, so
+    relative candidates resolve against the backend's cached
+    ``workspace_path`` — the in-backend default cwd captured at bootstrap —
+    the same base a click on them dispatches with."""
     session_root = tmp_path / "demo"  # host-side path; should NOT be used here
     workspace_path = tmp_path / "workspace"  # what the backend sees as its cwd
     workspace_path.mkdir()
@@ -311,7 +311,7 @@ def test_paths_exist_uses_backend_workspace_path_when_kitty_cwd_unavailable(tmp_
         ["foo.rb"],
         focused_workspace=lambda: "s:demo",
         sessions_loader=lambda: {"demo": state},
-        cwd_loader=lambda _name: None,
+        cwd_loader=lambda _name: session_root.resolve(),
         backend_loader=lambda _state: fake_backend,
     )
 

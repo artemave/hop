@@ -227,9 +227,8 @@ class SessionBackendRegistry:
         # (e.g. the headless popup path, which runs prepare inside a kitten
         # panel and re-substitutes the same flock-wrapped command — the
         # popup IS the prepare). After prepare succeeds, probe the backend's
-        # default working directory once — ``hop.focused.paths_exist`` uses it
-        # as a fallback base cwd when OSC 7 isn't being emitted by the
-        # in-shell shell (typical for fresh container/ssh shells).
+        # default working directory once — relative selections resolve
+        # against it (``hop.focused.selection_base_cwd``).
         #
         # When ``skip_prepare`` is set the probe is also skipped: it requires
         # the backend container to already be up, and the caller hasn't run
@@ -456,9 +455,8 @@ def _enter_or_recreate_session(
         services.sway.switch_to_workspace(session.workspace_name)
         services.popup.run_prepare(session, backend)
         # The popup-driven prepare just brought the backend up; probe the
-        # workspace path now so it lands in the persisted record (and the
-        # open-selection kitten has a fallback base cwd when OSC 7 isn't
-        # being emitted).
+        # workspace path now so it lands in the persisted record, where
+        # relative selections pick it up as their base cwd.
         backend = services.session_backends.probe_workspace_path(session, backend)
     services.session_backends.set_override(session.session_name, backend)
     try:

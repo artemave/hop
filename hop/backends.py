@@ -498,10 +498,11 @@ class CommandBackend:
     port_translate_command: tuple[str, ...] | None = None
     host_translate_command: tuple[str, ...] | None = None
     # The backend's default working directory, captured by running
-    # ``<noninteractive_prefix> pwd`` once at bootstrap. Used as a fallback
-    # in ``hop.focused.paths_exist`` when the kitty window's ``cwd_of_child``
-    # is unset (e.g. the in-shell shell doesn't emit OSC 7). ``None`` for
-    # the host backend or when the probe failed.
+    # ``<noninteractive_prefix> pwd`` once at bootstrap. Relative selections
+    # from session windows resolve against it (``hop.focused.selection_base_cwd``):
+    # kitty only sees host-side process cwds, which for this backend never
+    # leave the launch directory. ``None`` for the host backend or when the
+    # probe failed.
     workspace_path: str | None = None
     runner: CommandRunner = field(default=_default_runner)
     # How composed commands become argv. ``transport`` wraps window-launch
@@ -722,9 +723,9 @@ class CommandBackend:
         """Return the backend's default working directory (``pwd``), or ``None``.
 
         Run once at bootstrap by ``SessionBackendRegistry.resolve_for_entry``
-        and persisted in the session record. The result is used as the
-        fallback ``base_cwd`` in ``hop.focused.paths_exist`` when the kitty
-        window's OSC-7-driven ``cwd_of_child`` is unavailable.
+        and persisted in the session record. The result is the base cwd
+        relative selections resolve against — see
+        ``hop.focused.selection_base_cwd``.
 
         Best-effort: probe failures (empty prefix, non-zero exit, empty
         stdout) return ``None`` rather than raising — a missing fallback

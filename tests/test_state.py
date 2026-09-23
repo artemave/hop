@@ -174,9 +174,8 @@ def test_record_session_persists_translate_commands(tmp_path: Path) -> None:
 
 def test_record_session_round_trips_workspace_path(tmp_path: Path) -> None:
     """``workspace_path`` (cached ``<noninteractive_prefix> pwd`` result) is
-    persisted on bootstrap and restored on load — that's what lets the
-    open-selection kitten fall back to the backend's default cwd when the
-    in-shell shell isn't emitting OSC 7."""
+    persisted on bootstrap and restored on load — relative selections from
+    the session's windows resolve against it."""
     sessions_dir = tmp_path / "sessions"
     session = make_session(name="demo", session_root=tmp_path / "demo")
 

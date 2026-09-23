@@ -166,15 +166,13 @@ def get_focused_window_cwd(
     *,
     transport_factory: "TransportFactory | None" = None,
 ) -> Path | None:
-    """Return the focused window's in-shell cwd for a hop session.
+    """Return the focused window's cwd for a hop session, as kitty's ``ls``
+    reports it: the cwd of the process kitty launched in the window. On the
+    host that's the shell, so it follows ``cd``; for a container or ssh
+    backend it's the host-side ``podman exec``/``ssh``, which never leaves
+    the launch directory.
 
-    Connects to the session's kitty socket and asks for the focused window.
-    Reads ``cwd_of_child`` from the response, which reflects OSC 7 updates
-    pushed by the in-shell prompt (so it's the *in-shell* cwd, not the
-    spawning process's cwd).
-
-    Returns ``None`` on any IPC failure or when no window is focused —
-    callers fall back to a host-side default.
+    Returns ``None`` on any IPC failure or when no window is focused.
     """
 
     addr = session_socket_address(session_name)
@@ -199,26 +197,7 @@ def get_focused_window_cwd(
                     continue
                 if not cast(Any, window_entry).get("is_focused"):
                     continue
-                return _path_from_text(_in_shell_cwd_text(cast(Any, window_entry)))
-    return None
-
-
-def _in_shell_cwd_text(window_entry: Mapping[str, object]) -> str | None:
-    """Return *only* ``cwd_of_child`` — kitty's OSC-7-driven in-shell cwd.
-
-    Unlike ``_window_cwd_text`` (which falls back to kitty's process cwd),
-    this is the correct source for ``hop.focused.paths_exist``: a process
-    cwd of ``/home/me/projects/foo`` in a container-backed session reflects
-    the host-side launch directory, not where the user's in-container shell
-    actually is. Returning ``None`` here lets the caller fall back to the
-    backend's cached ``workspace_path`` (or to the host project root as a
-    last resort) instead of resolving relative candidates against a host
-    path that doesn't exist inside the backend.
-    """
-
-    value = window_entry.get("cwd_of_child")
-    if isinstance(value, str) and value:
-        return value
+                return _path_from_text(_window_cwd_text(cast(Any, window_entry)))
     return None
 
 
