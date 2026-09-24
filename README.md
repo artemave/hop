@@ -115,7 +115,7 @@ File-shaped tokens that don't exist in the focused session's backend - including
 
 ### Hover links
 
-The same targets also become hyperlinks under the mouse: hover one and click to dispatch it, no picker needed. Targets soft-wrapped across rows are linked as a whole. A hop link replaces any link the program printed itself (OSC 8) that overlaps it.
+The same targets also become hyperlinks under the mouse: hover one and click to dispatch it, no picker needed. Targets soft-wrapped across rows are linked as a whole. A hop link replaces any link the program printed itself (OSC 8) that overlaps it. Clicking any web URL in a session window - hop's link or not - opens it in the session browser, with the backend's localhost translation applied.
 
 This needs a kitty build whose watchers support `on_mouse_move` and `screen.set_hyperlink_for_range()` - upstream kitty has neither. hop registers the watcher in every session kitty regardless; kitty builds without these features never call it.
 

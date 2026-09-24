@@ -13,6 +13,7 @@ from hop.hover_links import (
     HoverLinkResolver,
     LinkPaint,
     Row,
+    action_for_clicked_url,
     hop_url,
     line_text,
     logical_line_rows,
@@ -294,3 +295,17 @@ def test_hop_url_keeps_paths_readable() -> None:
 
 def test_parse_hop_url_ignores_other_links() -> None:
     assert parse_hop_url("https://example.com") is None
+
+
+def test_a_clicked_hop_url_runs_its_action() -> None:
+    assert action_for_clicked_url("hop://open/app.rb:3") == ("open", "app.rb:3")
+
+
+def test_a_clicked_plain_web_url_opens_through_hop() -> None:
+    assert action_for_clicked_url("http://0.0.0.0:3000") == ("open", "http://0.0.0.0:3000")
+    assert action_for_clicked_url("https://example.com/a?b=1#c") == ("open", "https://example.com/a?b=1#c")
+
+
+def test_other_clicked_urls_are_left_to_kitty() -> None:
+    assert action_for_clicked_url("file:///etc/hosts") is None
+    assert action_for_clicked_url("mailto:me@example.com") is None

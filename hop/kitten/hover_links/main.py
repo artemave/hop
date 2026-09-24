@@ -18,9 +18,9 @@ from hop.hover_links import (  # noqa: E402
     OPEN_ACTION,
     HoverLinkResolver,
     Row,
+    action_for_clicked_url,
     logical_line_rows,
     paint_operations,
-    parse_hop_url,
 )
 from hop.kitten.dispatch import dispatch_selected_match  # noqa: E402
 from hop.kitty import session_name_from_listen_on  # noqa: E402
@@ -36,7 +36,7 @@ _resolver = HoverLinkResolver(
 def on_mouse_move(boss: Any, window: Any, data: dict[str, Any]) -> None:
     session_name = session_name_from_listen_on(boss.listening_on)
     assert session_name is not None, f"hover links watcher loaded outside a hop session kitty: {boss.listening_on!r}"
-    window.open_url_handler = _open_hop_url
+    window.open_url_handler = _open_clicked_url
     screen = window.screen
     row_numbers = logical_line_rows(
         data["y"], screen.lines, lambda y: screen.visual_line(y).last_char_has_wrapped_flag()
@@ -56,10 +56,10 @@ def _open(boss: Any, window: Any, selection: str) -> None:
 _ACTIONS: dict[str, Callable[[Any, Any, str], None]] = {OPEN_ACTION: _open}
 
 
-def _open_hop_url(boss: Any, window: Any, url: str, hyperlink_id: int, cwd: str) -> bool:
-    parsed = parse_hop_url(url)
-    if parsed is None:
+def _open_clicked_url(boss: Any, window: Any, url: str, hyperlink_id: int, cwd: str) -> bool:
+    clicked = action_for_clicked_url(url)
+    if clicked is None:
         return False
-    action, argument = parsed
+    action, argument = clicked
     _ACTIONS[action](boss, window, argument)
     return True

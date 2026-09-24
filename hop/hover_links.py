@@ -77,6 +77,21 @@ def parse_hop_url(url: str) -> tuple[str, str] | None:
     return action, unquote(argument)
 
 
+def action_for_clicked_url(url: str) -> tuple[str, str] | None:
+    """What a click on ``url`` in a hop session should do, or ``None`` to
+    leave it to kitty.
+
+    A plain ``http(s)`` URL opens through hop too: kitty detects URLs in the
+    text itself, so a click that lands before the hovered line's lookup has
+    painted its ``hop://`` link — or on a program's own OSC 8 link — still
+    reaches the session browser with the backend's localhost translation.
+    """
+
+    if url.startswith(("http://", "https://")):
+        return OPEN_ACTION, url
+    return parse_hop_url(url)
+
+
 @dataclass(frozen=True, slots=True)
 class CellRange:
     row: int
