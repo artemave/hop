@@ -21,6 +21,7 @@ from hop.config import (
     BackendConfig,
 )
 from hop.errors import HopError
+from hop.exit_status import run_reporting_exit_status
 from hop.session import ProjectSession
 
 # Sentinel hostnames that, inside a non-host backend's network namespace, all
@@ -154,23 +155,19 @@ def default_runner(
     slow operations like ``docker compose up``; otherwise stderr is captured
     and surfaced through the debug log and error messages.
 
-    ``stdin`` is forwarded to ``subprocess.run`` as the ``input`` kwarg when
-    provided. The default ``None`` leaves stdin closed, matching prior
-    behavior for callers that don't need to pipe.
+    ``stdin`` is fed to the command when provided; otherwise the command
+    inherits hop's stdin.
 
     Exposed publicly so other modules (e.g. ``hop.app``) can pass it to
     helpers that take a ``CommandRunner`` argument when no override is
     configured. Tests inject their own runners instead.
     """
 
-    return subprocess.run(
-        list(args),
+    return run_reporting_exit_status(
+        args,
         cwd=str(cwd),
         input=stdin,
-        stdout=subprocess.PIPE,
         stderr=None if sys.stderr.isatty() else subprocess.PIPE,
-        text=True,
-        check=False,
     )
 
 

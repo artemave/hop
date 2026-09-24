@@ -585,6 +585,10 @@ Kitty is used as the terminal backend.
 - a target already carrying exactly its hop link is left alone, so repeated moves don't redraw; any other link overlapping it — a stale paint or the program's own OSC 8 link — is cleared across the whole logical line before the hop link is painted
 - links are `hop://<action>/<argument>` URLs, the argument percent-encoded except for `/` and `:`; the only action is `open`, whose argument is the selection (`hop://open/app/models/user.rb:42`). The watcher installs itself as the window's `open_url_handler`: a click on a `hop://` link runs its action — `open` runs the hints kitten's dispatch — and every other URL falls through to kitty
 
+### Subprocesses inside kitty
+
+The kitten dispatch and the hover-links watcher run inside the kitty process, whose child monitor reaps every exited child with `waitpid(-1)`. A hop subprocess it reaps first reports exit status 0 to Python's `subprocess`, so a failed backend command would read as a success. Every subprocess whose exit status hop acts on — the backend runner and the browser lookup — runs through `hop.exit_status.run_reporting_exit_status`, which has a wrapper `sh` write `$?` into a pipe and reads the status from there.
+
 ### Window control
 
 Kitty must be used to:

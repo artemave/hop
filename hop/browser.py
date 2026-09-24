@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Callable, Mapping, Protocol, Sequence
 from hop.backends import runner_cwd
 from hop.config import BROWSER_ROLE
 from hop.errors import HopError
+from hop.exit_status import run_reporting_exit_status
 from hop.session import ProjectSession
 from hop.sway import SwayWindow
 from hop.window_position import apply_sticky_position
@@ -261,12 +262,7 @@ class _SubprocessBrowserLauncher:
 
 class _SubprocessRunner:
     def run(self, args: Sequence[str]) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            list(args),
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        return run_reporting_exit_status(args)
 
 
 def _resolve_default_browser_spec(

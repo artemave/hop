@@ -446,17 +446,10 @@ def test_session_browser_adapter_uses_top_level_browser_window_override() -> Non
     assert sway.marks == [(99, "_hop_browser:demo")]
 
 
-def test_subprocess_runner_invokes_subprocess_run(monkeypatch: pytest.MonkeyPatch) -> None:
-    expected = CompletedProcess(("firefox",), 0, "ok", "")
+def test_subprocess_runner_captures_output_and_exit_status() -> None:
+    result = _SubprocessRunner().run(("sh", "-c", "echo ok; echo oops >&2; exit 3"))
 
-    def fake_run(args: list[str], **kwargs: object) -> CompletedProcess[str]:
-        assert args == ["firefox"]
-        assert kwargs == {"capture_output": True, "text": True, "check": False}
-        return expected
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
-
-    assert _SubprocessRunner().run(("firefox",)) == expected
+    assert (result.returncode, result.stdout, result.stderr) == (3, "ok\n", "oops\n")
 
 
 def test_matches_browser_executable_needs_a_pid_on_the_window() -> None:
