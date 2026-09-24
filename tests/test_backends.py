@@ -800,6 +800,14 @@ def test_command_backend_is_binary_file_treats_missing_and_empty_as_text(tmp_pat
     assert host_backend().is_binary_file(session, empty) is False
 
 
+def test_command_backend_is_binary_file_treats_directory_as_text(tmp_path: Path) -> None:
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "guide.md").write_text("# guide\n")
+
+    session = build_session(tmp_path)
+    assert host_backend().is_binary_file(session, tmp_path / "docs") is False
+
+
 def test_command_backend_is_binary_file_pipes_probe_through_prefix(tmp_path: Path) -> None:
     """A container backend wraps the probe in its no-TTY prefix and pipes the
     classification script over stdin so it survives an argv-flattening prefix."""

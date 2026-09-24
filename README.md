@@ -121,7 +121,7 @@ This needs a kitty build whose watchers support `on_mouse_move` and `screen.set_
 
 ### Binary files open on the host
 
-Choosing a `.png` (or similar) in the open-selection kitten opens the file with your host's `xdg-open` instead of nvim - so PNGs land in your image viewer, PDFs in your reader, archives in your file manager, etc. This seamlessly works over ssh as well.
+Choosing a `.png` (or similar) in the open-selection kitten opens the file with your host's `xdg-open` instead of nvim - so PNGs land in your image viewer, PDFs in your reader, archives in your file manager, etc. This seamlessly works over ssh as well. Directories are the exception: they open in nvim.
 
 ## Configuration
 

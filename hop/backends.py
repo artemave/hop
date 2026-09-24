@@ -827,7 +827,9 @@ class CommandBackend:
         an SVG, which is ASCII text, correctly classifies as text. A missing or
         empty file classifies as text too: missing keeps ``hop open
         not-yet-created.rb`` landing in ``:enew``, and an empty file is
-        something you edit, not view. ``file`` itself exits 0 even for a missing
+        something you edit, not view. So does a directory, which ``file``
+        calls ``binary``: the editor lists it, while the host copy
+        ``materialize_on_host`` makes only works for regular files. ``file`` itself exits 0 even for a missing
         path, so existence and emptiness are tested explicitly.
         """
 
@@ -836,6 +838,7 @@ class CommandBackend:
         script = (
             f"p={quoted}\n"
             'test -e "$p" || { printf text; exit 0; }\n'
+            'test -d "$p" && { printf text; exit 0; }\n'
             'test -s "$p" || { printf text; exit 0; }\n'
             "command -v file >/dev/null 2>&1 || { printf nofile; exit 0; }\n"
             'case "$(file -b --mime-encoding "$p")" in\n'
