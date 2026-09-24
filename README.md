@@ -1,5 +1,3 @@
-<img src="./hop/assets/hop-social-card.png" />
-
 hop is a project session manager built on [Sway](https://swaywm.org/) and [Kitty](https://sw.kovidgoyal.net/kitty/).
 
 <details>
