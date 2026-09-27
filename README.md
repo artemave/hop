@@ -9,7 +9,7 @@ https://github.com/user-attachments/assets/e20d8280-6a7e-4a13-ab6d-9540b74498ac
 
 </details>
 
-Each project gets its own **hop session** - a dedicated Sway workspace identified by its working directory, holding the editor, terminals, and browser open for it. Moving between sessions is a single jump. hop also takes care of session lifecycle (prepare, teardown).
+Each project gets its own **hop session** - a dedicated Sway workspace identified by its working directory, holding the editor, terminals, and browser. hop also takes care of session lifecycle (prepare, teardown).
 
 A hop session is conceptually similar to a tmux session, but with a fundamentally different architecture: decoupled session and window management. hop separates two concerns that terminal multiplexers fundamentally couple together, delegating window management to the actual system window manager.
 
