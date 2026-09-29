@@ -7,18 +7,21 @@ from typing import Callable, ParamSpec, TypeVar
 import pytest
 
 from hop.hover_links import (
-    MAX_CACHED_LINES,
+    EXISTENCE_TTL_SECONDS,
+    MAX_CACHED_PATHS,
     CellRange,
     HoverLink,
-    HoverLinkResolver,
     LinkPaint,
+    PathExistence,
     Row,
+    ViewportLinks,
     action_for_clicked_url,
     hop_url,
     line_text,
     logical_line_rows,
     paint_operations,
     parse_hop_url,
+    viewport_lines,
 )
 
 P = ParamSpec("P")
@@ -107,9 +110,18 @@ class PathsExist:
         return set(candidates) & self.existing
 
 
-def resolved_links(resolver: HoverLinkResolver, rows: list[Row]) -> list[HoverLink] | None:
-    resolver.links_for(rows, session_name="demo", source_cwd=None)
-    return resolver.links_for(rows, session_name="demo", source_cwd=None)
+def show(viewport: ViewportLinks, *lines: list[Row], source_cwd: str | None = None) -> None:
+    """Show a viewport made of ``lines``, each a logical line's rows."""
+
+    rows = [row for line in lines for row in line]
+    wraps = [y < len(line) - 1 for line in lines for y in range(len(line))]
+    viewport.show(viewport_lines(rows, wraps), session_name="demo", source_cwd=source_cwd)
+
+
+def resolved_links(existing: set[str], rows: list[Row]) -> list[HoverLink] | None:
+    viewport = ViewportLinks(PathExistence(PathsExist(existing)), InlineExecutor())
+    show(viewport, rows)
+    return viewport.links_for(rows)
 
 
 # --- line layout -------------------------------------------------------------
@@ -142,68 +154,96 @@ def test_logical_line_rows_spans_the_rows_wrapped_onto_the_hovered_one() -> None
     assert logical_line_rows(4, 5, wraps) == range(4, 5)
 
 
-# --- resolver ------------------------------------------------------------------
+def test_viewport_lines_joins_the_rows_of_each_logical_line() -> None:
+    rows = draw("abcdefgh", columns=4) + draw("xy", columns=4)
+
+    assert viewport_lines(rows, [True, False, False]) == ["abcdefgh", "xy  "]
 
 
-def test_links_are_absent_until_the_lookup_lands() -> None:
+# --- viewport lookup -----------------------------------------------------------
+
+
+def test_links_are_absent_until_the_viewport_lookup_lands() -> None:
     executor = QueuedExecutor()
-    paths_exist = PathsExist({"app.rb"})
-    resolver = HoverLinkResolver(paths_exist, executor)
-    rows = draw("app.rb gone.rb https://example.com")
+    paths_exist = PathsExist({"app.rb", "lib.rb"})
+    viewport = ViewportLinks(PathExistence(paths_exist), executor)
+    first = draw("app.rb gone.rb https://example.com")
+    second = draw("lib.rb")
 
-    assert resolver.links_for(rows, session_name="demo", source_cwd="/work") is None
+    show(viewport, first, second, source_cwd="/work")
+    assert viewport.links_for(first) is None
+    assert viewport.resolving
     executor.run_all()
 
-    assert resolver.links_for(rows, session_name="demo", source_cwd="/work") == [
+    assert not viewport.resolving
+    assert viewport.links_for(first) == [
         HoverLink("app.rb", (CellRange(0, 0, 5),)),
         HoverLink("https://example.com", (CellRange(0, 15, 33),)),
     ]
-    assert paths_exist.calls == [(["app.rb", "gone.rb"], "demo", "/work")]
+    assert viewport.links_for(second) == [HoverLink("lib.rb", (CellRange(0, 0, 5),))]
+    assert paths_exist.calls == [(["app.rb", "gone.rb", "lib.rb"], "demo", "/work")]
 
 
 def test_link_columns_account_for_wide_characters() -> None:
-    resolver = HoverLinkResolver(PathsExist({"app.rb:3"}), InlineExecutor())
-
-    assert resolved_links(resolver, draw("失败 app.rb:3")) == [HoverLink("app.rb:3", (CellRange(0, 5, 12),))]
+    assert resolved_links({"app.rb:3"}, draw("失败 app.rb:3")) == [HoverLink("app.rb:3", (CellRange(0, 5, 12),))]
 
 
 def test_a_link_ending_in_a_wide_character_covers_both_of_its_cells() -> None:
-    resolver = HoverLinkResolver(PathsExist(set()), InlineExecutor())
-
-    assert resolved_links(resolver, draw("https://example.com/中")) == [
+    assert resolved_links(set(), draw("https://example.com/中")) == [
         HoverLink("https://example.com/中", (CellRange(0, 0, 21),)),
     ]
 
 
 def test_a_soft_wrapped_target_links_a_range_on_each_row() -> None:
-    resolver = HoverLinkResolver(PathsExist({"app/models/user.rb:3"}), InlineExecutor())
-
-    assert resolved_links(resolver, draw("see app/models/user.rb:3 ok", columns=10)) == [
+    assert resolved_links({"app/models/user.rb:3"}, draw("see app/models/user.rb:3 ok", columns=10)) == [
         HoverLink("app/models/user.rb:3", (CellRange(0, 4, 9), CellRange(1, 0, 9), CellRange(2, 0, 3))),
     ]
 
 
-def test_a_line_is_looked_up_once_while_its_lookup_is_in_flight() -> None:
+def test_a_line_that_scrolled_out_of_the_viewport_has_no_links() -> None:
+    viewport = ViewportLinks(PathExistence(PathsExist(set())), InlineExecutor())
+    old = draw("old.rb")
+
+    show(viewport, old)
+    show(viewport, draw("new.rb"))
+
+    assert viewport.links_for(old) is None
+
+
+def test_only_the_latest_viewport_shown_during_a_lookup_is_looked_up_next() -> None:
+    asked: list[list[str]] = []
+
+    def paths_exist(candidates: list[str], session_name: str, source_cwd: str | None) -> set[str]:
+        asked.append(candidates)
+        if len(asked) == 1:
+            show(viewport, draw("b.rb"))
+            show(viewport, draw("c.rb"))
+        return set()
+
+    viewport = ViewportLinks(PathExistence(paths_exist), InlineExecutor())
+    show(viewport, draw("a.rb"))
+
+    assert asked == [["a.rb"], ["c.rb"]]
+    assert viewport.links_for(draw("c.rb")) == []
+    assert not viewport.resolving
+
+
+def test_an_unchanged_viewport_is_not_looked_up_again() -> None:
     executor = QueuedExecutor()
+    viewport = ViewportLinks(PathExistence(PathsExist(set())), executor)
+
+    show(viewport, draw("a.rb"))
+    show(viewport, draw("a.rb"))
+
+    assert len(executor.queue) == 1
+
+
+def test_the_same_viewport_is_looked_up_again_for_another_cwd() -> None:
     paths_exist = PathsExist(set())
-    resolver = HoverLinkResolver(paths_exist, executor)
-    rows = draw("app.rb")
+    viewport = ViewportLinks(PathExistence(paths_exist), InlineExecutor())
 
-    resolver.links_for(rows, session_name="demo", source_cwd=None)
-    resolver.links_for(rows, session_name="demo", source_cwd=None)
-    executor.run_all()
-    resolver.links_for(rows, session_name="demo", source_cwd=None)
-
-    assert len(paths_exist.calls) == 1
-
-
-def test_the_same_text_is_looked_up_again_for_another_cwd() -> None:
-    paths_exist = PathsExist(set())
-    resolver = HoverLinkResolver(paths_exist, InlineExecutor())
-    rows = draw("app.rb")
-
-    resolver.links_for(rows, session_name="demo", source_cwd="/a")
-    resolver.links_for(rows, session_name="demo", source_cwd="/b")
+    show(viewport, draw("app.rb"), source_cwd="/a")
+    show(viewport, draw("app.rb"), source_cwd="/b")
 
     assert [call[2] for call in paths_exist.calls] == ["/a", "/b"]
 
@@ -212,24 +252,71 @@ def test_a_failed_lookup_is_logged_and_settles_as_no_links(caplog: pytest.LogCap
     def failing_paths_exist(candidates: list[str], session_name: str, source_cwd: str | None) -> set[str]:
         raise RuntimeError("ssh master gone")
 
-    resolver = HoverLinkResolver(failing_paths_exist, InlineExecutor())
+    viewport = ViewportLinks(PathExistence(failing_paths_exist), InlineExecutor())
+    rows = draw("app.rb")
+    show(viewport, rows)
 
-    assert resolved_links(resolver, draw("app.rb")) == []
+    assert viewport.links_for(rows) == []
     assert "hover link lookup failed" in caplog.text
 
 
-def test_the_cache_starts_over_once_full() -> None:
+# --- path existence ------------------------------------------------------------
+
+
+class Clock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def test_existence_only_asks_about_paths_it_has_not_checked() -> None:
+    paths_exist = PathsExist({"a.rb"})
+    existence = PathExistence(paths_exist)
+
+    assert existence.existing(["a.rb", "b.rb"], "demo", None) == {"a.rb"}
+    assert existence.existing(["a.rb", "b.rb", "c.rb"], "demo", None) == {"a.rb"}
+
+    assert [call[0] for call in paths_exist.calls] == [["a.rb", "b.rb"], ["c.rb"]]
+
+
+def test_existence_is_remembered_per_session_and_cwd() -> None:
     paths_exist = PathsExist(set())
-    resolver = HoverLinkResolver(paths_exist, InlineExecutor())
-    first = draw("line-0")
-    resolver.links_for(first, session_name="demo", source_cwd=None)
-    for index in range(1, MAX_CACHED_LINES + 1):
-        resolver.links_for(draw(f"line-{index}"), session_name="demo", source_cwd=None)
+    existence = PathExistence(paths_exist)
 
-    calls_before = len(paths_exist.calls)
-    resolver.links_for(first, session_name="demo", source_cwd=None)
+    existence.existing(["a.rb"], "demo", "/a")
+    existence.existing(["a.rb"], "demo", "/b")
+    existence.existing(["a.rb"], "other", "/a")
 
-    assert len(paths_exist.calls) == calls_before + 1
+    assert len(paths_exist.calls) == 3
+
+
+def test_existence_is_checked_again_once_it_expires() -> None:
+    paths_exist = PathsExist(set())
+    clock = Clock()
+    existence = PathExistence(paths_exist, clock=clock)
+    existence.existing(["a.rb"], "demo", None)
+
+    clock.now = EXISTENCE_TTL_SECONDS - 1
+    existence.existing(["a.rb"], "demo", None)
+    assert len(paths_exist.calls) == 1
+
+    clock.now = EXISTENCE_TTL_SECONDS
+    paths_exist.existing = {"a.rb"}
+    assert existence.existing(["a.rb"], "demo", None) == {"a.rb"}
+    assert len(paths_exist.calls) == 2
+
+
+def test_existence_starts_over_once_full() -> None:
+    paths_exist = PathsExist(set())
+    existence = PathExistence(paths_exist)
+    existence.existing([f"file-{index}" for index in range(MAX_CACHED_PATHS)], "demo", None)
+
+    existence.existing(["one-more"], "demo", None)
+    existence.existing(["file-0"], "demo", None)
+
+    assert [call[0] for call in paths_exist.calls[1:]] == [["one-more"], ["file-0"]]
 
 
 # --- painting -----------------------------------------------------------------

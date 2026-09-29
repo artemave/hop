@@ -1,27 +1,30 @@
 """Hover links: the hints kitten's targets, as hyperlinks under the mouse.
 
-The kitty watcher at ``hop/kitten/hover_links/main.py`` feeds the hovered
-logical line (the hovered row plus the rows soft-wrapped onto it) to a
-``HoverLinkResolver`` and paints the links it returns. The watcher runs on
-kitty's boss (UI) thread, while an existence check may be a ``podman exec``
-or an ssh round trip — so lookups run on an executor, and a line's links
-appear on the first mouse move after its lookup lands.
+The kitty watcher at ``hop/kitten/hover_links/main.py`` shows each window's
+viewport to a ``ViewportLinks`` whenever its text changes, and paints the
+hovered logical line (the hovered row plus the rows soft-wrapped onto it)
+from what that lookup found. The watcher runs on kitty's boss (UI) thread,
+while an existence check may be a ``podman exec`` or an ssh round trip — so
+lookups run on an executor, and the watcher polls for the result to paint
+the hovered line as soon as it lands.
 """
 
 from __future__ import annotations
 
 import logging
 import threading
-from concurrent.futures import Executor, Future
+import time
+from concurrent.futures import Executor
 from dataclasses import dataclass
 from typing import Callable, Protocol, Sequence
 from urllib.parse import quote, unquote
 
-from hop.targets import VisibleOutputMatch, existing_visible_output_targets
+from hop.targets import VisibleOutputMatch, existing_visible_output_targets_per_text
 
 HOP_URL_PREFIX = "hop://"
 OPEN_ACTION = "open"
-MAX_CACHED_LINES = 2048
+MAX_CACHED_PATHS = 8192
+EXISTENCE_TTL_SECONDS = 30.0
 
 logger = logging.getLogger("hop.hover_links")
 
@@ -201,33 +204,92 @@ def _clear_id(ids: list[list[int]], hyperlink_id: int) -> list[LinkPaint]:
     return paints
 
 
-_LineKey = tuple[str, str | None, str]
+_PathKey = tuple[str, str | None, str]
 
 
-class HoverLinkResolver:
-    def __init__(self, paths_exist: SessionPathsExist, executor: Executor) -> None:
+class PathExistence:
+    """Which candidates exist, remembered per path across every window.
+
+    A scrolled or redrawn viewport mostly repeats candidates it has already
+    shown, so only the unseen (or expired) ones cost a backend round trip.
+    """
+
+    def __init__(
+        self,
+        paths_exist: SessionPathsExist,
+        *,
+        ttl: float = EXISTENCE_TTL_SECONDS,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
         self._paths_exist = paths_exist
+        self._ttl = ttl
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._known: dict[_PathKey, tuple[bool, float]] = {}
+
+    def existing(self, candidates: list[str], session_name: str, source_cwd: str | None) -> set[str]:
+        now = self._clock()
+        known: dict[str, bool] = {}
+        with self._lock:
+            for candidate in candidates:
+                entry = self._known.get((session_name, source_cwd, candidate))
+                if entry is not None and now - entry[1] < self._ttl:
+                    known[candidate] = entry[0]
+        unknown = [candidate for candidate in candidates if candidate not in known]
+        found: set[str] = self._paths_exist(unknown, session_name, source_cwd) if unknown else set()
+        with self._lock:
+            if len(self._known) + len(unknown) > MAX_CACHED_PATHS:
+                self._known.clear()
+            for candidate in unknown:
+                self._known[(session_name, source_cwd, candidate)] = (candidate in found, now)
+        return {candidate for candidate, exists in known.items() if exists} | found
+
+
+_ViewportKey = tuple[str, str | None, tuple[str, ...]]
+
+
+class ViewportLinks:
+    """One window's visible targets, resolved in the background.
+
+    ``show`` hands over the viewport's logical lines whenever they may have
+    changed; a lookup runs for the latest viewport only, however many were
+    shown while the previous one was in flight.
+    """
+
+    def __init__(self, existence: PathExistence, executor: Executor) -> None:
+        self._existence = existence
         self._executor = executor
         self._lock = threading.Lock()
-        self._resolved: dict[_LineKey, list[VisibleOutputMatch]] = {}
-        self._pending: set[_LineKey] = set()
+        self._shown: _ViewportKey | None = None
+        self._in_flight = False
+        self._resolved: dict[str, list[VisibleOutputMatch]] = {}
 
-    def links_for(self, rows: Sequence[Row], *, session_name: str, source_cwd: str | None) -> list[HoverLink] | None:
-        """The logical line's links, or ``None`` while its lookup is still running.
+    def show(self, lines: Sequence[str], *, session_name: str, source_cwd: str | None) -> None:
+        key = (session_name, source_cwd, tuple(lines))
+        with self._lock:
+            if key == self._shown:
+                return
+            self._shown = key
+            if self._in_flight:
+                return
+            self._in_flight = True
+        self._executor.submit(self._resolve_latest)
+
+    @property
+    def resolving(self) -> bool:
+        with self._lock:
+            return self._in_flight
+
+    def links_for(self, rows: Sequence[Row]) -> list[HoverLink] | None:
+        """The logical line's links, or ``None`` until a lookup covering it lands.
 
         ``rows`` are the logical line's visible rows; each link's ranges
         index into them.
         """
 
         text, cells = line_text(rows)
-        key = (session_name, source_cwd, text)
         with self._lock:
-            matches = self._resolved.get(key)
-            should_submit = matches is None and key not in self._pending
-            if should_submit:
-                self._pending.add(key)
-        if should_submit:
-            self._executor.submit(self._resolve, key).add_done_callback(lambda future: self._settle(key, future))
+            matches = self._resolved.get(text)
         if matches is None:
             return None
         return [
@@ -235,23 +297,43 @@ class HoverLinkResolver:
             for match in matches
         ]
 
-    def _resolve(self, key: _LineKey) -> list[VisibleOutputMatch]:
-        session_name, source_cwd, text = key
-        return existing_visible_output_targets(
-            text, lambda candidates: self._paths_exist(candidates, session_name, source_cwd)
-        )
+    def _resolve_latest(self) -> None:
+        while True:
+            with self._lock:
+                key = self._shown
+            assert key is not None
+            resolved = self._resolve(key)
+            with self._lock:
+                self._resolved = resolved
+                if self._shown == key:
+                    self._in_flight = False
+                    return
 
-    def _settle(self, key: _LineKey, future: Future[list[VisibleOutputMatch]]) -> None:
-        # A failed lookup (e.g. a dead ssh master) caches as "no links" so
-        # every later mouse move over the line doesn't retry it.
-        error = future.exception()
-        if error is not None:
-            logger.error("hover link lookup failed for %r", key, exc_info=error)
-        with self._lock:
-            if len(self._resolved) >= MAX_CACHED_LINES:
-                self._resolved.clear()
-            self._resolved[key] = [] if error is not None else future.result()
-            self._pending.discard(key)
+    def _resolve(self, key: _ViewportKey) -> dict[str, list[VisibleOutputMatch]]:
+        session_name, source_cwd, lines = key
+        try:
+            per_line = existing_visible_output_targets_per_text(
+                lines, lambda candidates: self._existence.existing(candidates, session_name, source_cwd)
+            )
+        except Exception:
+            # Settling as "no links" keeps a dead backend (e.g. a gone ssh
+            # master) from being retried on every mouse move over this viewport.
+            logger.exception("hover link lookup failed for %r", key)
+            return dict.fromkeys(lines, [])
+        return dict(zip(lines, per_line, strict=True))
+
+
+def viewport_lines(rows: Sequence[Row], wraps: Sequence[bool]) -> list[str]:
+    """The text of each logical line in ``rows``; ``wraps[y]`` tells whether
+    row ``y`` soft-wraps onto the next."""
+
+    lines: list[str] = []
+    top = 0
+    for y in range(len(rows)):
+        if y == len(rows) - 1 or not wraps[y]:
+            lines.append(line_text(rows[top : y + 1])[0])
+            top = y + 1
+    return lines
 
 
 def _cell_ranges(rows: Sequence[Row], cells: list[tuple[int, int]]) -> tuple[CellRange, ...]:

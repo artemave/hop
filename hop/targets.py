@@ -4,7 +4,7 @@ import os.path
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Callable, Sequence
 from urllib.parse import urlparse
 
 if TYPE_CHECKING:
@@ -189,10 +189,33 @@ def existing_visible_output_targets(
     """The targets in ``text`` worth offering: every URL, plus the file and
     Rails refs ``paths_exist`` confirms."""
 
-    matches = find_visible_output_targets(text)
-    colon_splits = {m: _colon_delimited_parts(text, m) for m in matches if not _is_url_selection(m.selection)}
-    candidates = list(dict.fromkeys(part.selection for parts in colon_splits.values() for part in parts))
+    return existing_visible_output_targets_per_text([text], paths_exist)[0]
+
+
+def existing_visible_output_targets_per_text(
+    texts: Sequence[str],
+    paths_exist: Callable[[list[str]], set[str]],
+) -> list[list[VisibleOutputMatch]]:
+    """``existing_visible_output_targets`` for each of ``texts``, with one
+    ``paths_exist`` call covering all of them."""
+
+    per_text = [(text, find_visible_output_targets(text)) for text in texts]
+    colon_splits = [
+        {m: _colon_delimited_parts(text, m) for m in matches if not _is_url_selection(m.selection)}
+        for text, matches in per_text
+    ]
+    candidates = list(
+        dict.fromkeys(part.selection for splits in colon_splits for parts in splits.values() for part in parts)
+    )
     existing: set[str] = paths_exist(candidates) if candidates else set()
+    return [_offered(matches, splits, existing) for (_, matches), splits in zip(per_text, colon_splits, strict=True)]
+
+
+def _offered(
+    matches: list[VisibleOutputMatch],
+    colon_splits: dict[VisibleOutputMatch, list[VisibleOutputMatch]],
+    existing: set[str],
+) -> list[VisibleOutputMatch]:
     offered: list[VisibleOutputMatch] = []
     for match in matches:
         if match not in colon_splits:
