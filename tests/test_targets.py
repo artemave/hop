@@ -309,3 +309,41 @@ def test_existing_visible_output_targets_skips_the_existence_check_without_file_
     matches = existing_visible_output_targets("https://example.com", paths_exist)
 
     assert [m.selection for m in matches] == ["https://example.com"]
+
+
+def test_existing_visible_output_targets_keeps_colons_inside_file_names() -> None:
+    name = "demo-2026-02-02T14:10:07-db.dump"
+
+    matches = existing_visible_output_targets(f"{name} other", lambda candidates: {name})
+
+    assert matches == [VisibleOutputMatch(start=0, end=len(name), selection=name)]
+
+
+def test_existing_visible_output_targets_picks_the_existing_colon_separated_parts() -> None:
+    asked: list[list[str]] = []
+
+    def paths_exist(candidates: list[str]) -> set[str]:
+        asked.append(candidates)
+        return {"foo.rb:12", "bar.rb"}
+
+    matches = existing_visible_output_targets("error:foo.rb:12:in bar.rb:", paths_exist)
+
+    assert matches == [
+        VisibleOutputMatch(start=6, end=15, selection="foo.rb:12"),
+        VisibleOutputMatch(start=19, end=25, selection="bar.rb"),
+    ]
+    assert [set(candidates) for candidates in asked] == [
+        {
+            "error:foo.rb:12:in",
+            "error:foo.rb:12",
+            "error:foo.rb",
+            "error",
+            "foo.rb:12:in",
+            "foo.rb:12",
+            "foo.rb",
+            "12:in",
+            "12",
+            "in",
+            "bar.rb",
+        }
+    ]

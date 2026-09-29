@@ -25,9 +25,9 @@ VISIBLE_OUTPUT_TARGET_PATTERN = re.compile(
     (?:\w+\()?
     (?P<file>
         [~./]?[-a-zA-Z0-9_./]
-        [-a-zA-Z0-9_+\-,./@\[\]$]*
+        (?:[-a-zA-Z0-9_+\-,./@\[\]$]|:(?=[-a-zA-Z0-9_+\-,./@\[\]$]))*
         (?:\([-a-zA-Z0-9_+\-,./@\[\]$]*\)[-a-zA-Z0-9_+\-,./@\[\]$]*)*
-        (?:(?::|",\s+line\s+)\d+)?
+        (?:",\s+line\s+\d+)?
     )
     \)?
     """,
@@ -190,9 +190,39 @@ def existing_visible_output_targets(
     Rails refs ``paths_exist`` confirms."""
 
     matches = find_visible_output_targets(text)
-    candidates = [m.selection for m in matches if not _is_url_selection(m.selection)]
+    colon_splits = {m: _colon_delimited_parts(text, m) for m in matches if not _is_url_selection(m.selection)}
+    candidates = list(dict.fromkeys(part.selection for parts in colon_splits.values() for part in parts))
     existing: set[str] = paths_exist(candidates) if candidates else set()
-    return [m for m in matches if _is_url_selection(m.selection) or m.selection in existing]
+    offered: list[VisibleOutputMatch] = []
+    for match in matches:
+        if match not in colon_splits:
+            offered.append(match)
+            continue
+        picked: list[VisibleOutputMatch] = []
+        for part in colon_splits[match]:
+            if part.selection in existing and all(part.end <= p.start or part.start >= p.end for p in picked):
+                picked.append(part)
+        offered.extend(sorted(picked, key=lambda p: p.start))
+    return offered
+
+
+def _colon_delimited_parts(text: str, match: VisibleOutputMatch) -> list[VisibleOutputMatch]:
+    """Every run of whole colon-separated segments of ``match``, longest first.
+
+    Colons are legal in file names (``db-2026-02-02T14:10:07.dump``) but also
+    join a path to its line number or to surrounding prose (``error:foo.rb``),
+    so which run names the file is only known once existence is checked.
+    """
+
+    colons = [i for i in range(match.start, match.end) if text[i] == ":"]
+    starts = [match.start, *(i + 1 for i in colons)]
+    ends = [*colons, match.end]
+    parts = [
+        VisibleOutputMatch(start=start, end=end, selection=text[start:end].replace("\0", "").replace("\n", ""))
+        for first, start in enumerate(starts)
+        for end in ends[first:]
+    ]
+    return sorted(parts, key=lambda p: p.start - p.end)
 
 
 def _is_url_selection(selection: str) -> bool:
