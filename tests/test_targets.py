@@ -347,3 +347,24 @@ def test_existing_visible_output_targets_picks_the_existing_colon_separated_part
             "bar.rb",
         }
     ]
+
+
+def test_a_url_reads_on_across_the_end_of_a_row_it_fills() -> None:
+    text = "see https://example.com/a\rbc\nde\0\0\nnext"
+
+    assert [m.selection for m in find_visible_output_targets(text)] == ["see", "https://example.com/abcde", "next"]
+
+
+def test_a_url_stops_at_the_padding_of_a_row_it_does_not_fill() -> None:
+    text = "https://example.com\0\0\nnext"
+
+    assert [m.selection for m in find_visible_output_targets(text)] == ["https://example.com", "next"]
+
+
+def test_a_file_path_reads_on_across_a_soft_wrap_but_not_a_line_break() -> None:
+    text = "app/mo\rdels/user.rb\nlib.rb"
+
+    assert find_visible_output_targets(text) == [
+        VisibleOutputMatch(start=0, end=19, selection="app/models/user.rb"),
+        VisibleOutputMatch(start=20, end=26, selection="lib.rb"),
+    ]

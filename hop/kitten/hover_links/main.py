@@ -26,6 +26,7 @@ from hop.hover_links import (  # noqa: E402
     action_for_clicked_url,
     logical_line_rows,
     paint_operations,
+    rows_join,
     viewport_lines,
 )
 from hop.kitten.dispatch import dispatch_selected_match  # noqa: E402
@@ -78,7 +79,7 @@ def _show_viewport(boss: Any, window: Any) -> None:
     rows = [Row.from_line(screen.visual_line(y)) for y in range(screen.lines)]
     viewport = _viewports.setdefault(window.id, ViewportLinks(_existence, _executor))
     viewport.show(
-        viewport_lines(rows, [wraps for _, wraps in texts]),
+        viewport_lines(rows),
         session_name=session_name,
         source_cwd=source_cwd,
     )
@@ -87,7 +88,9 @@ def _show_viewport(boss: Any, window: Any) -> None:
 def _paint_hovered(boss: Any, window: Any) -> None:
     screen = window.screen
     row_numbers = logical_line_rows(
-        _hovered_rows[window.id], screen.lines, lambda y: screen.visual_line(y).last_char_has_wrapped_flag()
+        _hovered_rows[window.id],
+        screen.lines,
+        lambda y: rows_join(Row.from_line(screen.visual_line(y)), Row.from_line(screen.visual_line(y + 1))),
     )
     rows = [Row.from_line(screen.visual_line(y)) for y in row_numbers]
     viewport = _viewports[window.id]

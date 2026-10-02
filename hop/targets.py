@@ -14,9 +14,14 @@ if TYPE_CHECKING:
 # Permissive on purpose: any path-shaped token may match. Existence filtering
 # happens outside this module (via ``backend.paths_exist`` from the focused
 # hop session) so the regex stays generous and the resolver stays pure.
+#
+# Screen text separates rows the way kitty's hints kitten does: ``\r`` after a
+# soft-wrapped row, ``\n`` after any other, and ``\0`` padding a row that
+# doesn't reach the last column. Like kitty's own URL matching, a URL reads on
+# across a row end it fills, and a file path only across a soft wrap.
 VISIBLE_OUTPUT_TARGET_PATTERN = re.compile(
     r"""
-    (?P<url>https?://[^\s<>"'`)\]}]+)
+    (?P<url>https?://(?:[^\s\0<>"'`)\]}]|[\r\n](?=[^\s\0<>"'`)\]}]))+)
     |
     (?P<rails>Processing\s+[A-Z][A-Za-z0-9_:]*Controller\#[A-Za-z_][A-Za-z0-9_]*)
     |
@@ -25,7 +30,7 @@ VISIBLE_OUTPUT_TARGET_PATTERN = re.compile(
     (?:\w+\()?
     (?P<file>
         [~./]?[-a-zA-Z0-9_./]
-        (?:[-a-zA-Z0-9_+\-,./@\[\]$]|:(?=[-a-zA-Z0-9_+\-,./@\[\]$]))*
+        (?:[-a-zA-Z0-9_+\-,./@\[\]$]|[:\r](?=[-a-zA-Z0-9_+\-,./@\[\]$]))*
         (?:\([-a-zA-Z0-9_+\-,./@\[\]$]*\)[-a-zA-Z0-9_+\-,./@\[\]$]*)*
         (?:",\s+line\s+\d+)?
     )
@@ -177,7 +182,7 @@ def find_visible_output_targets(text: str) -> list[VisibleOutputMatch]:
     for match in VISIBLE_OUTPUT_TARGET_PATTERN.finditer(text):
         group_name = next(name for name in ("url", "rails", "rails_bare", "file") if match.group(name))
         start, end = match.span(group_name)
-        selection = match.group(group_name).replace("\0", "").replace("\n", "")
+        selection = _without_row_breaks(match.group(group_name))
         matches.append(VisibleOutputMatch(start=start, end=end, selection=selection))
     return matches
 
@@ -241,11 +246,15 @@ def _colon_delimited_parts(text: str, match: VisibleOutputMatch) -> list[Visible
     starts = [match.start, *(i + 1 for i in colons)]
     ends = [*colons, match.end]
     parts = [
-        VisibleOutputMatch(start=start, end=end, selection=text[start:end].replace("\0", "").replace("\n", ""))
+        VisibleOutputMatch(start=start, end=end, selection=_without_row_breaks(text[start:end]))
         for first, start in enumerate(starts)
         for end in ends[first:]
     ]
     return sorted(parts, key=lambda p: p.start - p.end)
+
+
+def _without_row_breaks(token: str) -> str:
+    return token.replace("\0", "").replace("\r", "").replace("\n", "")
 
 
 def _is_url_selection(selection: str) -> bool:

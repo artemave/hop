@@ -33,8 +33,9 @@ class KittyLikeLine:
     its cell plus a zero-width continuation cell carrying the same text,
     unused cells read as ``\\0``, and ``width`` fails on them like kitty's."""
 
-    def __init__(self, cells: list[tuple[str, int]], columns: int) -> None:
+    def __init__(self, cells: list[tuple[str, int]], columns: int, *, wraps: bool = False) -> None:
         self.cells = cells + [("\0", 0)] * (columns - len(cells))
+        self.wraps = wraps
 
     def __len__(self) -> int:
         return len(self.cells)
@@ -51,10 +52,14 @@ class KittyLikeLine:
     def hyperlink_ids(self) -> tuple[int, ...]:
         return (0,) * len(self.cells)
 
+    def last_char_has_wrapped_flag(self) -> bool:
+        return self.wraps
 
-def draw(text: str, columns: int = 40) -> list[Row]:
-    """Soft-wrap ``text`` into rows like kitty: a wide character that doesn't
-    fit the row's last cell leaves it empty and starts the next row."""
+
+def draw(text: str, columns: int = 40, *, soft_wrap: bool = True) -> list[Row]:
+    """Wrap ``text`` into rows like kitty: a wide character that doesn't fit
+    the row's last cell leaves it empty and starts the next row. Without
+    ``soft_wrap`` the rows are broken the way a TUI breaks them itself."""
 
     rows: list[list[tuple[str, int]]] = [[]]
     for character in text:
@@ -66,7 +71,10 @@ def draw(text: str, columns: int = 40) -> list[Row]:
         if len(rows[-1]) + (2 if wide else 1) > columns:
             rows.append([])
         rows[-1].extend([(character, 2), (character, 0)] if wide else [(character, 1)])
-    return [Row.from_line(KittyLikeLine(cells, columns)) for cells in rows]
+    return [
+        Row.from_line(KittyLikeLine(cells, columns, wraps=soft_wrap and y < len(rows) - 1))
+        for y, cells in enumerate(rows)
+    ]
 
 
 class QueuedExecutor(Executor):
@@ -113,9 +121,7 @@ class PathsExist:
 def show(viewport: ViewportLinks, *lines: list[Row], source_cwd: str | None = None) -> None:
     """Show a viewport made of ``lines``, each a logical line's rows."""
 
-    rows = [row for line in lines for row in line]
-    wraps = [y < len(line) - 1 for line in lines for y in range(len(line))]
-    viewport.show(viewport_lines(rows, wraps), session_name="demo", source_cwd=source_cwd)
+    viewport.show(viewport_lines([row for line in lines for row in line]), session_name="demo", source_cwd=source_cwd)
 
 
 def resolved_links(existing: set[str], rows: list[Row]) -> list[HoverLink] | None:
@@ -155,9 +161,19 @@ def test_logical_line_rows_spans_the_rows_wrapped_onto_the_hovered_one() -> None
 
 
 def test_viewport_lines_joins_the_rows_of_each_logical_line() -> None:
-    rows = draw("abcdefgh", columns=4) + draw("xy", columns=4)
+    rows = draw("abcdefg", columns=4) + draw("xy", columns=4)
 
-    assert viewport_lines(rows, [True, False, False]) == ["abcdefgh", "xy  "]
+    assert viewport_lines(rows) == ["abcdefg ", "xy  "]
+
+
+def test_a_full_row_continues_onto_a_row_that_does_not_start_blank() -> None:
+    full = draw("abcd", columns=4)
+    partial = draw("ab", columns=4)
+    indented = draw(" xy", columns=4)
+    last = draw("xy", columns=4)
+
+    assert viewport_lines(full + last) == ["abcd\nxy  "]
+    assert viewport_lines(full + indented + partial + last) == ["abcd", " xy ", "ab  ", "xy  "]
 
 
 # --- viewport lookup -----------------------------------------------------------
@@ -197,6 +213,23 @@ def test_a_link_ending_in_a_wide_character_covers_both_of_its_cells() -> None:
 def test_a_soft_wrapped_target_links_a_range_on_each_row() -> None:
     assert resolved_links({"app/models/user.rb:3"}, draw("see app/models/user.rb:3 ok", columns=10)) == [
         HoverLink("app/models/user.rb:3", (CellRange(0, 4, 9), CellRange(1, 0, 9), CellRange(2, 0, 3))),
+    ]
+
+
+def test_a_url_carries_across_a_line_break_at_the_last_column() -> None:
+    url = "https://example.com/abc"
+
+    assert resolved_links(set(), draw(f"{url} ok", columns=10, soft_wrap=False)) == [
+        HoverLink(url, (CellRange(0, 0, 9), CellRange(1, 0, 9), CellRange(2, 0, 2))),
+    ]
+
+
+def test_a_file_path_stops_at_a_line_break_at_the_last_column() -> None:
+    rows = draw("app.rb", columns=6, soft_wrap=False) + draw("lib.rb", columns=6, soft_wrap=False)
+
+    assert resolved_links({"app.rb", "lib.rb", "app.rblib.rb"}, rows) == [
+        HoverLink("app.rb", (CellRange(0, 0, 5),)),
+        HoverLink("lib.rb", (CellRange(1, 0, 5),)),
     ]
 
 

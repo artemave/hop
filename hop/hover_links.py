@@ -42,6 +42,8 @@ class KittyLine(Protocol):
 
     def hyperlink_ids(self) -> tuple[int, ...]: ...
 
+    def last_char_has_wrapped_flag(self) -> bool: ...
+
 
 @dataclass(frozen=True, slots=True)
 class Row:
@@ -51,11 +53,13 @@ class Row:
     call overwrites, so a multi-row line has to be copied row by row.
     ``cells`` holds each cell's ``(text, width)``: a wide character's
     continuation cell carries the same text with width 0, and an empty
-    cell is ``("\\0", 0)``.
+    cell is ``("\\0", 0)``. ``wraps`` tells whether the row soft-wraps onto
+    the next.
     """
 
     cells: tuple[tuple[str, int], ...]
     hyperlink_ids: tuple[int, ...]
+    wraps: bool = False
 
     @classmethod
     def from_line(cls, line: KittyLine) -> Row:
@@ -64,7 +68,7 @@ class Row:
             text = line[x]
             # kitty's ``Line.width`` fails with a SystemError on an empty cell.
             cells.append((text, 0 if text == "\0" else line.width(x)))
-        return cls(cells=tuple(cells), hyperlink_ids=line.hyperlink_ids())
+        return cls(cells=tuple(cells), hyperlink_ids=line.hyperlink_ids(), wraps=line.last_char_has_wrapped_flag())
 
 
 def hop_url(action: str, argument: str) -> str:
@@ -122,17 +126,31 @@ class LinkPaint:
     url: str | None
 
 
-def logical_line_rows(row: int, row_count: int, wraps: Callable[[int], bool]) -> range:
+def logical_line_rows(row: int, row_count: int, joins: Callable[[int], bool]) -> range:
     """The visible rows forming the logical line that ``row`` is part of;
-    ``wraps(y)`` tells whether row ``y`` soft-wraps onto the next."""
+    ``joins(y)`` tells whether row ``y`` continues onto the next."""
 
     top = row
-    while top > 0 and wraps(top - 1):
+    while top > 0 and joins(top - 1):
         top -= 1
     bottom = row
-    while bottom < row_count - 1 and wraps(bottom):
+    while bottom < row_count - 1 and joins(bottom):
         bottom += 1
     return range(top, bottom + 1)
+
+
+def rows_join(upper: Row, lower: Row) -> bool:
+    """Whether ``lower`` continues the logical line ``upper`` is part of.
+
+    Besides a soft wrap, that's a full row followed by one that doesn't
+    start blank: TUIs break long lines themselves, and kitty's own URL
+    detection carries a URL across such a break too.
+    """
+
+    return upper.wraps or (upper.cells[-1][0] not in _BLANK_CELLS and lower.cells[0][0] not in _BLANK_CELLS)
+
+
+_BLANK_CELLS = ("\0", " ")
 
 
 def line_text(rows: Sequence[Row]) -> tuple[str, list[tuple[int, int]]]:
@@ -140,16 +158,19 @@ def line_text(rows: Sequence[Row]) -> tuple[str, list[tuple[int, int]]]:
 
     ``str(line)`` can't be used: it drops the continuation cells of wide
     characters, so its offsets drift from cell columns after the first CJK
-    character or emoji. A wrapped row can end in empty cells (a wide
+    character or emoji. A soft-wrapped row can end in empty cells (a wide
     character that didn't fit moves to the next row); those are skipped so
-    a token split there still reads as one.
+    a token split there still reads as one. A row that joins the next
+    without a soft wrap ends in ``\\n``, as in the hints kitten's text, which
+    a URL reads across and a file path stops at.
     """
 
     characters: list[str] = []
     cells: list[tuple[int, int]] = []
     for row_index, row in enumerate(rows):
+        continued = row_index < len(rows) - 1
         end = len(row.cells)
-        if row_index < len(rows) - 1:
+        if continued and row.wraps:
             while end and row.cells[end - 1][0] == "\0":
                 end -= 1
         for x, (text, width) in enumerate(row.cells[:end]):
@@ -159,6 +180,9 @@ def line_text(rows: Sequence[Row]) -> tuple[str, list[tuple[int, int]]]:
             elif width:
                 characters.extend(text)
                 cells.extend([(row_index, x)] * len(text))
+        if continued and not row.wraps:
+            characters.append("\n")
+            cells.append((row_index, end - 1))
     return "".join(characters), cells
 
 
@@ -323,14 +347,13 @@ class ViewportLinks:
         return dict(zip(lines, per_line, strict=True))
 
 
-def viewport_lines(rows: Sequence[Row], wraps: Sequence[bool]) -> list[str]:
-    """The text of each logical line in ``rows``; ``wraps[y]`` tells whether
-    row ``y`` soft-wraps onto the next."""
+def viewport_lines(rows: Sequence[Row]) -> list[str]:
+    """The text of each logical line in ``rows``."""
 
     lines: list[str] = []
     top = 0
     for y in range(len(rows)):
-        if y == len(rows) - 1 or not wraps[y]:
+        if y == len(rows) - 1 or not rows_join(rows[y], rows[y + 1]):
             lines.append(line_text(rows[top : y + 1])[0])
             top = y + 1
     return lines
