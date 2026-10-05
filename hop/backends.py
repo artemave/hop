@@ -189,8 +189,12 @@ _STATUS_REPAINT_SECONDS = 0.1
 
 # Braille spinner frames + the "return to column 0, erase the whole line"
 # sequence used to redraw the status line in place.
-_SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+_SPINNER_FRAMES = "⣾⣽⣻⢿⡿⣟⣯⣷"
 _ERASE_LINE = "\r\x1b[2K"
+_BOLD = "\x1b[1m"
+_PURPLE = "\x1b[35m"
+_DEFAULT_COLOR = "\x1b[39m"
+_RESET = "\x1b[0m"
 
 
 def _is_interactive() -> bool:
@@ -246,7 +250,7 @@ class _StatusLine:
         # trailing newline, leaving the cursor parked on the status line.
         elapsed = int(self._now() - self._start)
         frame = _SPINNER_FRAMES[self._frame % len(_SPINNER_FRAMES)]
-        self._status.write(f"{_ERASE_LINE}{frame} {self._label} ({elapsed}s)")
+        self._status.write(f"{_ERASE_LINE}{_BOLD}{_PURPLE}{frame}{_DEFAULT_COLOR} {self._label} ({elapsed}s){_RESET}")
         self._status.flush()
 
     def __enter__(self) -> "_StatusLine":

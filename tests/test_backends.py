@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import re
 import shlex
 import subprocess
 import threading
@@ -434,10 +435,12 @@ def test_status_line_animates_the_spinner_in_place_and_erases_on_exit() -> None:
     text = status.text()
 
     assert "hop prepare is running (0s)" in text
+    # Bold throughout, with the spinner frame alone in purple.
+    assert re.search(r"\x1b\[1m\x1b\[35m[⣾⣽⣻⢿⡿⣟⣯⣷]\x1b\[39m hop prepare is running \(0s\)\x1b\[0m", text)
     # Each repaint returns to column 0 and clears the line — i.e. redraws in place.
     assert "\r\x1b[2K" in text
     # The spinner cycles through distinct frames rather than sitting still.
-    assert len({c for c in text if c in "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"}) >= 2
+    assert len({c for c in text if c in "⣾⣽⣻⢿⡿⣟⣯⣷"}) >= 2
     # On exit the status line is wiped, leaving the scrollback to the real output.
     assert text.endswith("\r\x1b[2K")
     # No log lines → the clean `out` sink stays empty.
