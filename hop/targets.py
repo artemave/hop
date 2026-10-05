@@ -131,7 +131,7 @@ def resolve_target(
     runs in the backend).
 
     For Rails refs, this reads the controller file via ``backend.read_file``
-    and scans for ``def <action>`` in Python. Returns ``None`` if the file
+    and looks for ``def <action>`` in it. Returns ``None`` if the file
     is missing or the action isn't defined; the caller decides whether to
     filter (kitten highlighting) or raise (CLI).
     """
@@ -142,10 +142,7 @@ def resolve_target(
     terminal_directory = Path(terminal_cwd).expanduser().resolve(strict=False) if terminal_cwd is not None else None
 
     if isinstance(syntactic, SyntacticRailsRefTarget):
-        path = resolve_file_candidate(
-            f"app/controllers/{_underscore_constant_path(syntactic.controller)}.rb",
-            terminal_cwd=terminal_directory,
-        )
+        path = rails_controller_path(syntactic, terminal_cwd=terminal_directory)
         # Local import to avoid a config → backends → targets cycle: this
         # module is imported by backends-adjacent code at module load.
         from hop.backends import BackendFileNotFoundError
@@ -154,18 +151,33 @@ def resolve_target(
             content = backend.read_file(session, path)
         except BackendFileNotFoundError:
             return None
-        # action is parser-constrained to [A-Za-z_][A-Za-z0-9_]*, so the
-        # word-boundary suffix \b plus a literal interpolation is safe.
-        pattern = re.compile(rf"^\s*def\s+{syntactic.action}\b")
-        for line_number, line_text in enumerate(content.splitlines(), start=1):
-            if pattern.match(line_text):
-                return ResolvedFileTarget(path=path, line_number=line_number)
-        return None
+        line_number = rails_action_line(content, syntactic.action)
+        if line_number is None:
+            return None
+        return ResolvedFileTarget(path=path, line_number=line_number)
 
     return ResolvedFileTarget(
         path=resolve_file_candidate(syntactic.path_text, terminal_cwd=terminal_directory),
         line_number=syntactic.line_number,
     )
+
+
+def rails_controller_path(ref: SyntacticRailsRefTarget, *, terminal_cwd: Path | None) -> Path:
+    return resolve_file_candidate(
+        f"app/controllers/{_underscore_constant_path(ref.controller)}.rb", terminal_cwd=terminal_cwd
+    )
+
+
+def rails_action_line(controller_source: str, action: str) -> int | None:
+    """The line defining ``action`` in ``controller_source``, if any."""
+
+    # action is parser-constrained to [A-Za-z_][A-Za-z0-9_]*, so the
+    # word-boundary suffix \b plus a literal interpolation is safe.
+    pattern = re.compile(rf"^\s*def\s+{action}\b")
+    for line_number, line_text in enumerate(controller_source.splitlines(), start=1):
+        if pattern.match(line_text):
+            return line_number
+    return None
 
 
 @dataclass(frozen=True, slots=True)

@@ -23,12 +23,12 @@ from hop.session import ProjectSession
 from hop.state import SessionState, load_sessions, session_from_state
 from hop.sway import SwayIpcAdapter
 from hop.targets import (
-    ResolvedFileTarget,
     SyntacticFileTarget,
     SyntacticRailsRefTarget,
     parse_visible_output_target,
+    rails_action_line,
+    rails_controller_path,
     resolve_file_candidate,
-    resolve_target,
 )
 
 WORKSPACE_PREFIX = "s:"
@@ -133,29 +133,30 @@ def _verified_candidates(
     backend: SessionBackend,
     base_cwd: Path,
 ) -> set[str]:
-    # Two checks happen here. Plain file refs flow through ``backend.paths_exist``
-    # in one batched call. Rails refs run through ``resolve_target``, which
-    # reads the controller file via ``backend.read_file`` and scans for
-    # ``def <action>`` — so the highlight only fires when the action really
-    # exists, not just because the controller file does. Rails refs that
-    # survive that check are added to the result directly (the file read
-    # already proved existence).
+    # Plain file refs need only exist. A Rails ref needs its controller to
+    # define the action, not just to exist, so the controllers are read —
+    # all of them in one ``backend.read_files`` round trip.
     plain_files_to_check: dict[str, Path] = {}
-    verified: set[str] = set()
+    rails_refs_to_check: dict[str, tuple[Path, str]] = {}
     for candidate in candidates:
         syntactic = parse_visible_output_target(candidate)
         if isinstance(syntactic, SyntacticFileTarget):
             path = resolve_file_candidate(syntactic.path_text, terminal_cwd=base_cwd)
             plain_files_to_check.setdefault(candidate, path)
         elif isinstance(syntactic, SyntacticRailsRefTarget):
-            resolved = resolve_target(syntactic, session=session, backend=backend, terminal_cwd=base_cwd)
-            if isinstance(resolved, ResolvedFileTarget):
-                verified.add(candidate)
+            controller = rails_controller_path(syntactic, terminal_cwd=base_cwd)
+            rails_refs_to_check.setdefault(candidate, (controller, syntactic.action))
 
+    verified: set[str] = set()
     if plain_files_to_check:
         existing_paths = backend.paths_exist(session, tuple(set(plain_files_to_check.values())))
         for candidate, path in plain_files_to_check.items():
             if path in existing_paths:
+                verified.add(candidate)
+    if rails_refs_to_check:
+        controllers = backend.read_files(session, tuple({path for path, _ in rails_refs_to_check.values()}))
+        for candidate, (path, action) in rails_refs_to_check.items():
+            if path in controllers and rails_action_line(controllers[path], action) is not None:
                 verified.add(candidate)
     return verified
 

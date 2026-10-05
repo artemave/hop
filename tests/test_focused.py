@@ -18,15 +18,15 @@ _HOST_RECORD = CommandBackendRecord(name="host", interactive_prefix="", noninter
 
 class _FakeBackend:
     """Minimal ``SessionBackend`` for tests — only ``paths_exist`` and
-    ``read_file`` are meaningful; the rest are stubs satisfying the Protocol
+    ``read_files`` are meaningful; the rest are stubs satisfying the Protocol
     so pyright is happy. ``files`` maps a path to its content for
-    ``read_file``; paths in ``existing`` are reported by ``paths_exist``."""
+    ``read_files``; paths in ``existing`` are reported by ``paths_exist``."""
 
     def __init__(self, existing: set[Path] | None = None, files: dict[Path, str] | None = None) -> None:
         self.existing = existing or set()
         self.files: dict[Path, str] = files or {}
         self.calls: list[Sequence[Path]] = []
-        self.read_calls: list[Path] = []
+        self.read_calls: list[tuple[Path, ...]] = []
 
     @property
     def interactive_prefix(self) -> str:
@@ -72,14 +72,12 @@ class _FakeBackend:
         return {p for p in paths if p in self.existing}
 
     def read_file(self, session: ProjectSession, path: Path) -> str:
-        del session
-        self.read_calls.append(path)
-        from hop.backends import BackendFileNotFoundError
+        raise AssertionError(f"unexpected read_file of {path}")
 
-        content = self.files.get(path)
-        if content is None:
-            raise BackendFileNotFoundError(f"fake: {path} not found")
-        return content
+    def read_files(self, session: ProjectSession, paths: Sequence[Path]) -> dict[Path, str]:
+        del session
+        self.read_calls.append(tuple(paths))
+        return {p: self.files[p] for p in paths if p in self.files}
 
     def write_file(self, session: ProjectSession, path: Path, data: bytes) -> None:
         del session, path, data
@@ -318,10 +316,10 @@ def test_paths_exist_prefers_backend_workspace_path_over_kitty_cwd(tmp_path: Pat
     assert result == {"foo.rb"}
 
 
-def test_paths_exist_translates_rails_references_via_target_resolver(tmp_path: Path) -> None:
+def test_paths_exist_keeps_rails_references_whose_controller_defines_the_action(tmp_path: Path) -> None:
     """``Processing UsersController#index`` resolves to a controller path
-    against the focused cwd; the backend's ``read_file`` then proves that
-    ``def index`` is defined in the file before the candidate is marked."""
+    against the focused cwd; the controller's source then proves that
+    ``def index`` is defined before the candidate is marked."""
     session_root = tmp_path / "demo"
     shell_cwd = session_root
     shell_cwd.mkdir(parents=True)
@@ -341,7 +339,39 @@ def test_paths_exist_translates_rails_references_via_target_resolver(tmp_path: P
     )
 
     assert result == {"Processing UsersController#index"}
-    assert fake_backend.read_calls == [expected_path]
+    assert fake_backend.read_calls == [(expected_path,)]
+
+
+def test_paths_exist_reads_every_rails_controller_in_one_call(tmp_path: Path) -> None:
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
+    users = (session_root / "app/controllers/users_controller.rb").resolve()
+    admin_posts = (session_root / "app/controllers/admin/posts_controller.rb").resolve()
+    fake_backend = _FakeBackend(
+        files={users: "  def index\n  def show\n", admin_posts: "  def edit\n"},
+    )
+
+    result = paths_exist(
+        [
+            "UsersController#index",
+            "UsersController#show",
+            "Admin::PostsController#edit",
+            "Admin::PostsController#destroy",
+            "MissingController#index",
+        ],
+        focused_workspace=lambda: "s:demo",
+        sessions_loader=lambda: {"demo": _state("demo", session_root.resolve())},
+        cwd_loader=lambda _name: session_root.resolve(),
+        backend_loader=lambda _state: fake_backend,
+    )
+
+    assert result == {"UsersController#index", "UsersController#show", "Admin::PostsController#edit"}
+    assert len(fake_backend.read_calls) == 1
+    assert set(fake_backend.read_calls[0]) == {
+        users,
+        admin_posts,
+        (session_root / "app/controllers/missing_controller.rb").resolve(),
+    }
 
 
 def test_paths_exist_drops_rails_reference_when_def_not_defined(tmp_path: Path) -> None:

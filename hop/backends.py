@@ -7,6 +7,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import gettempdir, mkdtemp
@@ -119,6 +120,8 @@ class SessionBackend(Protocol):
     def paths_exist(self, session: ProjectSession, paths: Sequence[Path]) -> set[Path]: ...
 
     def read_file(self, session: ProjectSession, path: Path) -> str: ...
+
+    def read_files(self, session: ProjectSession, paths: Sequence[Path]) -> dict[Path, str]: ...
 
     def write_file(self, session: ProjectSession, path: Path, data: bytes) -> None: ...
 
@@ -765,6 +768,35 @@ class CommandBackend:
             raise SessionBackendError(msg)
         reported = {line for line in result.stdout.splitlines() if line}
         return {p for p in paths if str(p) in reported}
+
+    def read_files(self, session: ProjectSession, paths: Sequence[Path]) -> dict[Path, str]:
+        """The contents of each of ``paths`` that is a regular file, read in
+        one round trip; the others are left out."""
+
+        if not paths:
+            return {}
+        substituted_prefix = substitute(self.noninteractive_prefix, session=session, host=self._host)
+        # Each file follows a line naming its index after a boundary no file
+        # can contain, so the contents need no escaping. Delivered over stdin
+        # to a bare `sh` like paths_exist.
+        boundary = f"hop-{uuid.uuid4().hex}"
+        script = "".join(
+            f"[ -f {quoted} ] && printf '\\n{boundary} %s\\n' {index} && cat {quoted}\n"
+            for index, quoted in enumerate(shlex.quote(str(p)) for p in paths)
+        )
+        composed = f"{substituted_prefix} sh".lstrip()
+        argv = self.noninteractive_transport(composed)
+        result = self.runner(argv, runner_cwd(self.host, session.session_root), stdin=f"{script}:\n")
+        debug.log_command(argv, session.session_root, result)
+        if result.returncode != 0:
+            stderr = (result.stderr or result.stdout or "").strip()
+            msg = f"backend {self.name!r} read_files failed for {session.session_name!r}: {stderr}"
+            raise SessionBackendError(msg)
+        contents: dict[Path, str] = {}
+        for chunk in result.stdout.split(f"\n{boundary} ")[1:]:
+            index, _, content = chunk.partition("\n")
+            contents[paths[int(index)]] = content
+        return contents
 
     def read_file(self, session: ProjectSession, path: Path) -> str:
         substituted_prefix = substitute(self.noninteractive_prefix, session=session, host=self._host)

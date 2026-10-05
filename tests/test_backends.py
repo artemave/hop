@@ -142,6 +142,29 @@ def test_host_backend_read_file_returns_file_contents(tmp_path: Path) -> None:
     )
 
 
+def test_host_backend_read_files_returns_the_contents_of_existing_files(tmp_path: Path) -> None:
+    users = tmp_path / "users_controller.rb"
+    users.write_text("class UsersController\n  def index\n  end\nend\n")
+    unterminated = tmp_path / "no_newline.rb"
+    unterminated.write_text("def show")
+    empty = tmp_path / "empty.rb"
+    empty.write_text("")
+
+    result = host_backend().read_files(
+        build_session(tmp_path), (users, tmp_path / "missing.rb", tmp_path, unterminated, empty)
+    )
+
+    assert result == {
+        users: "class UsersController\n  def index\n  end\nend\n",
+        unterminated: "def show",
+        empty: "",
+    }
+
+
+def test_host_backend_read_files_empty_input_returns_empty(tmp_path: Path) -> None:
+    assert host_backend().read_files(build_session(tmp_path), ()) == {}
+
+
 def test_host_backend_read_file_raises_backend_file_not_found_for_missing_path(tmp_path: Path) -> None:
     from hop.backends import BackendFileNotFoundError
 
@@ -715,6 +738,34 @@ def test_command_backend_read_file_raises_backend_file_not_found_on_sentinel_exi
 
     with pytest.raises(BackendFileNotFoundError, match="not found"):
         backend.read_file(build_session(tmp_path), Path("/missing"))
+
+
+def test_command_backend_read_files_runs_one_script_with_noninteractive_prefix(tmp_path: Path) -> None:
+    runner = RecordingRunner()
+    backend = backend_from_config(
+        make_backend(noninteractive_prefix="compose exec -T devcontainer"),
+        runner=runner,
+    )
+
+    backend.read_files(build_session(tmp_path), (Path("/app/a.rb"), Path("/app/b.rb")))
+
+    assert len(runner.calls) == 1
+    argv, _cwd, stdin = runner.calls[0]
+    assert argv == ("sh", "-c", "compose exec -T devcontainer sh")
+    assert stdin is not None
+    assert "/app/a.rb" in stdin
+    assert "/app/b.rb" in stdin
+
+
+def test_command_backend_read_files_raises_on_failure(tmp_path: Path) -> None:
+    runner = RecordingRunner(returncode=1, stderr="container is gone")
+    backend = backend_from_config(
+        make_backend(noninteractive_prefix="compose exec -T devcontainer"),
+        runner=runner,
+    )
+
+    with pytest.raises(SessionBackendError, match="read_files failed"):
+        backend.read_files(build_session(tmp_path), (Path("/app/foo.rb"),))
 
 
 def test_command_backend_read_file_raises_session_backend_error_on_other_failures(tmp_path: Path) -> None:
