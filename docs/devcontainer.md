@@ -147,6 +147,34 @@ prepare = "podman-compose -f docker-compose.dev.yml up -d --wait devcontainer &&
 
 `--wait` blocks until the healthcheck passes, so the entrypoint's setup is guaranteed to be complete before hop launches the editor or installs the bridge shim. Same shape applies to `docker compose up -d --wait`.
 
+#### Keeping the image current
+
+`compose up` builds an image only when none exists under its name; it never compares the image against the Dockerfile or build context. And podman-compose recreates a container only when its compose config changes, not when its image does. So after you edit the Dockerfile or entrypoint, `up` keeps starting the old image. With the healthcheck above that is worse than stale: an entrypoint that predates `touch /tmp/devcontainer-ready` never passes, and `--wait` blocks forever.
+
+Make `prepare` a script that always builds, then removes the container if it runs an image other than the one just built:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+compose=(podman-compose -f docker-compose.dev.yml)
+
+"${compose[@]}" build devcontainer
+
+cid="$(podman ps -aq \
+  --filter label=io.podman.compose.project="$(basename "$PWD")" \
+  --filter label=io.podman.compose.service=devcontainer)"
+if [[ -n $cid ]]; then
+  image="$(podman inspect -f '{{.ImageName}}' "$cid")"
+  if [[ "$(podman inspect -f '{{.Image}}' "$cid")" != "$(podman image inspect -f '{{.Id}}' "$image")" ]]; then
+    podman rm -f "$cid"
+  fi
+fi
+
+"${compose[@]}" up -d --wait
+```
+
+The build is layer-cached, so an unchanged image costs seconds. If the project image is `FROM` a locally built base image, build that first in the same script — `compose build` only rebuilds the project layer when the base image's ID has changed.
+
 `activate` is the auto-detect probe — hop runs it in the session root and picks this backend if it exits 0. Any command works; `test -f <marker>` is the simplest. Backends without `activate` aren't eligible for auto-detect; they can only be picked by name with `hop --backend <name>` or `[backend].name = "<name>"` in `.hop.toml`.
 
 ### 3. Verify
