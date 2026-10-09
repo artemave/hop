@@ -1090,6 +1090,86 @@ def test_command_backend_translate_localhost_url_preserves_userinfo(tmp_path: Pa
     assert translated == "http://user:pw@localhost:35231/foo"
 
 
+def test_command_backend_translate_localhost_url_matches_localhost_subdomains(tmp_path: Path) -> None:
+    runner = RecordingRunner(stdout="35231")
+    backend = backend_from_config(make_backend(port_translate=("p {port}",)), runner=runner)
+
+    assert (
+        backend.translate_localhost_url(build_session(tmp_path), "http://acme.localhost:3000/")
+        == "http://acme.localhost:35231/"
+    )
+
+
+def test_remote_backend_translate_forwards_the_url_port_and_keeps_the_host(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A remote session's localhost URL opens through an ssh ``-L`` forward on
+    the same port, so a subdomain-routed app keeps its ``Host`` header."""
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    runner = RecordingRunner()
+    backend = backend_from_config(make_backend(), runner=runner, host="admin@devbox.local")
+
+    translated = backend.translate_localhost_url(build_session(tmp_path), "http://acme.localhost:3000/x?y=1")
+
+    assert translated == "http://acme.localhost:3000/x?y=1"
+    [(argv, _cwd, _stdin)] = runner.calls
+    assert argv[-4:] == ("-L", "[::1]:3000:localhost:3000", "admin@devbox.local", "true")
+
+
+def test_remote_backend_translate_forwards_to_the_port_translated_port(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    runner = SequencedRunner(script=[(0, "35231\n", ""), (0, "", "")])
+    backend = backend_from_config(
+        make_backend(port_translate=("compose port devcontainer {port}",)),
+        runner=runner,
+        host="devbox",
+    )
+
+    translated = backend.translate_localhost_url(build_session(tmp_path), "http://localhost:3000/")
+
+    assert translated == "http://localhost:35231/"
+    assert runner.calls[1][0][-4:] == ("-L", "[::1]:35231:localhost:35231", "devbox", "true")
+
+
+def test_remote_backend_translate_applies_host_translate_over_the_forward(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    runner = SequencedRunner(script=[(0, "platform.localhost\n", ""), (0, "", "")])
+    backend = backend_from_config(
+        make_backend(host_translate=("echo platform.localhost",)),
+        runner=runner,
+        host="devbox",
+    )
+
+    translated = backend.translate_localhost_url(build_session(tmp_path), "http://localhost:3000/")
+
+    assert translated == "http://platform.localhost:3000/"
+
+
+def test_remote_backend_translate_forwards_the_scheme_default_port(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    runner = RecordingRunner()
+    backend = backend_from_config(make_backend(), runner=runner, host="devbox")
+
+    translated = backend.translate_localhost_url(build_session(tmp_path), "https://localhost/")
+
+    assert translated == "https://localhost:443/"
+    assert runner.calls[0][0][-4:] == ("-L", "[::1]:443:localhost:443", "devbox", "true")
+
+
+def test_remote_backend_translate_skips_non_localhost(tmp_path: Path) -> None:
+    runner = RecordingRunner()
+    backend = backend_from_config(make_backend(), runner=runner, host="devbox")
+
+    assert backend.translate_localhost_url(build_session(tmp_path), "https://example.com/") == "https://example.com/"
+    assert runner.calls == []
+
+
 # --- backend_from_config wiring -------------------------------------------
 
 

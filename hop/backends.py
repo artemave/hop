@@ -23,12 +23,16 @@ from hop.config import (
 )
 from hop.errors import HopError
 from hop.exit_status import run_reporting_exit_status
+from hop.port_forward import forward_remote_port
 from hop.session import ProjectSession
 
 # Sentinel hostnames that, inside a non-host backend's network namespace, all
 # refer to "this session's local interface" — i.e. the value the kitten dispatch
-# may need to translate before handing the URL to the host's browser.
+# may need to translate before handing the URL to the host's browser. Any
+# ``*.localhost`` name counts too (``is_localhost_host``).
 LOCALHOST_HOSTS = frozenset({"localhost", "127.0.0.1", "0.0.0.0"})
+
+_DEFAULT_PORTS = {"http": 80, "https": 443}
 
 # Fallback shell snippet used when wrapping an empty command through a
 # interactive_prefix. The outer sh expands ${SHELL:-sh} before the prefix exec
@@ -356,12 +360,16 @@ def local_transport(command: str) -> tuple[str, ...]:
     return ("sh", "-c", command)
 
 
+def is_localhost_host(hostname: str) -> bool:
+    return hostname in LOCALHOST_HOSTS or hostname.endswith(".localhost")
+
+
 def _substitution_host(host: str | None) -> str:
     """The ``{host}`` value — the bare hostname, or ``localhost`` when local.
 
     Strips any ``user@`` from the ssh target (``admin@devbox.local`` →
     ``devbox.local``): the transport uses the full target, but ``{host}`` stands
-    for the externally-reachable hostname (``LOCAL_HOSTNAME``, host translation).
+    for the externally-reachable hostname (``LOCAL_HOSTNAME``).
     """
 
     if host is None:
@@ -529,8 +537,8 @@ class CommandBackend:
     def _host(self) -> str:
         # The value substituted for ``{host}`` — the externally-reachable
         # *hostname*, not the ssh target: a user passes ``admin@devbox.local`` to
-        # ``hop ssh`` but ``LOCAL_HOSTNAME={host}`` / ``host_translate = "echo
-        # {host}"`` want ``devbox.local`` (the name a browser or the app uses).
+        # ``hop ssh`` but ``LOCAL_HOSTNAME={host}`` wants ``devbox.local`` (the
+        # name a browser or the app uses).
         return _substitution_host(self.host)
 
     @property
@@ -590,42 +598,49 @@ class CommandBackend:
         return f"{substituted_prefix} {_login_wrap(substituted)}"
 
     def translate_localhost_url(self, session: ProjectSession, url: str) -> str:
-        if self.host_translate_command is None and self.port_translate_command is None:
-            return url
-
         parts = urlsplit(url)
-        if (parts.hostname or "") not in LOCALHOST_HOSTS:
+        hostname = parts.hostname or ""
+        if not is_localhost_host(hostname):
             return url
-
-        new_host = parts.hostname or ""
-        new_port: int | None = parts.port
+        if self.host is None and self.host_translate_command is None and self.port_translate_command is None:
+            return url
 
         if self.host_translate_command is not None:
-            new_host = self._run_translate(
+            hostname = self._run_translate(
                 self.host_translate_command,
                 session=session,
                 port=parts.port,
                 kind="host_translate",
             )
-
+        port = parts.port
         if self.port_translate_command is not None:
-            translated_port = self._run_translate(
-                self.port_translate_command,
-                session=session,
-                port=parts.port,
-                kind="port_translate",
+            port = self._translated_port(self.port_translate_command, session=session, port=port)
+        if self.host is not None:
+            port = forward_remote_port(
+                self.host,
+                port if port is not None else _DEFAULT_PORTS[parts.scheme],
+                runner=self.runner,
+                ssh_options=default_ssh_options(),
             )
-            try:
-                new_port = int(translated_port)
-            except ValueError as exc:
-                msg = (
-                    f"backend {self.name!r} port_translate returned non-numeric output "
-                    f"{translated_port!r} for {session.session_name!r}"
-                )
-                raise SessionBackendError(msg) from exc
 
-        netloc = _rebuild_netloc(parts, host=new_host, port=new_port)
+        netloc = _rebuild_netloc(parts, host=hostname, port=port)
         return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
+
+    def _translated_port(self, steps: tuple[str, ...], *, session: ProjectSession, port: int | None) -> int:
+        translated_port = self._run_translate(
+            steps,
+            session=session,
+            port=port,
+            kind="port_translate",
+        )
+        try:
+            return int(translated_port)
+        except ValueError as exc:
+            msg = (
+                f"backend {self.name!r} port_translate returned non-numeric output "
+                f"{translated_port!r} for {session.session_name!r}"
+            )
+            raise SessionBackendError(msg) from exc
 
     def _run_translate(
         self,

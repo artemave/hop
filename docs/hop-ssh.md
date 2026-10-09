@@ -54,16 +54,36 @@ a same-named local project.
 activate              = "test -f docker-compose.dev.yml"
 interactive_prefix    = "podman-compose -f docker-compose.dev.yml exec devcontainer"
 noninteractive_prefix = "podman-compose -f docker-compose.dev.yml exec -T devcontainer"
-# Host-dependent values use {host} (= localhost locally, the remote hostname over ssh):
-host_translate        = "echo {host}"   # so localhost URLs open against the remote
 ```
 
-- **`host_translate = "echo {host}"`** is what makes the open-selection kitten /
-  `hop open` translate a `localhost:PORT` URL printed by a remote service into
-  `<remote-host>:PORT` for your laptop browser. Pair it with `port_translate` to
-  map the published container port.
-- **`{host}`** is the bare hostname (the `user@` is stripped), suitable for
-  `LOCAL_HOSTNAME={host}` and `host_translate`.
+- **`{host}`** is the bare hostname (the `user@` is stripped) — `localhost`
+  locally, the remote hostname over ssh — suitable for host-dependent values like
+  `LOCAL_HOSTNAME={host}`.
+
+## Opening the remote's URLs
+
+When the open-selection kitten or `hop open` dispatches a `localhost` /
+`127.0.0.1` / `0.0.0.0` / `*.localhost` URL from a remote session, hop forwards a
+laptop loopback port to the remote's `localhost:<port>` over the session's ssh
+connection (`ssh -L`) and opens the URL on the laptop's end of it:
+
+- **The host stays as printed.** Browsers resolve `*.localhost` to loopback on
+  their own, so `http://acme.localhost:3000` reaches a subdomain-routed app with
+  its original `Host` header — no DNS or `/etc/hosts` on either side, and the
+  remote's port needn't be reachable from the laptop's network.
+- **The port is the same when it's free on the laptop.** If something on the
+  laptop already holds it, hop picks a free port and opens the URL on that one
+  (`http://acme.localhost:41733`). The choice is remembered, so later opens of the
+  same remote port land on the same laptop port and keep their cookies.
+- **`port_translate` picks the remote port.** For a container on the remote, the
+  recipe's `port_translate` (the published port, see the
+  [devcontainer recipe](devcontainer.md)) is what the forward connects to.
+- **`host_translate` applies on top** for an app that wants a specific name —
+  `echo platform.localhost` turns `localhost:3000` into
+  `platform.localhost:<forwarded port>`.
+
+Forwards live on the per-host ssh master and go away with it; the next open
+re-adds them.
 
 ## Requirements on the remote
 
@@ -154,11 +174,11 @@ ssh -o ControlPath="$XDG_RUNTIME_DIR/hop/cm-%r@%h:%p" -O exit <host>
 hop ssh <host>
 ```
 
-### A translated URL opens but doesn't load
+### A forwarded URL opens but doesn't load
 
-That's networking, not hop: the remote service's port must be reachable from the
-laptop — published on the remote's external interface (not just `127.0.0.1`), not
-firewalled, and the hostname must resolve in the browser.
+The forward connects to `localhost:<port>` *on the remote host*, so the service
+must be listening there. A port that only exists inside a container needs
+publishing on the remote (and `port_translate` to name the published port).
 
 ## See also
 

@@ -185,8 +185,8 @@ Backend fields:
 - `activate` (optional) - auto-detect probe. Backends without `activate` can only be picked by name.
 - `prepare` (optional, string or list) - command(s) run once at session creation, before launching kitty. Should be idempotent. List form runs steps sequentially and aborts on the first failure.
 - `teardown` (optional, string or list) - command(s) run at `hop kill` after closing windows.
-- `port_translate` (optional, string or list) - command(s) run lazily by the `kitten/hints` kitten when it dispatches a `localhost` / `127.0.0.1` / `0.0.0.0` URL. The last step's stdout is the host-reachable port that should replace the URL's port. `{port}` is substituted with the URL's original port.
-- `host_translate` (optional, string or list) - command(s) run lazily for the same set of localhost URLs. The last step's stdout is the hostname that should replace `localhost` / `127.0.0.1` / `0.0.0.0` in the URL.
+- `port_translate` (optional, string or list) - command(s) run lazily by the `kitten/hints` kitten when it dispatches a `localhost` / `127.0.0.1` / `0.0.0.0` / `*.localhost` URL. The last step's stdout is the host-reachable port that should replace the URL's port. `{port}` is substituted with the URL's original port.
+- `host_translate` (optional, string or list) - command(s) run lazily for the same set of localhost URLs. The last step's stdout is the hostname that should replace the URL's host (e.g. `echo platform.localhost` for an app routed by subdomain).
 - `interactive_prefix` (required) - shell snippet prepended to every window command launched in this backend's environment. Empty for the implicit host backend.
 - `noninteractive_prefix` (required) - prefix hop uses for non-interactive backend operations like file-existence checks. Backends that allocate a TTY by default (podman-compose exec) must set the no-TTY variant (e.g. `... exec -T devcontainer`); backends that don't (ssh) pass the same string as `interactive_prefix`. The implicit `host` backend ships with both prefixes set to `""` (empty).
 
@@ -336,7 +336,7 @@ The browser is the one window that isn't a kitty terminal. hop doesn't own the p
 
 - **Inactive by default** - the only built-in role that is. `[windows.browser] activate = "true"` turns it on for a config.
 - **The default command is xdg-detected** from the default browser's desktop entry. `[windows.browser] command = "..."` overrides the detection.
-- **It always runs on the host**, even when the session's backend is a container or a remote machine. `hop open <url>` runs a URL through the backend's [`port_translate` / `host_translate`](#backend-example) first, so `http://localhost:3000` inside the container becomes the host-reachable address.
+- **It always runs on the host**, even when the session's backend is a container or a remote machine. `hop open <url>` runs a URL through the backend's [`port_translate` / `host_translate`](#backend-example) first, so `http://localhost:3000` inside the container becomes the host-reachable address. In a [remote session](docs/hop-ssh.md#opening-the-remotes-urls) hop also forwards the port over ssh.
 - **`hop browser [<url>]`** focuses the session's browser window, creating it if there is none, and moves it back onto `s:<session>` if it drifted. With a URL, the URL goes to that window.
 
 #### When the browser restarts
