@@ -4,8 +4,11 @@ from typing import Iterable, Iterator
 
 import pytest
 
-from hop.kitten.dispatch import LOGGER_NAME
+from hop.kitten.dispatch import LOGGER_NAME, dispatch_selected_match
 from hop.kitten.hints import main
+from hop.kitty import session_socket_address
+from hop.session import resolve_project_session
+from hop.state import CommandBackendRecord, record_session
 
 
 @pytest.fixture(autouse=True)
@@ -229,6 +232,45 @@ def test_handle_result_passes_none_listen_on_when_boss_lacks_socket() -> None:
         main.dispatch_selected_match = original_dispatch
 
     assert dispatched == [("app/models/user.rb:12", "/work", None)]
+
+
+class ErrorRecordingBoss:
+    def __init__(self) -> None:
+        self.errors: list[tuple[str, str]] = []
+
+    def show_error(self, title: str, msg: str) -> None:
+        self.errors.append((title, msg))
+
+
+@pytest.mark.parametrize(
+    ("host_translate", "expected_error"),
+    [
+        ("echo 'no such container' >&2; exit 1", "host_translate failed for 'demo': no such container"),
+        ("true", "host_translate returned empty output for 'demo'"),
+    ],
+)
+def test_dispatch_shows_translate_failure_in_kitty(tmp_path: Path, host_translate: str, expected_error: str) -> None:
+    session_root = tmp_path / "demo"
+    session_root.mkdir()
+    record_session(
+        resolve_project_session(session_root),
+        backend=CommandBackendRecord(
+            name="devcontainer",
+            interactive_prefix="",
+            noninteractive_prefix="",
+            host_translate_command=(host_translate,),
+        ),
+    )
+    boss = ErrorRecordingBoss()
+
+    dispatch_selected_match(
+        "http://localhost:3000/",
+        source_cwd=str(session_root),
+        listen_on=session_socket_address("demo"),
+        boss=boss,
+    )
+
+    assert boss.errors == [("hop", f"backend 'devcontainer' {expected_error}")]
 
 
 def _mark_factory(index: int, start: int, end: int, text: str, groupdict: dict[str, object]) -> dict[str, object]:

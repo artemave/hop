@@ -9,6 +9,7 @@ from typing import Any
 
 from hop.app import build_kitten_services
 from hop.commands.open_selection import open_selection_in_window
+from hop.errors import HopError
 
 LOGGER_NAME = "hop.open_selection"
 
@@ -54,6 +55,11 @@ def dispatch_selected_match(
             browser=services.browser,
             session_backend_for=services.session_backends.for_session,
         )
+    except HopError as error:
+        # Raising out of a kitten's open_url handler makes kitty open the raw
+        # ``hop://`` link in the browser; from hints it's silently dropped.
+        log.error("dispatch failed for selection=%r: %s", selection, error)
+        boss.show_error("hop", str(error))
     except Exception:
         log.error("dispatch raised for selection=%r:\n%s", selection, traceback.format_exc())
         raise
