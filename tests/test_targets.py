@@ -319,6 +319,19 @@ def test_existing_visible_output_targets_keeps_colons_inside_file_names() -> Non
     assert matches == [VisibleOutputMatch(start=0, end=len(name), selection=name)]
 
 
+def test_existing_visible_output_targets_never_offers_bare_punctuation() -> None:
+    asked: list[list[str]] = []
+
+    def paths_exist(candidates: list[str]) -> set[str]:
+        asked.append(candidates)
+        return set(candidates)
+
+    matches = existing_visible_output_targets(". .. / ./ ./bin foo.rb:.", paths_exist)
+
+    assert [m.selection for m in matches] == ["./bin", "foo.rb:."]
+    assert asked == [["./bin", "foo.rb:.", "foo.rb"]]
+
+
 def test_existing_visible_output_targets_picks_the_existing_colon_separated_parts() -> None:
     asked: list[list[str]] = []
 

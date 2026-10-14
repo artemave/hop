@@ -41,6 +41,8 @@ VISIBLE_OUTPUT_TARGET_PATTERN = re.compile(
 
 _PYTHON_TRACEBACK_LINE_SUFFIX = re.compile(r'",\s+line\s+(\d+)$')
 
+_NAMES_SOMETHING = re.compile(r"\w")
+
 RAILS_REFERENCE_PATTERN = re.compile(
     r"^(?:Processing\s+)?(?P<controller>[A-Z][A-Za-z0-9_:]*Controller)#(?P<action>[A-Za-z_][A-Za-z0-9_]*)$"
 )
@@ -261,6 +263,7 @@ def _colon_delimited_parts(text: str, match: VisibleOutputMatch) -> list[Visible
         VisibleOutputMatch(start=start, end=end, selection=_without_row_breaks(text[start:end]))
         for first, start in enumerate(starts)
         for end in ends[first:]
+        if _NAMES_SOMETHING.search(text, start, end)
     ]
     return sorted(parts, key=lambda p: p.start - p.end)
 
