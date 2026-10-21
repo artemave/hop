@@ -14,7 +14,7 @@ import sys
 import threading
 import traceback
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from hop import bridge, debug
 from hop.app import SessionBackendRegistry
@@ -225,8 +225,8 @@ def _run_main_loop(scripts_dir: Path, *, hop_bin: str, hopd_bin: str) -> int:
             sway_socket=sway_socket,
         )
         debug.log("hopd: subscribed to workspace events")
-        for _event in sway.subscribe_to_workspace_events():
-            sweep_stale_persisted_sessions(sway=sway)
+        for event in sway.subscribe_to_workspace_events():
+            forget_destroyed_session(event)
             regenerate(
                 sway=sway,
                 sessions_loader=sessions_loader,
@@ -281,13 +281,25 @@ def sweep_stale_persisted_sessions(
 ) -> None:
     """Drop persisted state files whose `s:<name>` workspace is no longer alive.
 
-    The CLI's first-entry gate keys on kitty socket liveness, so stale state
-    is a tidiness concern rather than a correctness bug. Run on every
-    workspace event so that a session's state file disappears within one
-    event of the workspace being destroyed.
+    Startup only: catches workspaces destroyed while hopd was down. While
+    Sway has no outputs (monitors asleep, undocked) its workspaces sit on a
+    fallback output that ``get_workspaces`` doesn't list, so sweeping on
+    every event would forget every live session.
     """
     live_workspaces = set(sway.list_session_workspaces(prefix=SESSION_WORKSPACE_PREFIX))
     for name in sessions_loader():
         workspace = f"{SESSION_WORKSPACE_PREFIX}{name}"
         if workspace not in live_workspaces:
             forget(name)
+
+
+def forget_destroyed_session(
+    event: Mapping[str, Any],
+    *,
+    forget: Callable[[str], None] = forget_session,
+) -> None:
+    if event["change"] != "empty":
+        return
+    workspace = event["current"]["name"]
+    if workspace.startswith(SESSION_WORKSPACE_PREFIX):
+        forget(workspace.removeprefix(SESSION_WORKSPACE_PREFIX))

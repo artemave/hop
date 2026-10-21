@@ -409,6 +409,43 @@ def test_sweep_stale_persisted_sessions_forgets_sessions_with_no_live_workspace(
     assert forgotten == ["stale"]
 
 
+def test_daemon_keeps_session_state_while_sway_has_no_outputs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    regen_recorder: list[None],
+    stub_sessions: None,
+) -> None:
+    """With every output gone, Sway stops listing workspaces it still holds.
+    Only a workspace Sway actually destroys (an `empty` event) forgets a session."""
+    from hop.session import ProjectSession
+    from hop.state import load_sessions, record_session
+
+    for name in ("alive", "gone"):
+        record_session(ProjectSession(session_root=tmp_path, session_name=name, workspace_name=f"s:{name}"))
+
+    class _OutputsVanishAfterStartup(StubSubscribingSway):
+        def __init__(self, **kwargs: Any) -> None:
+            super().__init__(**kwargs)
+            self.listings = [("s:alive", "s:gone")]
+
+        def list_session_workspaces(self, *, prefix: str = "s:") -> tuple[str, ...]:
+            del prefix
+            return self.listings.pop() if self.listings else ()
+
+    sway = _OutputsVanishAfterStartup(
+        events=(
+            {"change": "move", "current": {"name": "s:alive"}},
+            {"change": "empty", "current": {"name": "scratch"}},
+            {"change": "empty", "current": {"name": "s:gone"}},
+        ),
+    )
+    monkeypatch.setattr(daemon, "SwayIpcAdapter", lambda: sway)
+
+    daemon.main([])
+
+    assert set(load_sessions()) == {"alive"}
+
+
 # --- daemon-down signaling ------------------------------------------------
 
 
