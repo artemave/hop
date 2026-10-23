@@ -122,10 +122,10 @@ best-effort.
 
 For nvim *inside a devcontainer* to call back (`hop open`, vigun's `hop run`), the
 recipe's `prepare` installs the in-container shim and the container surfaces the
-bridge socket. `hop ssh` reverse-forwards to `${XDG_RUNTIME_DIR}/hop/api.sock` —
-the same path hopd uses locally — so a compose file that already bind-mounts
-`${XDG_RUNTIME_DIR}` surfaces it into the container with no extra mount, and the
-recipe's `hop bridge shim --socket "$XDG_RUNTIME_DIR/hop/api.sock"` works local or
+bridge socket. `hop ssh` reverse-forwards to `${XDG_RUNTIME_DIR}/hop/bridge/api.sock` —
+the same path hopd uses locally — so a compose mount of
+`${XDG_RUNTIME_DIR}/hop/bridge` and the recipe's
+`hop bridge shim --socket "$XDG_RUNTIME_DIR/hop/bridge/api.sock"` work local or
 remote unchanged.
 
 ## Troubleshooting

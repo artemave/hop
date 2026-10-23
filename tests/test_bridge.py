@@ -537,12 +537,12 @@ def test_dispatcher_exception_returns_500(tmp_path: Path) -> None:
 
 def test_default_api_socket_path_uses_xdg_runtime_dir(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/42")
-    assert default_api_socket_path() == Path("/run/user/42/hop/api.sock")
+    assert default_api_socket_path() == Path("/run/user/42/hop/bridge/api.sock")
 
 
 def test_default_api_socket_path_falls_back_to_tmp(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
-    assert default_api_socket_path() == Path("/tmp/hop/api.sock")
+    assert default_api_socket_path() == Path("/tmp/hop/bridge/api.sock")
 
 
 def _run_shim(socket_path: Path, shim_path: Path, args: list[str]) -> subprocess.CompletedProcess[bytes]:

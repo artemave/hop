@@ -1945,7 +1945,7 @@ def test_execute_bridge_shim_prints_shim_to_stdout(tmp_path: Path, capsys: pytes
 
 def test_execute_bridge_shim_bakes_socket_flag_into_default(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     services = build_services().as_services()
-    custom_socket = "/run/user/1000/hop/api.sock"
+    custom_socket = "/run/user/1000/hop/bridge/api.sock"
 
     rc = execute_command(BridgeShimCommand(socket=custom_socket), cwd=tmp_path, services=services)
 

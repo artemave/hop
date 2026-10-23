@@ -207,31 +207,30 @@ Hop ships a small POSIX-sh client (no `socat`/`nc` dependency, just `curl`) that
 
 **a. Make the bridge socket reachable inside the container.**
 
-The host's bridge socket lives at `$XDG_RUNTIME_DIR/hop/api.sock`. Pick one of these patterns depending on what your compose already does:
+The host's bridge socket lives at `$XDG_RUNTIME_DIR/hop/bridge/api.sock`. Pick one of these patterns depending on what your compose already does:
 
-- **Recommended: bind-mount the `hop` runtime dir**, which carries just the bridge socket:
+- **Recommended: bind-mount the bridge dir**, which holds only the bridge socket:
 
   ```yaml
   services:
     devcontainer:
       volumes:
-        - "${XDG_RUNTIME_DIR}/hop:${XDG_RUNTIME_DIR}/hop"
+        - "${XDG_RUNTIME_DIR}/hop/bridge:${XDG_RUNTIME_DIR}/hop/bridge"
   ```
 
-  Then pass `--socket "$XDG_RUNTIME_DIR/hop/api.sock"` to `hop bridge shim` (see **c** below). A whole-`${XDG_RUNTIME_DIR}` mount also works but exposes far more than needed; the container needs only the bridge socket.
+  Then pass `--socket "$XDG_RUNTIME_DIR/hop/bridge/api.sock"` to `hop bridge shim` (see **c** below). A directory mount survives a `hopd` restart: the new socket appears in the same directory.
 - **Minimal: a single-file mount** of just the socket:
 
   ```yaml
   services:
     devcontainer:
       volumes:
-        - "${XDG_RUNTIME_DIR}/hop/api.sock:/run/hop.sock"
+        - "${XDG_RUNTIME_DIR}/hop/bridge/api.sock:/run/hop.sock"
   ```
 
-  `/run/hop.sock` is the shim's built-in default so it needs zero extra config. Caveat: a single-file bind mount pins an inode — if `hopd` restarts and recreates the socket, the container keeps looking at the dead one until it restarts too. The directory mount above survives a `hopd` restart.
-- **If your compose already bind-mounts all of `${XDG_RUNTIME_DIR}`**, the bridge socket is already there — no change needed.
+  `/run/hop.sock` is the shim's built-in default so it needs zero extra config. Caveat: a single-file bind mount pins an inode — if `hopd` restarts and recreates the socket, the container keeps looking at the dead one (the shim fails with `curl: (7) … Could not connect to server`) until the container restarts too. `hopd` must also be running when the container starts: if the socket doesn't exist at compose-up time, container runtimes create a directory at that path instead.
 
-> `hopd` must be running when the container starts (`exec hopd` in sway config; see the spec). If the host socket doesn't exist at compose-up time, container runtimes will create a directory at that path instead, and the bridge won't work — start `hopd` first, then `hop` your session.
+Don't mount `${XDG_RUNTIME_DIR}/hop` or all of `${XDG_RUNTIME_DIR}`. Besides the bridge, `${XDG_RUNTIME_DIR}/hop` holds every session's kitty remote-control socket, and with those the container can launch commands on the host.
 
 **b. Install the shim into the container at `prepare` time.**
 
@@ -250,20 +249,20 @@ prepare = """
 
 The `sudo` is necessary when the container's `exec` user isn't root — typical for dev container images that run as a `dev` user with passwordless sudo. If your container exec's as root by default, the `sudo` is a harmless no-op. If your container runs as a non-root user *without* sudo configured, install the shim to a user-writable path on `$PATH` instead (e.g. `~/.local/bin/hop`) and adjust accordingly.
 
-**c. Point the shim at the host's runtime path when the container shares `$XDG_RUNTIME_DIR`.**
+**c. Point the shim at the host's socket path when the container mounts the bridge dir.**
 
-If you took the no-compose-change route above (the bridge socket is reachable at the *host's* `$XDG_RUNTIME_DIR/hop/api.sock` path inside the container), pass `--socket` to bake that path in as the shim's default:
+With the bridge-dir mount above (the bridge socket is reachable at the *host's* `$XDG_RUNTIME_DIR/hop/bridge/api.sock` path inside the container), pass `--socket` to bake that path in as the shim's default:
 
 ```toml
 prepare = """
   podman-compose -f docker-compose.dev.yml up -d devcontainer \\
-  && hop bridge shim --socket "$XDG_RUNTIME_DIR/hop/api.sock" \\
+  && hop bridge shim --socket "$XDG_RUNTIME_DIR/hop/bridge/api.sock" \\
        | podman-compose -f docker-compose.dev.yml exec -T devcontainer \\
          sudo install -m 755 /dev/stdin /usr/local/bin/hop
 """
 ```
 
-`$XDG_RUNTIME_DIR` is expanded on the **host** before `hop bridge shim` runs, so the resulting shim has the literal path (e.g. `/run/user/1000/hop/api.sock`) baked in as its default. The shim still honors `$HOP_SOCKET` at run time if you ever need to override.
+`$XDG_RUNTIME_DIR` is expanded on the **host** before `hop bridge shim` runs, so the resulting shim has the literal path (e.g. `/run/user/1000/hop/bridge/api.sock`) baked in as its default. The shim still honors `$HOP_SOCKET` at run time if you ever need to override.
 
 **d. Verify.**
 

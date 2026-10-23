@@ -56,8 +56,8 @@ from hop.commands import (
         (["kill"], KillCommand()),
         (["bridge", "shim"], BridgeShimCommand()),
         (
-            ["bridge", "shim", "--socket", "/run/user/1000/hop/api.sock"],
-            BridgeShimCommand(socket="/run/user/1000/hop/api.sock"),
+            ["bridge", "shim", "--socket", "/run/user/1000/hop/bridge/api.sock"],
+            BridgeShimCommand(socket="/run/user/1000/hop/bridge/api.sock"),
         ),
         (["path", "kitten/hints"], PathCommand(name="kitten/hints")),
         (["path", "sway/term-or-kitty"], PathCommand(name="sway/term-or-kitty")),

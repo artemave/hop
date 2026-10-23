@@ -475,7 +475,7 @@ Activated entries in vicinae dispatch via `hop browser` (browser role), `hop ter
 
 ## Bridge acceptor
 
-`hopd` listens on a per-user unix socket at `$XDG_RUNTIME_DIR/hop/api.sock` so editor plugins running inside non-host backends (devcontainer, ssh) can dispatch `hop` CLI calls back to the host. The host is always the authority — backends never carry hop state.
+`hopd` listens on a per-user unix socket at `$XDG_RUNTIME_DIR/hop/bridge/api.sock` — alone in its directory, so a backend can bind-mount the directory without seeing the kitty sockets in `$XDG_RUNTIME_DIR/hop` — so editor plugins running inside non-host backends (devcontainer, ssh) can dispatch `hop` CLI calls back to the host. The host is always the authority — backends never carry hop state.
 
 Wire protocol — HTTP/1.0 over `AF_UNIX`:
 
@@ -490,7 +490,7 @@ The acceptor dispatches by request shape:
 
   The session record is then looked up in `$XDG_RUNTIME_DIR/hop/sessions/<name>.json`; the `hop` subprocess is spawned with `cwd` set to that session's `session_root`. Bridge calls from windows that are not on a `s:<session>` workspace are rejected with `400`.
 
-Dispatch is via subprocess (`python -m hop <argv>`) per request. Output is buffered before the response is written; streaming is out of scope. The protocol is curl-compatible — `curl --unix-socket $XDG_RUNTIME_DIR/hop/api.sock --data-binary @- http://_/call < argv.nul` is sufficient to drive it from the host, which is also how the host-side test suite exercises it.
+Dispatch is via subprocess (`python -m hop <argv>`) per request. Output is buffered before the response is written; streaming is out of scope. The protocol is curl-compatible — `curl --unix-socket $XDG_RUNTIME_DIR/hop/bridge/api.sock --data-binary @- http://_/call < argv.nul` is sufficient to drive it from the host, which is also how the host-side test suite exercises it.
 
 ### Shim
 
@@ -502,7 +502,7 @@ hop bridge shim [--socket PATH]
 
 Backends install it into the backend's filesystem at the path `hop` (typically `/usr/local/bin/hop`); inside the backend it forwards argv to the host acceptor and demultiplexes the response into stdout, stderr, and an exit code. Required backend-side tools: `curl`, `awk`, `base64`, `tr`, `mktemp` — coreutils-universal or near-universal in dev container base images.
 
-The shim's socket path is `${HOP_SOCKET:-<default>}`. `<default>` is `/run/hop.sock` unless overridden at print time via `hop bridge shim --socket <path>` — useful when a recipe already shares the host's `$XDG_RUNTIME_DIR` into the backend and wants the bridge socket to "just work" without changing the backend's environment. The shim's ssh host is likewise `${HOP_SSH_HOST:-<default>}`, baked empty by default and to the real host by `hop ssh` (see *Remote session setup*).
+The shim's socket path is `${HOP_SOCKET:-<default>}`. `<default>` is `/run/hop.sock` unless overridden at print time via `hop bridge shim --socket <path>` — useful when a recipe bind-mounts the host's `$XDG_RUNTIME_DIR/hop/bridge` into the backend at the same path and wants the bridge socket to "just work" without changing the backend's environment. The shim's ssh host is likewise `${HOP_SSH_HOST:-<default>}`, baked empty by default and to the real host by `hop ssh` (see *Remote session setup*).
 
 Per-backend recipes (compose volume mount for devcontainer; ssh `-R` for the ssh backend) along with the `prepare`-time shim install live in the recipe guides under `docs/`.
 

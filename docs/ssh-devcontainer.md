@@ -51,7 +51,7 @@ prepare = [
   # 1. ControlMaster + bring the container up.
   "ssh -o ControlMaster=auto -o ControlPath=~/.ssh/cm-%r@%h:%p -o ControlPersist=600 -o ServerAliveInterval=60 admin@devbox.local 'touch $XDG_RUNTIME_DIR/hop-wayland-stub; PATH=/home/linuxbrew/.linuxbrew/bin:$PATH SSH_AUTH_SOCK=$XDG_RUNTIME_DIR/gcr/ssh WAYLAND_DISPLAY=hop-wayland-stub podman-compose -f ~/projects/thonon-les-pains/docker-compose.dev.yml up -d --wait devcontainer'",
   # 2. Reverse-forward the hopd bridge socket onto the master.
-  "ssh -O cancel -o ControlPath=~/.ssh/cm-%r@%h:%p -R /run/user/1001/hop.sock:$XDG_RUNTIME_DIR/hop/api.sock admin@devbox.local 2>/dev/null; ssh -o ControlPath=~/.ssh/cm-%r@%h:%p admin@devbox.local 'rm -f /run/user/1001/hop.sock'; ssh -O forward -o ControlPath=~/.ssh/cm-%r@%h:%p -R /run/user/1001/hop.sock:$XDG_RUNTIME_DIR/hop/api.sock admin@devbox.local",
+  "ssh -O cancel -o ControlPath=~/.ssh/cm-%r@%h:%p -R /run/user/1001/hop.sock:$XDG_RUNTIME_DIR/hop/bridge/api.sock admin@devbox.local 2>/dev/null; ssh -o ControlPath=~/.ssh/cm-%r@%h:%p admin@devbox.local 'rm -f /run/user/1001/hop.sock'; ssh -O forward -o ControlPath=~/.ssh/cm-%r@%h:%p -R /run/user/1001/hop.sock:$XDG_RUNTIME_DIR/hop/bridge/api.sock admin@devbox.local",
   # 3. Install kitten so hop's implicit shell integration works (see §7).
   "curl -fsSL https://github.com/kovidgoyal/kitty/releases/latest/download/kitten-linux-amd64 | ssh -o ControlPath=~/.ssh/cm-%r@%h:%p admin@devbox.local 'PATH=/home/linuxbrew/.linuxbrew/bin:$PATH SSH_AUTH_SOCK=$XDG_RUNTIME_DIR/gcr/ssh podman-compose -f ~/projects/thonon-les-pains/docker-compose.dev.yml exec -T devcontainer sudo install -m 755 /dev/stdin /usr/local/bin/kitten'",
   # 4. Install the hop bridge shim as in-container `hop`.
@@ -147,7 +147,7 @@ clipboard integration, you can drop that mount (and the stub) entirely: image
 paste is <kbd>Ctrl-V</kbd> → hop's paste kitten, which reads the clipboard
 on the *host* and pushes the file into the container over the backend command
 channel — no compositor socket in the container. Narrow the runtime-dir mount
-to just `${XDG_RUNTIME_DIR}/hop/` (it only needs to carry the bridge socket).
+to just `${XDG_RUNTIME_DIR}/hop/bridge/` (it only needs to carry the bridge socket).
 Also make sure the container doesn't inherit a stale `DISPLAY` / `WAYLAND_DISPLAY`
 — an unreachable value hangs tools that probe it.
 

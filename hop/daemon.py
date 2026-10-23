@@ -112,7 +112,7 @@ def _start_bridge_acceptor(sway: SwayIpcAdapter) -> None:
     """Spin up the bridge acceptor in a daemon thread.
 
     Bridge calls (editor plugins inside devcontainer/ssh backends) hit a
-    unix socket under ``$XDG_RUNTIME_DIR/hop`` and dispatch back to the
+    unix socket under ``$XDG_RUNTIME_DIR/hop/bridge`` and dispatch back to the
     host hop. The thread is a daemon thread so it dies when ``hopd``
     exits — no explicit shutdown handshake.
     """

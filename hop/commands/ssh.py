@@ -49,12 +49,11 @@ Exec = Callable[[str, tuple[str, ...]], None]
 def remote_bridge_socket(host: str, *, runner: SubprocessRunner) -> str:
     """Resolve where to reverse-forward hopd's socket on the remote.
 
-    ``${XDG_RUNTIME_DIR}/hop/api.sock`` — the *same relative path* hopd listens
-    on locally (``bridge.default_api_socket_path``), placed under the runtime
-    dir so (1) a recipe's ``--socket "$XDG_RUNTIME_DIR/hop/api.sock"`` resolves
-    identically whether the session is local or remote, and (2) a devcontainer
-    that already bind-mounts the host runtime dir surfaces the bridge socket
-    into the container with *no extra compose mount*. The path must be concrete:
+    ``${XDG_RUNTIME_DIR}/hop/bridge/api.sock`` — the *same relative path* hopd
+    listens on locally (``bridge.default_api_socket_path``), so a recipe's
+    ``--socket "$XDG_RUNTIME_DIR/hop/bridge/api.sock"`` and a compose mount of
+    ``${XDG_RUNTIME_DIR}/hop/bridge`` resolve identically whether the session is
+    local or remote. The path must be concrete:
     ``ssh -R`` binds a literal remote path and doesn't expand remote env, and
     ``hop ssh`` runs on the host — so query the remote's ``XDG_RUNTIME_DIR`` over
     a throwaway connection (``ControlPath=none`` so it doesn't become the master
@@ -64,7 +63,7 @@ def remote_bridge_socket(host: str, *, runner: SubprocessRunner) -> str:
     argv = ("ssh", "-o", "ControlMaster=no", "-o", "ControlPath=none", host, 'printf %s "${XDG_RUNTIME_DIR}"')
     result = runner(argv, text=True, capture_output=True, check=False)
     runtime = (result.stdout or "").strip() or _FALLBACK_REMOTE_RUNTIME
-    return f"{runtime}/hop/api.sock"
+    return f"{runtime}/hop/bridge/api.sock"
 
 
 def ssh_remote_argv(host: str, command: str) -> tuple[str, ...]:

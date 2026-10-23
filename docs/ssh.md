@@ -92,7 +92,7 @@ prepare               = """
   ssh -o ControlMaster=auto -o ControlPath=~/.ssh/cm-%r@%h:%p -o ControlPersist=600 \\
       -o ServerAliveInterval=60 \\
       -o StreamLocalBindUnlink=yes \\
-      -R /run/hop.sock:$XDG_RUNTIME_DIR/hop/api.sock \\
+      -R /run/hop.sock:$XDG_RUNTIME_DIR/hop/bridge/api.sock \\
       myhost true \\
   && hop bridge shim | ssh -o ControlPath=~/.ssh/cm-%r@%h:%p myhost \\
        sudo install -m 755 /dev/stdin /usr/local/bin/hop
@@ -104,7 +104,7 @@ host_translate        = "echo myhost"
 
 The bridge-specific pieces of `prepare`:
 
-- **`-R /run/hop.sock:$XDG_RUNTIME_DIR/hop/api.sock`** — reverse-forwards the host's bridge socket to `/run/hop.sock` on the remote. The shim's default `HOP_SOCKET` is `/run/hop.sock`, so this needs no in-shim config.
+- **`-R /run/hop.sock:$XDG_RUNTIME_DIR/hop/bridge/api.sock`** — reverse-forwards the host's bridge socket to `/run/hop.sock` on the remote. The shim's default `HOP_SOCKET` is `/run/hop.sock`, so this needs no in-shim config.
 - **`-o StreamLocalBindUnlink=yes`** — tells the remote sshd to unlink any stale socket at the bind path before creating the new one. Without this, a second `ssh -R` after an unclean session leaves the prior socket and fails. Requires `StreamLocalBindUnlink=yes` to also be enabled in the remote `sshd_config` for SocketAddrPath bindings outside the user's runtime dir; if your sysadmin won't enable that, pick a per-user path like `$HOME/.hop-api.sock` on the remote and set `HOP_SOCKET` to match (e.g. via `~/.ssh/environment` or by exporting it from the shell's profile).
 - **`hop bridge shim | ssh … sudo install -m 755 /dev/stdin /usr/local/bin/hop`** — pipes the shim script through the same ssh ControlMaster and writes it to `/usr/local/bin/hop` with the executable bit set. `sudo` is needed because `/usr/local/bin/` is typically root-owned; if your login user can write there, or you'd rather install to `~/.local/bin/hop`, drop the sudo and adjust accordingly. Idempotent; re-runs just rewrite the same content.
 

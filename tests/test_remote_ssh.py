@@ -399,14 +399,14 @@ def test_remote_bridge_socket_forwards_under_the_remote_runtime_dir() -> None:
         assert "ControlPath=none" in args  # throwaway, not the master
         return CompletedProcess(args=list(args), returncode=0, stdout="/run/user/1001", stderr="")
 
-    assert remote_bridge_socket("devbox", runner=runner) == "/run/user/1001/hop/api.sock"
+    assert remote_bridge_socket("devbox", runner=runner) == "/run/user/1001/hop/bridge/api.sock"
 
 
 def test_remote_bridge_socket_falls_back_when_no_runtime_dir() -> None:
     def runner(args: Sequence[str], **kwargs: object) -> CompletedProcess[str]:
         return CompletedProcess(args=list(args), returncode=0, stdout="", stderr="")
 
-    assert remote_bridge_socket("devbox", runner=runner) == "/tmp/hop/api.sock"
+    assert remote_bridge_socket("devbox", runner=runner) == "/tmp/hop/bridge/api.sock"
 
 
 def _ssh_op(args: Sequence[str]) -> str | None:
@@ -429,13 +429,13 @@ def test_ssh_forward_argv_targets_the_master_control_socket() -> None:
     argv = ssh_forward_argv(
         "devbox",
         "forward",
-        remote_socket="/run/user/1001/hop/api.sock",
-        api_socket=Path("/run/user/1000/hop/api.sock"),
+        remote_socket="/run/user/1001/hop/bridge/api.sock",
+        api_socket=Path("/run/user/1000/hop/bridge/api.sock"),
     )
 
     assert _ssh_op(argv) == "forward"
     assert "-R" in argv
-    assert "/run/user/1001/hop/api.sock:/run/user/1000/hop/api.sock" in argv
+    assert "/run/user/1001/hop/bridge/api.sock:/run/user/1000/hop/bridge/api.sock" in argv
     assert argv[-1] == "devbox"
 
 
@@ -475,15 +475,16 @@ def test_run_hop_ssh_installs_shim_refreshes_forward_then_execs(tmp_path: Path) 
     assert _is_runtime_query(runs[0])
     assert "install -m 755 /dev/stdin" in runs[1][-1]
     assert _ssh_op(runs[2]) == "cancel"
-    assert runs[3][-1] == 'mkdir -p "$(dirname /run/user/1001/hop/api.sock)" && rm -f /run/user/1001/hop/api.sock'
+    remote_socket = "/run/user/1001/hop/bridge/api.sock"
+    assert runs[3][-1] == f'mkdir -p "$(dirname {remote_socket})" && rm -f {remote_socket}'
     assert _ssh_op(runs[4]) == "forward"
     # The forward (and the cancel) target the runtime-dir socket.
-    assert f"/run/user/1001/hop/api.sock:{socket}" in runs[4]
+    assert f"/run/user/1001/hop/bridge/api.sock:{socket}" in runs[4]
 
     shim = install_kwargs["input"]
     assert isinstance(shim, str)
     assert "${HOP_SSH_HOST:-devbox}" in shim
-    assert "${HOP_SOCKET:-/run/user/1001/hop/api.sock}" in shim
+    assert "${HOP_SOCKET:-/run/user/1001/hop/bridge/api.sock}" in shim
 
     assert execs == [("ssh", ssh_shell_argv("devbox"))]
 

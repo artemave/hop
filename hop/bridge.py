@@ -98,10 +98,16 @@ BRIDGE_SHIM = render_bridge_shim()
 
 
 def default_api_socket_path() -> Path:
-    """Canonical bridge socket path under ``$XDG_RUNTIME_DIR/hop``."""
+    """Canonical bridge socket path under ``$XDG_RUNTIME_DIR/hop/bridge``.
+
+    The socket gets a directory of its own so a container can bind-mount the
+    directory (surviving a hopd restart, which a single-file mount doesn't)
+    without also seeing the per-session kitty remote-control sockets that live
+    in ``$XDG_RUNTIME_DIR/hop``.
+    """
 
     base = os.environ.get("XDG_RUNTIME_DIR") or "/tmp"
-    return Path(base) / "hop" / "api.sock"
+    return Path(base) / "hop" / "bridge" / "api.sock"
 
 
 class BridgeError(Exception):
