@@ -11,13 +11,14 @@ https://github.com/user-attachments/assets/e20d8280-6a7e-4a13-ab6d-9540b74498ac
 
 Each project gets its own **hop session** - a dedicated Sway workspace identified by its working directory, holding the editor, terminals, and browser. hop also takes care of session lifecycle (prepare, teardown).
 
-A hop session is conceptually similar to a tmux session, but with a fundamentally different architecture: decoupled session and window management. hop separates two concerns that terminal multiplexers couple together, delegating window management to the actual system window manager.
+A hop session is conceptually similar to a tmux session, but with a fundamental difference: window management is left to the actual system window manager.
 
 This alone has a few practical consequences:
 
 - **Single window manager** - the same window manager covers session and non-session windows alike. Its normal shortcuts apply directly, with no second layered keymap or prefix key.
 - **GUI apps are part of the session** - sessions can include browsers and other GUI apps, not just terminals.
 - **No multiplexer in the way** - native terminal features work without lossy passthrough; system clipboard and scrollback are the real ones, not a copy-mode buffer.
+- **Agent notifications for free** - when a coding agent finishes or needs attention, its terminal bell makes the window manager mark the window as urgent. No special integrations or dashboards needed.
 
 ## Features
 
