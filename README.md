@@ -18,7 +18,6 @@ This alone has a few practical consequences:
 - **Single window manager** - the same window manager covers session and non-session windows alike. Its normal shortcuts apply directly, with no second layered keymap or prefix key.
 - **GUI apps are part of the session** - sessions can include browsers and other GUI apps, not just terminals.
 - **No multiplexer in the way** - native terminal features work without lossy passthrough; system clipboard and scrollback are the real ones, not a copy-mode buffer.
-- **Agent notifications for free** - when a coding agent finishes or needs attention, its terminal bell makes the window manager mark the window as urgent. No special integrations or dashboards needed.
 
 ## Features
 
