@@ -12,7 +12,7 @@ from typing import Any, Callable, Mapping, Protocol, Sequence, cast
 
 import hop
 from hop import debug
-from hop.backends import CommandBackend, SessionBackend
+from hop.backends import CommandBackend, SessionBackend, env_exports
 from hop.browser import session_browser_mark
 from hop.config import SHELL_ROLE, HopConfig
 from hop.errors import HopError
@@ -68,6 +68,7 @@ def session_kitty_overrides(config: HopConfig) -> tuple[str, ...]:
 # existing session. These are shells, not user commands, so they don't get
 # the "drop into shell on exit" composition that other roles do.
 ADHOC_SHELL_ROLE_PREFIX = "shell-"
+HOST_INTEGRATION_SHELL = "exec kitten run-shell"
 
 KITTY_LISTEN_ON_ENV_VAR = "KITTY_LISTEN_ON"
 KITTY_PROTOCOL_VERSION = (0, 39, 0)
@@ -485,8 +486,7 @@ class KittyRemoteControlAdapter:
         # process needs at least one window. Resolve the shell command from
         # the active layout/windows config (built-in default is "" → kitty's
         # platform-default shell on host).
-        shell_command = self._shell_command(session, backend)
-        shell_argv = list(backend.wrap(shell_command, session))
+        shell_argv = list(self._launch_args(session, backend=backend, role=role))
         if shell_argv:
             kitty_args.append("--")
             kitty_args.extend(shell_argv)
@@ -658,7 +658,7 @@ class KittyRemoteControlAdapter:
         # command from layouts / top-level windows. Ad-hoc roles like
         # `shell-2` aren't declared, so they fall back to the shell role's
         # command — preserving "ask for any role, get a shell" ergonomic.
-        args = list(self._launch_args(session, backend=backend))
+        args = list(self._launch_args(session, backend=backend, role=role))
         return {
             "args": args,
             "cwd": str(session.session_root),
@@ -679,13 +679,27 @@ class KittyRemoteControlAdapter:
         session: ProjectSession,
         *,
         backend: SessionBackend,
+        role: str,
     ) -> Sequence[str]:
         # Every terminal role launches the session shell. A role's own command
         # (server's ``bin/dev``, console's ``bin/rails console``) is typed into
         # that shell afterward via ``send-text`` (see ``_role_command_to_send``),
         # so it lands in shell history and runs with the interactive shell's
         # environment rather than being baked into the launch argv.
-        return backend.wrap(self._shell_command(session, backend), session)
+        shell = self._shell_command(session, backend)
+        env = self._role_env(session, role)
+        if env:
+            # Exported inside the backend, after login profiles, so the values
+            # reach containers and ssh hosts and win over profile defaults.
+            # kitty's native login shell can't take a prelude, hence run-shell.
+            shell = f"{env_exports(env, session=session)}; {shell or HOST_INTEGRATION_SHELL}"
+        return backend.wrap(shell, session)
+
+    def _role_env(self, session: ProjectSession, role: str) -> Mapping[str, str]:
+        # Ad-hoc ``shell-N`` windows are more of the shell role, env included.
+        lookup = SHELL_ROLE if role.startswith(ADHOC_SHELL_ROLE_PREFIX) else role
+        spec = find_window(self._session_windows_for(session), lookup)
+        return spec.env if spec is not None else {}
 
     def _shell_command(self, session: ProjectSession, backend: SessionBackend) -> str:
         # The shell every terminal window launches. An explicit

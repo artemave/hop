@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Callable, Mapping, Sequence
 
 from hop import debug
 from hop.backends import Transport, local_transport, substitute
@@ -14,6 +14,7 @@ from hop.config import (
     HopConfig,
     LayoutConfig,
     WindowConfig,
+    merge_env,
 )
 from hop.session import ProjectSession
 
@@ -59,6 +60,8 @@ class WindowSpec:
 
     ``position`` carries the role's sticky position verbatim from config
     (see ``WindowConfig``); ``None`` means unpositioned.
+
+    ``env`` is the role's extra environment, merged key-wise across layers.
     """
 
     role: str
@@ -67,6 +70,7 @@ class WindowSpec:
     open_keys: str | None = None
     open_keys_with_line: str | None = None
     position: int | None = None
+    env: Mapping[str, str] = field(default_factory=dict[str, str])
 
 
 def resolve_windows(
@@ -84,9 +88,12 @@ def resolve_windows(
     the same role:
 
     1. Built-in defaults (shell, editor, browser).
-    2. Each layout in declaration order whose ``activate`` probe exits 0,
-       contributing its windows in declaration order.
-    3. Top-level ``[windows.<role>]`` entries in declaration order.
+    2. Top-level ``[windows.<role>]`` entries.
+    3. Windows of each layout whose ``activate`` probe exits 0.
+
+    Windows are ordered by declaration, matched layouts' windows first.
+    ``merge_configs`` has already folded project top-level windows into
+    global layout windows, so a project entry still beats a global layout.
 
     A per-window ``activate`` is a shell probe (same shape as the layout-
     level one); the window auto-launches when it exits 0. Windows whose
@@ -122,15 +129,18 @@ def resolve_windows(
     for role, command, active, position in _BUILTIN_DEFAULTS:
         specs[role] = _MutableSpec(role=role, command=command, active=active, position=position)
 
-    declared_order: list[str] = []
-    for layout in config.layouts:
-        if not _layout_matches(layout, probe=probe):
-            continue
-        for window in layout.windows:
-            _apply_layout_window(window, specs=specs, declared_order=declared_order, probe=probe)
+    matched_layouts = [layout for layout in config.layouts if _layout_matches(layout, probe=probe)]
+    layout_windows = [window for layout in matched_layouts for window in layout.windows]
 
     for window in config.windows:
-        _apply_top_level_window(window, specs=specs, declared_order=declared_order, probe=probe)
+        _apply_top_level_window(window, specs=specs, probe=probe)
+    for window in layout_windows:
+        _apply_layout_window(window, specs=specs, probe=probe)
+
+    declared_order: list[str] = []
+    for window in (*layout_windows, *config.windows):
+        if window.role not in declared_order:
+            declared_order.append(window.role)
 
     final_order: list[str] = [SHELL_ROLE, EDITOR_ROLE]
     final_order.extend(role for role in declared_order if role not in (SHELL_ROLE, EDITOR_ROLE))
@@ -155,6 +165,7 @@ def resolve_windows(
                 open_keys=spec.open_keys,
                 open_keys_with_line=spec.open_keys_with_line,
                 position=spec.position if sticky_positions_enabled else None,
+                env=spec.env or {},
             )
         )
     _warn_duplicate_positions(result)
@@ -192,6 +203,7 @@ class _MutableSpec:
     open_keys: str | None = None
     open_keys_with_line: str | None = None
     position: int | None = None
+    env: Mapping[str, str] | None = None
 
 
 def _layout_matches(
@@ -213,11 +225,8 @@ def _apply_layout_window(
     window: WindowConfig,
     *,
     specs: dict[str, _MutableSpec],
-    declared_order: list[str],
     probe: Probe,
 ) -> None:
-    if window.role not in declared_order:
-        declared_order.append(window.role)
     existing = specs.get(window.role)
     active = _resolve_window_activate(window.activate, default=True, probe=probe)
     if existing is None:
@@ -228,6 +237,7 @@ def _apply_layout_window(
             open_keys=window.open_keys,
             open_keys_with_line=window.open_keys_with_line,
             position=window.position,
+            env=window.env,
         )
         return
     if window.command is not None:
@@ -239,17 +249,15 @@ def _apply_layout_window(
         existing.open_keys_with_line = window.open_keys_with_line
     if window.position is not None:
         existing.position = window.position
+    existing.env = merge_env(existing.env, window.env)
 
 
 def _apply_top_level_window(
     window: WindowConfig,
     *,
     specs: dict[str, _MutableSpec],
-    declared_order: list[str],
     probe: Probe,
 ) -> None:
-    if window.role not in declared_order:
-        declared_order.append(window.role)
     existing = specs.get(window.role)
     if existing is None:
         active = _resolve_window_activate(window.activate, default=True, probe=probe)
@@ -260,6 +268,7 @@ def _apply_top_level_window(
             open_keys=window.open_keys,
             open_keys_with_line=window.open_keys_with_line,
             position=window.position,
+            env=window.env,
         )
         return
     if window.command is not None:
@@ -272,6 +281,7 @@ def _apply_top_level_window(
         existing.open_keys_with_line = window.open_keys_with_line
     if window.position is not None:
         existing.position = window.position
+    existing.env = merge_env(existing.env, window.env)
 
 
 def _resolve_window_activate(

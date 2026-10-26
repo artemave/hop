@@ -21,6 +21,7 @@ from hop.backends import (
     UnknownBackendError,
     _StatusLine,  # pyright: ignore[reportPrivateUsage]
     backend_from_config,
+    env_exports,
     select_backend,
     stream_step,
 )
@@ -1359,3 +1360,49 @@ def test_default_runner_pipes_stdin_when_provided(tmp_path: Path) -> None:
 
     assert result.returncode == 0
     assert result.stdout.splitlines() == [str(existing)]
+
+
+# --- env_exports ---------------------------------------------------------
+
+
+def _exported(env: dict[str, str], session: ProjectSession, name: str) -> str:
+    script = f'{env_exports(env, session=session)}; printf %s "${name}"'
+    return subprocess.run(
+        ["sh", "-c", script], env={"HOME": "/home/me"}, capture_output=True, text=True, check=True
+    ).stdout
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("hello there", "hello there"),
+        ("$HOME/bin", "/home/me/bin"),
+        ('say "hi"', 'say "hi"'),
+        ("it's", "it's"),
+        ("\\$HOME", "$HOME"),
+    ],
+)
+def test_env_exports_values_behave_as_double_quoted_strings(tmp_path: Path, value: str, expected: str) -> None:
+    assert _exported({"V": value}, build_session(tmp_path), "V") == expected
+
+
+def test_env_exports_substitutes_session_root_literally(tmp_path: Path) -> None:
+    root = tmp_path / 'odd $dir "x" `y`'
+    session = build_session(root)
+
+    assert _exported({"V": "{session_root}/bin"}, session, "V") == f"{root}/bin"
+
+
+def test_env_exports_substitutes_bare_remote_host(tmp_path: Path) -> None:
+    session = ProjectSession(
+        session_root=tmp_path,
+        session_name="demo",
+        workspace_name="s:demo",
+        host="admin@devbox.local",
+    )
+
+    assert _exported({"V": "{host}:3000"}, session, "V") == "devbox.local:3000"
+
+
+def test_env_exports_joins_variables_in_order(tmp_path: Path) -> None:
+    assert env_exports({"A": "1", "B": "2"}, session=build_session(tmp_path)) == 'export A="1"; export B="2"'

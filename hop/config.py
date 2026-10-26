@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import os
+import re
 import tomllib
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, TypeVar, cast
 
@@ -43,6 +44,8 @@ BROWSER_ROLE = "browser"
 # accepts; we reject anything else at parse time.
 _WORKSPACE_LAYOUTS = frozenset({"splith", "splitv", "stacking", "tabbed"})
 
+_ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
 
 @dataclass(frozen=True, slots=True)
 class WindowConfig:
@@ -63,6 +66,9 @@ class WindowConfig:
     negative counts from the right (-1 = rightmost). ``None`` leaves the
     window unpositioned — it fills the middle, in creation order, rather
     than a fixed slot.
+
+    ``env`` holds extra environment variables exported in the window's
+    shell before it starts. Values are raw shell words.
     """
 
     role: str
@@ -71,6 +77,7 @@ class WindowConfig:
     open_keys: str | None = None
     open_keys_with_line: str | None = None
     position: int | None = None
+    env: Mapping[str, str] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -215,7 +222,7 @@ def merge_configs(project: HopConfig, global_: HopConfig) -> HopConfig:
     global_with_builtin = _layer_builtin_backends(global_)
     return HopConfig(
         backends=merge_backends(project, global_with_builtin),
-        layouts=merge_layouts(project, global_with_builtin),
+        layouts=merge_layouts(project, _overlay_project_windows(project, global_with_builtin)),
         windows=merge_windows(project, global_with_builtin),
         workspace_layout=(
             project.workspace_layout if project.workspace_layout is not None else global_with_builtin.workspace_layout
@@ -236,6 +243,27 @@ def merge_configs(project: HopConfig, global_: HopConfig) -> HopConfig:
             project.sticky_positions if project.sticky_positions is not None else global_with_builtin.sticky_positions
         ),
     )
+
+
+def _overlay_project_windows(project: HopConfig, global_: HopConfig) -> HopConfig:
+    """Fold project ``[windows.<role>]`` fields into same-role global layout windows.
+
+    The resolver lets a layout window beat a top-level one, but a project
+    top-level window must still beat a global layout window.
+    """
+
+    project_windows = {window.role: window for window in project.windows}
+    layouts = tuple(
+        replace(
+            layout,
+            windows=tuple(
+                _merge_window_pair(project_windows[window.role], window) if window.role in project_windows else window
+                for window in layout.windows
+            ),
+        )
+        for layout in global_.layouts
+    )
+    return replace(global_, layouts=layouts)
 
 
 def _layer_builtin_backends(global_: HopConfig) -> HopConfig:
@@ -382,7 +410,16 @@ def _merge_window_pair(project: WindowConfig, global_: WindowConfig) -> WindowCo
             project.open_keys_with_line if project.open_keys_with_line is not None else global_.open_keys_with_line
         ),
         position=project.position if project.position is not None else global_.position,
+        env=merge_env(global_.env, project.env),
     )
+
+
+def merge_env(base: Mapping[str, str] | None, override: Mapping[str, str] | None) -> Mapping[str, str] | None:
+    if base is None:
+        return override
+    if override is None:
+        return base
+    return {**base, **override}
 
 
 _BACKEND_FIELDS = (
@@ -395,7 +432,7 @@ _BACKEND_FIELDS = (
     "noninteractive_prefix",
 )
 _LAYOUT_FIELDS = ("activate", "windows")
-_WINDOW_FIELDS = ("command", "activate", "open_keys", "open_keys_with_line", "position")
+_WINDOW_FIELDS = ("command", "activate", "open_keys", "open_keys_with_line", "position", "env")
 _EDITOR_ONLY_WINDOW_FIELDS = ("open_keys", "open_keys_with_line")
 _LEGACY_FLAT_BACKEND_FIELDS = ("shell", "editor")
 _LEGACY_BACKEND_WINDOWS_FIELD = "windows"
@@ -718,6 +755,9 @@ def _parse_window(role: str, table: dict[str, Any], *, context: str, source: Pat
         if misplaced:
             msg = f"{source}: {context} field {misplaced[0]!r} is only valid on the {EDITOR_ROLE!r} role"
             raise HopConfigError(msg)
+    if role == BROWSER_ROLE and "env" in table:
+        msg = f"{source}: {context} field 'env' is not supported on the {BROWSER_ROLE!r} role"
+        raise HopConfigError(msg)
     command = _parse_command(table, key="command", context=context, source=source, allow_empty=True)
     activate_raw = _parse_command(table, key="activate", context=context, source=source)
     open_keys = _parse_command(table, key="open_keys", context=context, source=source)
@@ -730,7 +770,26 @@ def _parse_window(role: str, table: dict[str, Any], *, context: str, source: Pat
         open_keys=open_keys,
         open_keys_with_line=open_keys_with_line,
         position=position,
+        env=_parse_env(table, context=context, source=source),
     )
+
+
+def _parse_env(table: dict[str, Any], *, context: str, source: Path) -> Mapping[str, str] | None:
+    if "env" not in table:
+        return None
+    value = table["env"]
+    if not isinstance(value, dict):
+        msg = f"{source}: {context} field 'env' must be a table, got {type(value).__name__}"
+        raise HopConfigError(msg)
+    env = cast(dict[str, object], value)
+    for name, item in env.items():
+        if not _ENV_NAME.fullmatch(name):
+            msg = f"{source}: {context} field 'env' has invalid variable name {name!r}"
+            raise HopConfigError(msg)
+        if not isinstance(item, str):
+            msg = f"{source}: {context} field 'env' value for {name!r} must be a string, got {type(item).__name__}"
+            raise HopConfigError(msg)
+    return cast(dict[str, str], env)
 
 
 def _parse_position(table: dict[str, Any], *, context: str, source: Path) -> int | None:

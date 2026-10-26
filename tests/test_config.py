@@ -1203,3 +1203,73 @@ def test_default_global_config_path_falls_back_to_home_config(monkeypatch: pytes
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     monkeypatch.setenv("HOME", "/home/tester")
     assert default_global_config_path() == Path("/home/tester/.config/hop/config.toml")
+
+
+# --- window env ----------------------------------------------------------
+
+
+def test_load_global_config_parses_window_env(tmp_path: Path) -> None:
+    config_file = write(
+        tmp_path / "config.toml",
+        """
+[windows.server]
+command = "bin/dev"
+env     = { PORT = "3001", RAILS_ENV = "development" }
+
+[layouts.rails]
+activate = "true"
+
+[layouts.rails.windows.console]
+env = { RAILS_ENV = "test" }
+""",
+    )
+
+    config = load_global_config(config_file)
+
+    assert config.windows == (
+        WindowConfig(role="server", command="bin/dev", env={"PORT": "3001", "RAILS_ENV": "development"}),
+    )
+    assert config.layouts[0].windows[0].env == {"RAILS_ENV": "test"}
+
+
+@pytest.mark.parametrize(
+    ("env", "error"),
+    [
+        ('"PORT=3001"', "field 'env' must be a table, got str"),
+        ('{ "1PORT" = "3001" }', "field 'env' has invalid variable name '1PORT'"),
+        ('{ "MY-VAR" = "x" }', "field 'env' has invalid variable name 'MY-VAR'"),
+        ("{ PORT = 3001 }", "field 'env' value for 'PORT' must be a string, got int"),
+    ],
+)
+def test_load_global_config_rejects_malformed_window_env(tmp_path: Path, env: str, error: str) -> None:
+    config_file = write(tmp_path / "config.toml", f"[windows.server]\nenv = {env}\n")
+
+    with pytest.raises(HopConfigError, match=error):
+        load_global_config(config_file)
+
+
+def test_load_global_config_rejects_env_on_browser(tmp_path: Path) -> None:
+    config_file = write(tmp_path / "config.toml", '[windows.browser]\nenv = { FOO = "bar" }\n')
+
+    with pytest.raises(HopConfigError, match="field 'env' is not supported on the 'browser' role"):
+        load_global_config(config_file)
+
+
+def test_merge_windows_merges_env_key_wise_with_project_winning() -> None:
+    project = HopConfig(windows=(WindowConfig(role="server", env={"PORT": "4000", "DEBUG": "1"}),))
+    global_ = HopConfig(windows=(WindowConfig(role="server", env={"PORT": "3000", "RAILS_ENV": "development"}),))
+
+    merged = merge_windows(project, global_)
+
+    assert merged[0].env == {"PORT": "4000", "DEBUG": "1", "RAILS_ENV": "development"}
+
+
+def test_merge_windows_keeps_env_declared_on_one_side_only() -> None:
+    project = HopConfig(
+        windows=(WindowConfig(role="server", command="bin/dev"), WindowConfig(role="a", env={"X": "1"}))
+    )
+    global_ = HopConfig(windows=(WindowConfig(role="server", env={"PORT": "3000"}), WindowConfig(role="a")))
+
+    merged = merge_windows(project, global_)
+
+    assert [window.env for window in merged] == [{"PORT": "3000"}, {"X": "1"}]

@@ -11,7 +11,7 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import gettempdir, mkdtemp
-from typing import Callable, Protocol, Sequence
+from typing import Callable, Mapping, Protocol, Sequence
 from urllib.parse import urlsplit, urlunsplit
 
 from hop import debug
@@ -1033,6 +1033,28 @@ def substitute(template: str, *, session: ProjectSession, host: str = "localhost
         PLACEHOLDER_HOST: shlex.quote(host),
     }
     return _apply(template, replacements)
+
+
+def env_exports(env: Mapping[str, str], *, session: ProjectSession) -> str:
+    """``export`` statements for ``env``, each value inside shell double quotes.
+
+    Placeholders are resolved here rather than by ``substitute``, whose
+    single-quoted replacements would be taken literally inside double quotes.
+    """
+
+    replacements = {
+        PLACEHOLDER_SESSION_ROOT: _escape_double_quoted(str(session.session_root)),
+        PLACEHOLDER_HOST: _escape_double_quoted(_substitution_host(session.host)),
+    }
+    exports: list[str] = []
+    for name, value in env.items():
+        quoted = _apply(value.replace('"', '\\"'), replacements)
+        exports.append(f'export {name}="{quoted}"')
+    return "; ".join(exports)
+
+
+def _escape_double_quoted(text: str) -> str:
+    return "".join(f"\\{char}" if char in '\\"$`' else char for char in text)
 
 
 def _substitute_translate(

@@ -1,9 +1,11 @@
 import os
+import subprocess
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Mapping, Sequence, cast
 
 import pytest
 
+from hop.backends import CommandBackend
 from hop.config import HopConfig
 from hop.kitty import (
     KittyCommandError,
@@ -14,6 +16,7 @@ from hop.kitty import (
     session_kitty_overrides,
     session_socket_address,
 )
+from hop.layouts import WindowSpec
 from hop.session import ProjectSession
 from hop.sway import SwayWindow
 
@@ -1672,3 +1675,105 @@ def test_sticky_position_skips_reposition_when_window_not_found_on_session_works
 
     assert sway.moves == [(42, "s:demo")]
     assert sway.container_moves == []
+
+
+# --- per-window env ------------------------------------------------------
+
+
+def _launched_args(windows: Sequence[WindowSpec], backend: CommandBackend, role: str) -> list[str]:
+    factory = StubKittyFactory([{"ok": True, "data": []}, {"ok": True}])
+    adapter = KittyRemoteControlAdapter(
+        session_backend_for=lambda _session: backend,
+        session_windows_for=lambda _session: tuple(windows),
+        transport_factory=factory,
+        launcher=StubLauncher(),
+    )
+
+    adapter.ensure_terminal(build_session(), role=role)
+
+    payload = factory.calls[1][2]
+    assert payload is not None
+    return list(cast(Sequence[str], payload["args"]))
+
+
+_HOST = CommandBackend(name="host", interactive_prefix="", noninteractive_prefix="")
+
+
+def test_role_env_on_host_runs_kitten_run_shell_after_exports() -> None:
+    windows = (
+        WindowSpec(role="shell", command="", active=True),
+        WindowSpec(role="server", command="", active=True, env={"PORT": "3001", "GREETING": "hi there"}),
+    )
+
+    args = _launched_args(windows, _HOST, "server")
+
+    assert args == ["sh", "-c", 'export PORT="3001"; export GREETING="hi there"; exec kitten run-shell']
+
+
+def test_role_env_is_exported_before_a_custom_shell_command() -> None:
+    windows = (WindowSpec(role="shell", command="/usr/bin/fish", active=True, env={"FOO": "bar"}),)
+
+    assert _launched_args(windows, _HOST, "shell") == ["sh", "-c", 'export FOO="bar"; /usr/bin/fish']
+
+
+def test_role_without_env_launches_unchanged() -> None:
+    windows = (
+        WindowSpec(role="shell", command="", active=True, env={"FOO": "bar"}),
+        WindowSpec(role="server", command="", active=True),
+    )
+
+    factory = StubKittyFactory([{"ok": True, "data": []}, {"ok": True}])
+    adapter = KittyRemoteControlAdapter(
+        session_backend_for=lambda _session: _HOST,
+        session_windows_for=lambda _session: windows,
+        transport_factory=factory,
+        launcher=StubLauncher(),
+    )
+    adapter.ensure_terminal(build_session(), role="server")
+
+    payload = factory.calls[1][2]
+    assert payload is not None
+    assert "args" not in payload or not payload["args"]
+
+
+def test_adhoc_shell_inherits_shell_role_env() -> None:
+    windows = (WindowSpec(role="shell", command="/bin/sh", active=True, env={"FOO": "bar"}),)
+
+    assert _launched_args(windows, _HOST, "shell-2") == ["sh", "-c", 'export FOO="bar"; /bin/sh']
+
+
+def test_role_env_reaches_inside_a_prefixed_backend() -> None:
+    # ``env`` as the prefix stands in for ``podman exec``: it runs the
+    # login-wrapped command, so executing the argv proves the export lands
+    # inside the backend, after the login shell starts.
+    backend = CommandBackend(name="box", interactive_prefix="env", noninteractive_prefix="env")
+    windows = (WindowSpec(role="shell", command='printf %s "$PORT"', active=True, env={"PORT": "3001"}),)
+
+    args = _launched_args(windows, backend, "shell")
+
+    result = subprocess.run(args, env={**os.environ, "SHELL": "/bin/sh"}, capture_output=True, text=True, check=True)
+    assert result.stdout == "3001"
+
+
+def test_bootstrap_applies_role_env_to_first_window() -> None:
+    factory = StubKittyFactory(
+        [
+            KittyConnectionError("no socket"),
+            KittyConnectionError("still no socket"),
+            {"ok": True, "data": []},
+            {"ok": True},
+        ]
+    )
+    launcher = StubLauncher()
+    adapter = KittyRemoteControlAdapter(
+        session_backend_for=lambda _session: _HOST,
+        session_windows_for=lambda _session: (WindowSpec(role="shell", command="", active=True, env={"FOO": "bar"}),),
+        transport_factory=factory,
+        launcher=launcher,
+        sleep=lambda _: None,
+    )
+
+    adapter.ensure_terminal(build_session(), role="shell")
+
+    args, _env = launcher.calls[0]
+    assert args[-4:] == ("--", "sh", "-c", 'export FOO="bar"; exec kitten run-shell')

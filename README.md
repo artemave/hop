@@ -127,7 +127,7 @@ A hop config has several named sections plus a few scalar settings, all optional
 
 - `[backends.<name>]` - a named backend. Keys: `activate` (auto-detect probe), `prepare` / `teardown` (lifecycle commands), `port_translate` / `host_translate` (rewrite `localhost` URLs on dispatch), `interactive_prefix` / `noninteractive_prefix` (command wrappers). See [Session backends](#session-backends).
 - `[layouts.<name>]` - a named layout: an `activate` probe plus `[layouts.<name>.windows.<role>]` sub-tables that come up together when the probe matches. See [Layouts and windows](#layouts-and-windows).
-- `[windows.<role>]` - a top-level window. Keys: `command`, `activate`, `position`, and for the editor `open_keys` / `open_keys_with_line`. See [Layouts and windows](#layouts-and-windows).
+- `[windows.<role>]` - a top-level window. Keys: `command`, `activate`, `position`, `env`, and for the editor `open_keys` / `open_keys_with_line`. See [Layouts and windows](#layouts-and-windows).
 - `[keys]` - session-kitty keybindings hop injects at bootstrap; each is a kitty key spec or a list of them, and an empty string or list disables it. `paste` (default `["ctrl+v", "ctrl+shift+v"]`) binds the [clipboard-image paste kitten](#special-windows); `open_selection` (default `["ctrl+shift+o"]`) binds the [visible-output picker](#open-visible-output-targets-from-kitty).
 - `[clipboard]` - `allow_read` (bool, default `true`) controls whether hop injects a `clipboard_control` override permitting OSC 52 clipboard reads without a per-paste prompt.
 - `sticky_positions` (bool, default `true`) - global on/off switch for the sticky-`position` feature. See [Layouts and windows](#layouts-and-windows).
@@ -138,7 +138,7 @@ A hop config has several named sections plus a few scalar settings, all optional
 
 ### Trusting `.hop.toml`
 
-As project's `.hop.toml` can declare shell commands (`activate`, `prepare`, `teardown`, translate helpers, window `command`, `open_keys`) that hop runs on your behalf. hop only runs a project's `.hop.toml` once you've trusted it with `hop trust`. Changes to `.hop.toml` on a live session have no effect unless explicitly `hop trust`ed again.
+hop config runs shell commands on your behalf (e.g. `activate` or `prepare`). A project's `.hop.toml` can come with a repo someone else wrote, so it's untrusted by default: on first use hop asks whether to trust it (and can show it first), or you trust it upfront with `hop trust`. Changes to `.hop.toml` on a live session have no effect unless explicitly `hop trust`ed again.
 
 ## Session backends
 
@@ -238,6 +238,15 @@ Per-window fields:
   ```toml
   sticky_positions = false
   ```
+- `env` (table, optional) - extra environment variables for that window. They're exported inside the backend - in the container or on the remote host - before the window's shell starts, so the role's `command` sees them too. Not available on `browser`.
+
+  ```toml
+  [layouts.rails.windows.server]
+  command = "bin/dev"
+  env     = { PORT = "3001", PATH = "$HOME/.local/bin:$PATH", GREETING = "hello there" }
+  ```
+
+  Each value behaves like the inside of a shell double-quoted string: spaces and quotes are kept as written, `$VAR` and `$(...)` expand, and a backslash keeps a `$` literal (`PRICE = '\$5'`). `{session_root}` and `{host}` substitute too. When several entries for the same role set `env`, the tables are combined variable by variable, following the same [precedence](#layouts-and-windows) as other fields. Ad-hoc shells (`shell-2`, ...) get the `shell` role's `env`.
 
 A session that outlived its windows - after `hop kill`, a crash, or a reboot - re-activates every window on the next `hop` rather than coming back half-empty.
 
@@ -254,6 +263,15 @@ To change a built-in, declare it as a top-level window: `[windows.editor] activa
 Kitty shell integration (OSC 133 prompt marks, which power `hop wait` and other OSC-133-dependent features) is **automatic** - no shell-role config needed. Inside a container backend, `kitten` must be installed in the container - add an install step to the backend's `prepare` (see [devcontainer](docs/devcontainer.md)); without it the shell still opens but prints a one-line warning that integration is off. For a remote *host*, `hop ssh` handles it (see [hop ssh](docs/hop-ssh.md)). To use a different shell, override the built-in: `[windows.shell] command = "/usr/bin/fish"`.
 
 Multiple matching layouts compose: a Rails project that also has `vite.config.ts` activates both layouts and gets their windows.
+
+When several entries declare the same role, they combine field by field, and for a field set in more than one the more specific entry wins, from weakest to strongest:
+
+1. global `[windows.<role>]`
+2. global `[layouts.<name>.windows.<role>]` (when the layout matches)
+3. project `[windows.<role>]`
+4. project `[layouts.<name>.windows.<role>]` (when the layout matches)
+
+So a generic `[windows.server] command = "bin/dev"` can be overridden by a Rails layout's `server`, and a project's `.hop.toml` overrides anything in the global config.
 
 A window `command` is typed into the role's shell as if you ran it there - so it lands in the shell's history (up-arrow re-runs it after a Ctrl-C) and any shell syntax works as written. Make a long-running role idempotent - survive a window close and reopen - by freeing its resource before it starts:
 

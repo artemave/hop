@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Sequence
 
-from hop.config import HopConfig, LayoutConfig, WindowConfig
+from hop.config import HopConfig, LayoutConfig, WindowConfig, merge_configs
 from hop.layouts import WindowSpec, find_window, resolve_windows
 from hop.session import ProjectSession
 
@@ -237,7 +237,7 @@ def test_second_matching_layout_overrides_first_layouts_position(tmp_path: Path)
     assert server.position == -1
 
 
-def test_top_level_window_overrides_layout_position(tmp_path: Path) -> None:
+def test_layout_window_overrides_top_level_position(tmp_path: Path) -> None:
     config = HopConfig(
         layouts=(
             LayoutConfig(
@@ -253,7 +253,7 @@ def test_top_level_window_overrides_layout_position(tmp_path: Path) -> None:
 
     server = find_window(windows, "server")
     assert server is not None
-    assert server.position == -1
+    assert server.position == 1
 
 
 def test_window_with_no_configured_position_resolves_to_none(tmp_path: Path) -> None:
@@ -713,26 +713,51 @@ def test_layout_window_without_command_only_flips_activate_on_existing_spec(tmp_
     assert editor.active is False
 
 
-def test_top_level_window_overrides_layout_window(tmp_path: Path) -> None:
-    """When both an active layout and a top-level entry declare the same
-    role, the top-level entry wins per-field (top-level resolves last)."""
+def test_matched_layout_window_overrides_top_level_window(tmp_path: Path) -> None:
     config = HopConfig(
         layouts=(
             LayoutConfig(
                 name="rails",
                 activate="true",
-                windows=(WindowConfig(role="server", command="layout-bin/dev"),),
+                windows=(WindowConfig(role="server", command="bin/dev -p 4000"),),
             ),
         ),
-        windows=(WindowConfig(role="server", activate="false"),),
+        windows=(WindowConfig(role="server", command="bin/dev", activate="false", position=-1),),
     )
 
     windows = resolve_windows(config, build_session(tmp_path), runner=RecordingRunner())
 
     server = find_window(windows, "server")
     assert server is not None
-    assert server.command == "layout-bin/dev"  # command from layout, no override
-    assert server.active is False  # activate from top-level
+    assert server.command == "bin/dev -p 4000"
+    assert server.active is True  # the matched layout gates it, not the top-level opt-out
+    assert server.position == -1  # fields the layout leaves unset come from top-level
+
+
+def test_unmatched_layout_window_leaves_top_level_window_alone(tmp_path: Path) -> None:
+    config = HopConfig(
+        layouts=(
+            LayoutConfig(name="rails", activate="false", windows=(WindowConfig(role="server", command="bin/rails s"),)),
+        ),
+        windows=(WindowConfig(role="server", command="bin/dev"),),
+    )
+
+    windows = resolve_windows(config, build_session(tmp_path), runner=RecordingRunner())
+
+    server = find_window(windows, "server")
+    assert server is not None
+    assert server.command == "bin/dev"
+
+
+def test_layout_windows_are_ordered_before_top_level_windows(tmp_path: Path) -> None:
+    config = HopConfig(
+        layouts=(LayoutConfig(name="rails", activate="true", windows=(WindowConfig(role="server", command="a"),)),),
+        windows=(WindowConfig(role="worker", command="b"), WindowConfig(role="server", command="c")),
+    )
+
+    windows = resolve_windows(config, build_session(tmp_path), runner=RecordingRunner())
+
+    assert [window.role for window in windows] == ["shell", "editor", "server", "worker", "browser"]
 
 
 def test_resolve_windows_routes_remote_probes_through_transport_with_local_cwd(tmp_path: Path) -> None:
@@ -773,3 +798,73 @@ def test_resolve_windows_routes_remote_probes_through_transport_with_local_cwd(t
     assert argv[0] == "ssh"  # went through the transport, not a bare `sh -c`
     assert cwd == tmp_path  # local cwd, never the remote session_root
     assert "{host}" not in argv[-1] and "devbox" in argv[-1]  # {host} substituted
+
+
+# --- env -----------------------------------------------------------------
+
+
+def test_window_env_merges_key_wise_with_layout_winning(tmp_path: Path) -> None:
+    config = HopConfig(
+        layouts=(
+            LayoutConfig(
+                name="rails",
+                activate="true",
+                windows=(WindowConfig(role="server", command="bin/dev", env={"PORT": "3000", "RAILS_ENV": "dev"}),),
+            ),
+        ),
+        windows=(WindowConfig(role="server", env={"PORT": "4000"}),),
+    )
+
+    windows = resolve_windows(config, build_session(tmp_path), runner=_real_runner)
+
+    server = find_window(windows, "server")
+    assert server is not None
+    assert server.env == {"PORT": "3000", "RAILS_ENV": "dev"}
+
+
+def test_window_env_defaults_to_empty(tmp_path: Path) -> None:
+    windows = resolve_windows(HopConfig(), build_session(tmp_path), runner=RecordingRunner())
+
+    assert [window.env for window in windows] == [{}, {}, {}]
+
+
+def test_top_level_window_env_applies_to_built_in_role(tmp_path: Path) -> None:
+    config = HopConfig(windows=(WindowConfig(role="shell", env={"FOO": "bar"}),))
+
+    windows = resolve_windows(config, build_session(tmp_path), runner=RecordingRunner())
+
+    shell = find_window(windows, "shell")
+    assert shell is not None
+    assert shell.env == {"FOO": "bar"}
+
+
+def test_window_fields_follow_specificity_across_config_files(tmp_path: Path) -> None:
+    def layout(window: WindowConfig) -> LayoutConfig:
+        return LayoutConfig(name="rails", activate="true", windows=(window,))
+
+    global_ = HopConfig(
+        windows=(WindowConfig(role="server", command="g-top", position=1, env={"A": "g-top", "B": "g-top"}),),
+        layouts=(layout(WindowConfig(role="server", command="g-layout", position=2, env={"B": "g-layout"})),),
+    )
+    project = HopConfig(
+        windows=(WindowConfig(role="server", command="p-top", env={"C": "p-top", "D": "p-top"}),),
+        layouts=(layout(WindowConfig(role="server", env={"D": "p-layout"})),),
+    )
+
+    windows = resolve_windows(merge_configs(project, global_), build_session(tmp_path), runner=RecordingRunner())
+
+    server = find_window(windows, "server")
+    assert server is not None
+    assert server.command == "p-top"
+    assert server.position == 2
+    assert server.env == {"A": "g-top", "B": "g-layout", "C": "p-top", "D": "p-layout"}
+
+
+def test_top_level_window_overrides_built_in_position(tmp_path: Path) -> None:
+    config = HopConfig(windows=(WindowConfig(role="shell", position=-1),))
+
+    windows = resolve_windows(config, build_session(tmp_path), runner=RecordingRunner())
+
+    shell = find_window(windows, "shell")
+    assert shell is not None
+    assert shell.position == -1

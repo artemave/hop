@@ -138,6 +138,7 @@ Each window declaration carries:
   - **Top-level window**: defaults active unless the entry sets `activate = "false"`.
   - **Layout window**: gated by the layout's `activate` probe; the window can carry `activate = "false"` to opt out of even the matched layout (declared but not auto-launched).
 - `position` (integer, optional) — sticks the window to a slot in the row of windows on the session's workspace: positive counts from the left (`1` = leftmost), negative counts from the right (`-1` = rightmost). `None` leaves the window unpositioned — it fills the middle, in creation order, rather than a fixed slot. Valid on both `[windows.<role>]` and `[layouts.<name>.windows.<role>]`, following the same layered-override rules as `command`. Enforced only when a window is newly created (session entry, `hop term --role <name>`, an ad-hoc `shell-<N>` spawn, the session browser's first launch): hop repositions just that window relative to whatever is already on the workspace, via Sway's `move left` / `move right`, rather than re-sorting the whole row. The session browser shares this row with kitty role terminals — it's identified by its session browser mark (`_hop_browser:<session>`) rather than a `hop:<role>` app_id, since it isn't a kitty window, but participates in the same position math (`hop.window_position.apply_sticky_position`). Positioning is best-effort: it relies on `move left`/`move right` swapping with the adjacent sibling in the workspace's tiling container, so a stray third-party window interleaved in the tiling tree can throw the step count off.
+- `env` (table of string → string, optional) — extra environment variables for the role's window. Not valid on `browser`. Keys must be shell variable names. Each pair becomes `export NAME="VALUE"` prepended to the session shell command, so it runs inside the backend (container, ssh host) after login profiles and before the shell's rc files. The value is the body of a double-quoted shell string (`hop.backends.env_exports`): `"` is escaped, so spaces and quotes stay literal, while `$VAR`, `$(...)` and backslash escapes keep their shell meaning. `{session_root}` / `{host}` are substituted there as escaped bare text, not by `substitute`, whose single-quoted replacements would be literal inside double quotes. When the shell command is empty (in-place local host), it becomes `exec kitten run-shell` so the exports have a shell to precede. Layers merge key-wise: a stronger layer (see the resolution order below) overrides individual keys rather than the whole table. Ad-hoc `shell-<N>` windows use the `shell` role's `env`. The role's own `command`, typed into that shell, inherits the environment.
 
   Top-level `sticky_positions` (bool, optional, default `true`) is a global kill switch for the whole feature: when it resolves to `false` (explicitly set, in either config file, project overriding global), every `position` — built-in or explicitly configured — is ignored and Sway's default tiling placement is left untouched.
 
@@ -155,11 +156,17 @@ Since unpositioned windows fill the middle bucket (which sorts after every posit
 
 For user-defined roles (anything other than shell / editor / browser), top-level windows default to active (the always-on rule above). To declare a user role for `hop term --role <name>` without auto-launching it on entry, either set `activate = "false"` on the top-level entry, or move it into a layout whose probe is the gate.
 
-Window resolution at session entry, layered with later sources overriding earlier ones for the same role:
+Window resolution at session entry, layered per field with later sources overriding earlier ones for the same role (the more specific entry wins):
 
 1. Built-in defaults (shell, editor, browser).
-2. Each layout in declaration order whose `activate` probe exits 0, contributing its windows in declaration order.
-3. Top-level `[windows.<role>]` entries in declaration order.
+2. Global top-level `[windows.<role>]`.
+3. Global `[layouts.<name>.windows.<role>]` of each layout whose `activate` probe exits 0.
+4. Project top-level `[windows.<role>]`.
+5. Project `[layouts.<name>.windows.<role>]` of each matched layout.
+
+`resolve_windows` itself applies top-level windows and then matched layout windows. The project-over-global-layout step (4 over 3) happens in `merge_configs`, which folds each project top-level window into the same-role windows of global layouts before merging layouts by name. A matched layout window that leaves `activate` unset is active, so it overrides a weaker `activate = "false"`.
+
+Windows are ordered by declaration: matched layouts' windows first, then top-level windows.
 
 On first session entry, hop ensures the shell window unconditionally (regardless of activate), then dispatches every remaining active window to its runtime adapter (editor → nvim, browser → session browser, everything else → kitty terminal). Re-entry from another workspace ensures only the shell window — the activation sweep never re-fires for a still-live session.
 
@@ -300,7 +307,7 @@ Behavior:
 
 - resolve the session from the caller's current working directory
 - run the same window resolver that bootstrap uses (built-in defaults + active layouts + top-level windows), evaluating layout `activate` probes against the session root
-- print each resolved role on its own line, in resolution order (built-ins, then active-layout windows, then top-level windows)
+- print each resolved role on its own line: shell, editor, then active-layout windows, then top-level windows, then the browser if nothing declared it
 
 Intended for launchers (rofi, fuzzel) to enumerate the focusable / launchable windows for the focused session workspace and dispatch to `hop browser` (browser) or `hop term --role <name>` (every role including `editor`). The vicinae integration consumes the same resolver via the `hopd` daemon (see "Vicinae integration daemon" below) — it does not invoke `hop windows` directly because it has the resolver in-process.
 

@@ -9,7 +9,7 @@ Pager = Callable[[str], object]
 
 _BANNER = (
     "It can run shell commands (backend activate/prepare/teardown, port translation,\n"
-    "window commands, editor keystrokes)."
+    "window commands and env, editor keystrokes)."
 )
 _MENU = "  [t] trust it and continue\n  [s] show it\n  Ctrl-C / Ctrl-D to abort (no session created)"
 
