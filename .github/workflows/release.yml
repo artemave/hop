@@ -12,6 +12,10 @@ on:
         description: exact version, e.g. 1.4.0 (overrides bump)
         type: string
         default: ""
+      notes:
+        description: release notes (markdown), shown above the generated changelog link
+        type: string
+        default: ""
 
 permissions:
   contents: write
@@ -46,8 +50,9 @@ jobs:
       - name: Tag and release
         env:
           GH_TOKEN: ${{ github.token }}
+          NOTES: ${{ inputs.notes }}
         run: |
           set -euo pipefail
           git tag "${{ steps.v.outputs.tag }}"
           git push origin "${{ steps.v.outputs.tag }}"
-          gh release create "${{ steps.v.outputs.tag }}" --generate-notes
+          gh release create "${{ steps.v.outputs.tag }}" --generate-notes --notes "$NOTES"
