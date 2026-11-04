@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -19,7 +20,7 @@ from hop.backends import (
     runner_cwd,
     select_backend,
 )
-from hop.bridge import BRIDGE_SHIM_DEFAULT_SOCKET, render_bridge_shim
+from hop.bridge import BRIDGE_CALL_ENV, BRIDGE_SHIM_DEFAULT_SOCKET, render_bridge_shim
 from hop.browser import SessionBrowserAdapter
 from hop.commands import (
     BridgeShimCommand,
@@ -610,6 +611,9 @@ def execute_command(
             print(resolve_asset_path(name))
         case SshCommand(host=host):
             run_hop_ssh(host)
+        case TrustCommand() if os.environ.get(BRIDGE_CALL_ENV):
+            print("hop: trust isn't available through the bridge; run `hop trust` on the host.", file=sys.stderr)
+            return 1
         case TrustCommand(mode=mode, path=path):
             print(trust_command(current_directory, mode=mode, path=path))
         case _:

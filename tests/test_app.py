@@ -1973,6 +1973,22 @@ def test_execute_trust_command_prints_trust_command_result(tmp_path: Path, capsy
     assert trust.is_trusted(config_path, 'activate = "true"\n') is True
 
 
+def test_execute_trust_command_refused_for_a_bridge_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from hop import trust
+    from hop.bridge import BRIDGE_CALL_ENV
+
+    (tmp_path / ".hop.toml").write_text('activate = "true"\n')
+    monkeypatch.setenv(BRIDGE_CALL_ENV, "1")
+
+    rc = execute_command(TrustCommand(mode="trust"), cwd=tmp_path, services=build_services().as_services())
+
+    assert rc == 1
+    assert "run `hop trust` on the host" in capsys.readouterr().err
+    assert trust.list_entries() == ()
+
+
 def test_execute_path_prints_kitten_main_py(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     services = build_services().as_services()
 

@@ -20,6 +20,7 @@ from hop.bridge import (
     SessionBridges,
     SessionBridgeServer,
     default_api_socket_path,
+    dispatch_remote,
     dispatch_sessionless,
     dispatch_via_subprocess,
     render_bridge_shim,
@@ -417,6 +418,29 @@ def test_dispatch_via_subprocess_remote_session_runs_from_home_with_env() -> Non
     env = cast("dict[str, str]", kwargs["env"])
     assert env["HOP_REMOTE_HOST"] == "devbox"
     assert env["HOP_REMOTE_CWD"] == "/home/admin/projects/thonon-les-pains"
+
+
+def test_dispatch_via_subprocess_refuses_trust(tmp_path: Path) -> None:
+    from hop import trust
+
+    (tmp_path / ".hop.toml").write_text('activate = "true"\n')
+    session = ProjectSession(session_root=tmp_path.resolve(), session_name="demo", workspace_name="s:demo")
+
+    result = dispatch_via_subprocess(session, ["trust"])
+
+    assert result.returncode == 1
+    assert b"run `hop trust` on the host" in result.stderr
+    assert trust.list_entries() == ()
+
+
+def test_dispatch_remote_refuses_trust() -> None:
+    from hop import trust
+
+    result = dispatch_remote("devbox", "/home/u/proj", ["trust"])
+
+    assert result.returncode == 1
+    assert b"run `hop trust` on the host" in result.stderr
+    assert trust.list_entries() == ()
 
 
 def test_dispatch_sessionless_runs_real_hop() -> None:

@@ -140,6 +140,8 @@ A hop config has several named sections plus a few scalar settings, all optional
 
 hop config runs shell commands on your behalf (e.g. `activate` or `prepare`). A project's `.hop.toml` can come with a repo someone else wrote, so it's untrusted by default: on first use hop asks whether to trust it (and can show it first), or you trust it upfront with `hop trust`. Changes to `.hop.toml` on a live session have no effect unless explicitly `hop trust`ed again.
 
+`hop trust` is the one command the bridge refuses: run it on the host, not inside a session's backend. Otherwise a container (or a remote over `hop ssh`) could write a `.hop.toml` and approve it itself.
+
 ## Session backends
 
 A session has a **backend** that decides what kind of environment its terminals run in. The default is **host**. Other backends - docker container or anything else describable as a chain of commands - are configured as named entries in the config file. Running a backend on a *remote* machine is a separate axis - the ssh transport (`hop ssh`, see [Remote sessions over ssh](#remote-sessions-over-ssh)) - not a backend of its own.

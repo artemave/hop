@@ -34,6 +34,11 @@ SessionlessDispatcher = Callable[[Sequence[str]], "CompletedProcess[bytes]"]
 # the shim still gets the real shim text back from the host).
 SESSIONLESS_COMMANDS = frozenset({"bridge", "path"})
 
+# Set on every session-bound ``hop`` the bridge runs. The caller only controls
+# argv, never this environment, so ``hop`` can tell bridge calls apart and
+# refuse ``trust`` to them: a backend must not approve its own ``.hop.toml``.
+BRIDGE_CALL_ENV = "HOP_BRIDGE_CALL"
+
 
 # POSIX-sh client for the bridge acceptor. Rendered by
 # ``render_bridge_shim()`` and printed verbatim by ``hop bridge shim``;
@@ -195,7 +200,7 @@ def dispatch_via_subprocess(
     ``hop open`` / ``hop run`` work for a remote devcontainer session.
     """
 
-    env = dict(os.environ)
+    env = {**os.environ, BRIDGE_CALL_ENV: "1"}
     cwd: Path = session.session_root
     if session.host is not None:
         env["HOP_REMOTE_HOST"] = session.host
@@ -247,7 +252,7 @@ def dispatch_remote(
     ``kill``, ``run``, ``open``, … all over the ssh transport.
     """
 
-    env = dict(os.environ)
+    env = {**os.environ, BRIDGE_CALL_ENV: "1"}
     env["HOP_REMOTE_HOST"] = host
     env["HOP_REMOTE_CWD"] = cwd
     return runner(
