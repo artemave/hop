@@ -168,7 +168,7 @@ prepare               = [
 teardown              = "podman-compose -f docker-compose.dev.yml down"
 port_translate        = """
   podman ps -q \\
-    --filter label=io.podman.compose.project=$(basename {session_root}) \\
+    --filter label=io.podman.compose.project=$(basename {session_root} | tr A-Z a-z | tr -cd a-z0-9_-) \\
     --filter label=io.podman.compose.service=devcontainer \\
     | head -1 \\
     | xargs -r -I@ podman port @ {port} \\

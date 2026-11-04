@@ -139,18 +139,23 @@ def _serve_bridge_acceptor(socket_path: Path, sway: SwayIpcAdapter) -> None:
         debug.log(f"hopd: bridge acceptor crashed\n{traceback.format_exc()}")
 
 
-def _start_mark_reconciler(sway: SwayIpcAdapter) -> None:
+def _start_mark_reconciler(sway: SwayIpcAdapter, session_bridges: bridge.SessionBridges) -> None:
     """Drive ``reconcile_marks`` from a Sway ``window``-event subscription.
 
     Runs on a daemon thread so it dies with the process. Each event triggers
     one reconcile pass — sway's window event is what surfaces user moves
     (raw Sway keybinding sends the editor off ``s:<session>``), so a sweep
     per event keeps marks aligned with placement without explicit filtering.
+
+    The per-session bridge sockets are reconciled here too: a session's state
+    is recorded only once its first kitty window is placed, after the
+    workspace events that announced the session, so it's the events of the
+    windows opened next (editor, other roles) that first see it.
     """
 
     thread = threading.Thread(
         target=_serve_mark_reconciler,
-        args=(sway,),
+        args=(sway, session_bridges),
         name="hopd-reconciler",
         daemon=True,
     )
@@ -158,10 +163,11 @@ def _start_mark_reconciler(sway: SwayIpcAdapter) -> None:
     debug.log("hopd: mark reconciler subscribed to window events")
 
 
-def _serve_mark_reconciler(sway: SwayIpcAdapter) -> None:
+def _serve_mark_reconciler(sway: SwayIpcAdapter, session_bridges: bridge.SessionBridges) -> None:
     try:
         for _event in sway.subscribe_to_window_events():
             reconcile_marks(sway)
+            session_bridges.reconcile(load_sessions())
     except Exception:
         debug.log(f"hopd: mark reconciler crashed\n{traceback.format_exc()}")
 
@@ -205,8 +211,9 @@ def _run_main_loop(scripts_dir: Path, *, hop_bin: str, hopd_bin: str) -> int:
 
     debug.log("hopd: starting")
     registry = SessionBackendRegistry()
+    session_bridges = bridge.SessionBridges()
     _start_bridge_acceptor(sway)
-    _start_mark_reconciler(sway)
+    _start_mark_reconciler(sway, session_bridges)
 
     def sessions_loader() -> Sequence[SessionListing]:
         return list_sessions(sway=sway)
@@ -215,6 +222,7 @@ def _run_main_loop(scripts_dir: Path, *, hop_bin: str, hopd_bin: str) -> int:
 
     try:
         sweep_stale_persisted_sessions(sway=sway)
+        session_bridges.reconcile(load_sessions())
         reconcile_marks(sway)
         regenerate(
             sway=sway,
@@ -227,6 +235,7 @@ def _run_main_loop(scripts_dir: Path, *, hop_bin: str, hopd_bin: str) -> int:
         debug.log("hopd: subscribed to workspace events")
         for event in sway.subscribe_to_workspace_events():
             forget_destroyed_session(event)
+            session_bridges.reconcile(load_sessions())
             regenerate(
                 sway=sway,
                 sessions_loader=sessions_loader,

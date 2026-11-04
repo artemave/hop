@@ -11,14 +11,16 @@ import os
 import socketserver
 import subprocess
 import sys
+import threading
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from subprocess import CompletedProcess
-from typing import Callable, Sequence, cast
+from typing import Callable, Mapping, Protocol, Sequence, cast
 
+from hop import debug
 from hop.commands.session import SESSION_WORKSPACE_PREFIX
 from hop.session import ProjectSession
-from hop.state import load_sessions
+from hop.state import SessionState, load_sessions, session_from_state
 from hop.sway import SwayWindow
 
 SwaySource = Callable[[], Sequence[SwayWindow]]
@@ -108,6 +110,17 @@ def default_api_socket_path() -> Path:
 
     base = os.environ.get("XDG_RUNTIME_DIR") or "/tmp"
     return Path(base) / "hop" / "bridge" / "api.sock"
+
+
+def session_socket_path(session_root: Path) -> Path:
+    """Per-session acceptor socket: the bridge dir extended by the session root's absolute path.
+
+    A compose file can rebuild the directory by plain interpolation
+    (``${XDG_RUNTIME_DIR}/hop/bridge${COMPOSE_PROJECT_DIR}``) and bind-mount
+    only that, so a container reaches its own session's socket and no other.
+    """
+
+    return default_api_socket_path().parent.joinpath(*session_root.parts[1:], "api.sock")
 
 
 class BridgeError(Exception):
@@ -247,10 +260,14 @@ def dispatch_remote(
     )
 
 
+class _Router(Protocol):
+    def route(self, host: str, cwd: str, argv: Sequence[str]) -> CompletedProcess[bytes]: ...
+
+
 class BridgeRequestHandler(BaseHTTPRequestHandler):
     @property
-    def bridge_server(self) -> "BridgeServer":
-        return cast("BridgeServer", self.server)
+    def router(self) -> _Router:
+        return cast(_Router, self.server)
 
     def log_message(self, format: str, *args: object) -> None:
         # Suppress per-request stderr noise. The acceptor runs inside hopd,
@@ -271,24 +288,8 @@ class BridgeRequestHandler(BaseHTTPRequestHandler):
         host = raw[0].decode("utf-8", errors="replace") if raw else ""
         cwd = raw[1].decode("utf-8", errors="replace") if len(raw) > 1 else ""
         hop_argv = [piece.decode("utf-8", errors="replace") for piece in raw[3:] if piece]
-        bridge_server = self.bridge_server
         try:
-            if host:
-                # Remote-machine shim (`hop ssh` installed it with the host baked):
-                # the user ran `hop <cmd>` in a remote shell, so the cwd identifies
-                # the session exactly as for a local `hop` — route by (host, cwd),
-                # not the laptop's focused window. Covers enter, kill, run, open, …
-                result = bridge_server.remote_dispatcher(host, cwd, hop_argv)
-            elif hop_argv and hop_argv[0] in SESSIONLESS_COMMANDS:
-                # Stateless command (e.g. `hop bridge shim`): no session to
-                # resolve, so run it directly rather than requiring focus.
-                result = bridge_server.sessionless_dispatcher(hop_argv)
-            else:
-                session = resolve_session_from_focus(
-                    bridge_server.sway_source,
-                    sessions_dir=bridge_server.sessions_dir,
-                )
-                result = bridge_server.dispatcher(session, hop_argv)
+            result = self.router.route(host, cwd, hop_argv)
         except BridgeError as error:
             self._send_text(error.status, error.message)
             return
@@ -334,6 +335,119 @@ class BridgeServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
         self.sessions_dir = sessions_dir
         self.remote_dispatcher = remote_dispatcher
         self.sessionless_dispatcher = sessionless_dispatcher
+
+    def route(self, host: str, cwd: str, argv: Sequence[str]) -> CompletedProcess[bytes]:
+        if host:
+            # Remote-machine shim (`hop ssh` installed it with the host baked):
+            # the user ran `hop <cmd>` in a remote shell, so the cwd identifies
+            # the session exactly as for a local `hop` — route by (host, cwd),
+            # not the laptop's focused window. Covers enter, kill, run, open, …
+            return self.remote_dispatcher(host, cwd, argv)
+        if argv and argv[0] in SESSIONLESS_COMMANDS:
+            return self.sessionless_dispatcher(argv)
+        session = resolve_session_from_focus(self.sway_source, sessions_dir=self.sessions_dir)
+        return self.dispatcher(session, argv)
+
+
+class SessionBridgeServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
+    """Acceptor bound to one session: every call acts on that session.
+
+    The caller's ``host`` and ``cwd`` and the focused window are ignored, so a
+    backend that can reach only its own session's socket can't act on any
+    other session or on the host.
+    """
+
+    daemon_threads = True
+
+    def __init__(
+        self,
+        socket_path: str,
+        session: ProjectSession,
+        dispatcher: Dispatcher,
+        *,
+        sessionless_dispatcher: SessionlessDispatcher = dispatch_sessionless,
+    ) -> None:
+        super().__init__(socket_path, BridgeRequestHandler)
+        self.socket_path = Path(socket_path)
+        self.session = session
+        self.dispatcher = dispatcher
+        self.sessionless_dispatcher = sessionless_dispatcher
+
+    def route(self, host: str, cwd: str, argv: Sequence[str]) -> CompletedProcess[bytes]:
+        del host, cwd
+        if argv and argv[0] in SESSIONLESS_COMMANDS:
+            return self.sessionless_dispatcher(argv)
+        return self.dispatcher(self.session, argv)
+
+
+class SessionBridges:
+    """hopd's set of per-session acceptors, kept in step with the persisted sessions.
+
+    ``reconcile`` runs from more than one hopd thread (workspace and window
+    event loops), hence the lock.
+    """
+
+    def __init__(
+        self,
+        dispatcher: Dispatcher = dispatch_via_subprocess,
+        *,
+        sessionless_dispatcher: SessionlessDispatcher = dispatch_sessionless,
+    ) -> None:
+        self._dispatcher = dispatcher
+        self._sessionless_dispatcher = sessionless_dispatcher
+        self._servers: dict[str, SessionBridgeServer] = {}
+        self._lock = threading.Lock()
+
+    def reconcile(self, sessions: Mapping[str, SessionState]) -> None:
+        # Remote sessions are rooted on another machine; they keep using the
+        # shared socket over the ssh reverse-forward.
+        wanted = {
+            name: session
+            for name, session in ((name, session_from_state(state)) for name, state in sessions.items())
+            if session.host is None
+        }
+        with self._lock:
+            for name, server in list(self._servers.items()):
+                if wanted.get(name) != server.session:
+                    self._close(name)
+            for name, session in wanted.items():
+                if name not in self._servers:
+                    self._open(session)
+
+    def close_all(self) -> None:
+        with self._lock:
+            for name in list(self._servers):
+                self._close(name)
+
+    def _open(self, session: ProjectSession) -> None:
+        socket_path = session_socket_path(session.session_root)
+        socket_path.parent.mkdir(parents=True, exist_ok=True)
+        socket_path.unlink(missing_ok=True)
+        try:
+            server = SessionBridgeServer(
+                str(socket_path),
+                session,
+                self._dispatcher,
+                sessionless_dispatcher=self._sessionless_dispatcher,
+            )
+        except OSError as error:
+            # A deep session root can exceed the ~108-byte AF_UNIX path limit.
+            # Skip that one session rather than take down hopd for all of them.
+            debug.log(f"hopd: no bridge socket for session {session.session_name!r} at {socket_path}: {error}")
+            return
+        threading.Thread(
+            target=server.serve_forever,
+            name=f"hopd-bridge:{session.session_name}",
+            daemon=True,
+        ).start()
+        self._servers[session.session_name] = server
+        debug.log(f"hopd: bridge socket for session {session.session_name!r} listening on {socket_path}")
+
+    def _close(self, name: str) -> None:
+        server = self._servers.pop(name)
+        server.shutdown()
+        server.server_close()
+        server.socket_path.unlink(missing_ok=True)
 
 
 def serve_forever(

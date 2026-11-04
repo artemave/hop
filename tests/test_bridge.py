@@ -17,14 +17,17 @@ from hop.bridge import (
     BRIDGE_SHIM,
     BRIDGE_SHIM_DEFAULT_SOCKET,
     BridgeServer,
+    SessionBridges,
+    SessionBridgeServer,
     default_api_socket_path,
     dispatch_sessionless,
     dispatch_via_subprocess,
     render_bridge_shim,
     serve_forever,
+    session_socket_path,
 )
 from hop.session import ProjectSession
-from hop.state import record_session
+from hop.state import CommandBackendRecord, SessionState, load_sessions, record_session
 from hop.sway import SwayWindow
 
 
@@ -642,3 +645,165 @@ def test_shim_uses_baked_default_when_hop_socket_unset(tmp_path: Path) -> None:
 
     assert result.returncode == 0
     assert result.stdout == b"ok\n"
+
+
+def _local_state(sessions_dir: Path, root: str, name: str) -> dict[str, SessionState]:
+    record_session(
+        ProjectSession(session_root=Path(root), session_name=name, workspace_name=f"s:{name}"),
+        sessions_dir=sessions_dir,
+    )
+    return load_sessions(sessions_dir=sessions_dir)
+
+
+def _echo_session(session: ProjectSession, argv: Sequence[str]) -> CompletedProcess[bytes]:
+    return CompletedProcess(args=[], returncode=0, stdout=f"{session.session_name} {list(argv)}".encode(), stderr=b"")
+
+
+@pytest.fixture
+def runtime_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    runtime = tmp_path / "r"
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(runtime))
+    return runtime
+
+
+def test_session_socket_path_nests_session_root_under_bridge_dir(runtime_dir: Path) -> None:
+    assert session_socket_path(Path("/home/u/proj")) == runtime_dir / "hop/bridge/home/u/proj/api.sock"
+
+
+def test_session_bridge_server_pins_calls_to_its_session(tmp_path: Path) -> None:
+    socket_path = tmp_path / "s.sock"
+    session = ProjectSession(session_root=Path("/p"), session_name="pinned", workspace_name="s:pinned")
+    server = SessionBridgeServer(str(socket_path), session, _echo_session, sessionless_dispatcher=_refuse_sessionless)
+    thread = threading.Thread(target=server.serve_forever, args=(0.05,), daemon=True)
+    thread.start()
+    try:
+        # A caller-supplied ssh host must not reroute the call to a remote session.
+        response = _curl_post(socket_path, b"devbox\x00/elsewhere\x00hop\x00run\x00ls\x00")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.status == 200
+    assert response.body == b"pinned ['run', 'ls']"
+
+
+def test_session_bridge_server_runs_stateless_commands_sessionless(tmp_path: Path) -> None:
+    socket_path = tmp_path / "s.sock"
+    session = ProjectSession(session_root=Path("/p"), session_name="pinned", workspace_name="s:pinned")
+
+    def sessionless(argv: Sequence[str]) -> CompletedProcess[bytes]:
+        return CompletedProcess(args=[], returncode=0, stdout=f"sessionless {list(argv)}".encode(), stderr=b"")
+
+    server = SessionBridgeServer(str(socket_path), session, _echo_session, sessionless_dispatcher=sessionless)
+    thread = threading.Thread(target=server.serve_forever, args=(0.05,), daemon=True)
+    thread.start()
+    try:
+        response = _curl_post(socket_path, b"\x00\x00hop\x00path\x00kitten/hints\x00")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert response.body == b"sessionless ['path', 'kitten/hints']"
+
+
+def test_session_bridges_serve_each_local_session_on_its_own_socket(runtime_dir: Path, tmp_path: Path) -> None:
+    sessions_dir = tmp_path / "sessions"
+    _local_state(sessions_dir, "/p/one", "one")
+    states = _local_state(sessions_dir, "/p/two", "two")
+    bridges = SessionBridges(_echo_session, sessionless_dispatcher=_refuse_sessionless)
+
+    bridges.reconcile(states)
+    try:
+        one = _curl_post(session_socket_path(Path("/p/one")), b"\x00\x00hop\x00kill\x00")
+        two = _curl_post(session_socket_path(Path("/p/two")), b"\x00\x00hop\x00kill\x00")
+    finally:
+        bridges.close_all()
+
+    assert one.body == b"one ['kill']"
+    assert two.body == b"two ['kill']"
+
+
+def test_session_bridges_skip_remote_sessions(runtime_dir: Path, tmp_path: Path) -> None:
+    sessions_dir = tmp_path / "sessions"
+    record_session(
+        ProjectSession(session_root=Path("/p/far"), session_name="far", workspace_name="s:far", host="devbox"),
+        backend=CommandBackendRecord(
+            name="ssh",
+            interactive_prefix="ssh devbox",
+            noninteractive_prefix="ssh devbox",
+            transport_host="devbox",
+        ),
+        sessions_dir=sessions_dir,
+    )
+    bridges = SessionBridges(_echo_session)
+
+    bridges.reconcile(load_sessions(sessions_dir=sessions_dir))
+
+    assert not session_socket_path(Path("/p/far")).exists()
+
+
+def test_session_bridges_keep_socket_while_session_persists(runtime_dir: Path, tmp_path: Path) -> None:
+    states = _local_state(tmp_path / "sessions", "/p/one", "one")
+    bridges = SessionBridges(_echo_session)
+    bridges.reconcile(states)
+    socket_path = session_socket_path(Path("/p/one"))
+    inode = socket_path.stat().st_ino
+
+    bridges.reconcile(states)
+    try:
+        assert socket_path.stat().st_ino == inode
+    finally:
+        bridges.close_all()
+
+
+def test_session_bridges_remove_socket_when_session_is_forgotten(runtime_dir: Path, tmp_path: Path) -> None:
+    sessions_dir = tmp_path / "sessions"
+    bridges = SessionBridges(_echo_session)
+    bridges.reconcile(_local_state(sessions_dir, "/p/one", "one"))
+
+    bridges.reconcile({})
+
+    assert not session_socket_path(Path("/p/one")).exists()
+    # The directory stays: a running container's bind mount points at it.
+    assert session_socket_path(Path("/p/one")).parent.is_dir()
+
+
+def test_session_bridges_move_socket_when_session_root_changes(runtime_dir: Path, tmp_path: Path) -> None:
+    bridges = SessionBridges(_echo_session)
+    bridges.reconcile(_local_state(tmp_path / "old", "/p/old", "same"))
+
+    bridges.reconcile(_local_state(tmp_path / "new", "/p/new", "same"))
+    try:
+        assert not session_socket_path(Path("/p/old")).exists()
+        assert session_socket_path(Path("/p/new")).is_socket()
+    finally:
+        bridges.close_all()
+
+
+def test_session_bridges_replace_a_stale_socket_file(runtime_dir: Path, tmp_path: Path) -> None:
+    stale = session_socket_path(Path("/p/one"))
+    stale.parent.mkdir(parents=True)
+    stale.write_text("left over from a previous hopd")
+    bridges = SessionBridges(_echo_session)
+
+    bridges.reconcile(_local_state(tmp_path / "sessions", "/p/one", "one"))
+    try:
+        assert stale.is_socket()
+    finally:
+        bridges.close_all()
+
+
+def test_session_bridges_skip_a_session_whose_socket_path_is_too_long(runtime_dir: Path, tmp_path: Path) -> None:
+    sessions_dir = tmp_path / "sessions"
+    _local_state(sessions_dir, "/" + "x" * 120, "deep")
+    states = _local_state(sessions_dir, "/p/one", "one")
+    bridges = SessionBridges(_echo_session)
+
+    bridges.reconcile(states)
+    try:
+        assert not session_socket_path(Path("/" + "x" * 120)).exists()
+        assert session_socket_path(Path("/p/one")).is_socket()
+    finally:
+        bridges.close_all()

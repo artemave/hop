@@ -72,7 +72,7 @@ prepare               = "podman-compose -f docker-compose.dev.yml up -d devconta
 teardown              = "podman-compose -f docker-compose.dev.yml down"
 port_translate        = """
   podman ps -q \\
-    --filter label=io.podman.compose.project=$(basename {session_root}) \\
+    --filter label=io.podman.compose.project=$(basename {session_root} | tr A-Z a-z | tr -cd a-z0-9_-) \\
     --filter label=io.podman.compose.service=devcontainer \\
     | head -1 \\
     | xargs -r -I@ podman port @ {port} \\
@@ -88,7 +88,7 @@ noninteractive_prefix = "podman-compose -f docker-compose.dev.yml exec -T devcon
 
 Each command is a single string. Hop runs it through `sh -c` after substituting placeholders, so pipes, redirects, and `$(...)` work — write the value the way you'd type it at a terminal. Triple-quoted strings (`"""…"""`) let you spread a longer pipeline across lines for readability. Placeholder values (`{session_root}`, `{port}`) are shell-quoted before insertion, so paths with spaces substitute safely.
 
-`port_translate` is invoked lazily when the kitten dispatch encounters a URL like `http://localhost:3000` printed inside the container — the recipe above resolves the running container by compose label (so it works whether the container was brought up by `podman-compose up` or by `podman-compose run …` with their different naming conventions) and asks `podman port` for the host-side port the container's port is published on. Stripped stdout (e.g. `35231`) replaces the URL's port; the host (`localhost`) is left untouched. The companion `host_translate` field exists for backends that swap the hostname instead — not needed for a same-host devcontainer.
+`port_translate` is invoked lazily when the kitten dispatch encounters a URL like `http://localhost:3000` printed inside the container — the recipe above resolves the running container by compose label (so it works whether the container was brought up by `podman-compose up` or by `podman-compose run …` with their different naming conventions) and asks `podman port` for the host-side port the container's port is published on. The project label is the directory name as podman-compose normalises it — lowercased, with everything outside `[-_a-z0-9]` dropped (`artem.rocks` → `artemrocks`) — hence the `tr` pipeline. Stripped stdout (e.g. `35231`) replaces the URL's port; the host (`localhost`) is left untouched. The companion `host_translate` field exists for backends that swap the hostname instead — not needed for a same-host devcontainer.
 
 `{port}` carries the port from each dispatched URL, so a single `port_translate` already covers a project that exposes several ports from **one** container — `3000`, `5432`, and `1080` each substitute in turn and `podman port` returns the matching host port for whichever one was clicked.
 
@@ -100,7 +100,7 @@ If your compose project publishes ports from **separate** containers (a `web` se
 [backends.devcontainer]
 port_translate = """
   podman ps -q \\
-    --filter label=io.podman.compose.project=$(basename {session_root}) \\
+    --filter label=io.podman.compose.project=$(basename {session_root} | tr A-Z a-z | tr -cd a-z0-9_-) \\
   | while read -r cid; do podman port "$cid" {port} 2>/dev/null && break; done \\
   | head -1 \\
   | cut -d: -f2
@@ -161,7 +161,7 @@ compose=(podman-compose -f docker-compose.dev.yml)
 "${compose[@]}" build devcontainer
 
 cid="$(podman ps -aq \
-  --filter label=io.podman.compose.project="$(basename "$PWD")" \
+  --filter label=io.podman.compose.project="$(basename "$PWD" | tr A-Z a-z | tr -cd a-z0-9_-)" \
   --filter label=io.podman.compose.service=devcontainer)"
 if [[ -n $cid ]]; then
   image="$(podman inspect -f '{{.ImageName}}' "$cid")"
@@ -207,30 +207,20 @@ Hop ships a small POSIX-sh client (no `socat`/`nc` dependency, just `curl`) that
 
 **a. Make the bridge socket reachable inside the container.**
 
-The host's bridge socket lives at `$XDG_RUNTIME_DIR/hop/bridge/api.sock`. Pick one of these patterns depending on what your compose already does:
+`hopd` gives every local session a socket of its own at `$XDG_RUNTIME_DIR/hop/bridge/<session root>/api.sock` — for a session rooted at `/home/u/proj`, that's `$XDG_RUNTIME_DIR/hop/bridge/home/u/proj/api.sock`. Every call on it acts on that session, whatever window is focused. Bind-mount that session's directory:
 
-- **Recommended: bind-mount the bridge dir**, which holds only the bridge socket:
+```yaml
+services:
+  devcontainer:
+    volumes:
+      - "${XDG_RUNTIME_DIR}/hop/bridge${COMPOSE_PROJECT_DIR}:/run/hop"
+```
 
-  ```yaml
-  services:
-    devcontainer:
-      volumes:
-        - "${XDG_RUNTIME_DIR}/hop/bridge:${XDG_RUNTIME_DIR}/hop/bridge"
-  ```
+podman-compose sets `COMPOSE_PROJECT_DIR` to the directory of the compose file, which is the session root when `docker-compose.dev.yml` sits at the project's top level. If your compose file lives elsewhere, export the session root from your `prepare` wrapper (e.g. `REPO=$PWD`) and interpolate that instead. A directory mount survives a `hopd` restart: the new socket appears in the same directory.
 
-  Then pass `--socket "$XDG_RUNTIME_DIR/hop/bridge/api.sock"` to `hop bridge shim` (see **c** below). A directory mount survives a `hopd` restart: the new socket appears in the same directory.
-- **Minimal: a single-file mount** of just the socket:
+Mount only the session's own directory. The shared socket at `$XDG_RUNTIME_DIR/hop/bridge/api.sock` acts on whichever session is focused and accepts a caller-supplied ssh host, so a container that reaches it can drive other sessions, including ones running directly on the host. Don't mount `${XDG_RUNTIME_DIR}/hop` or all of `${XDG_RUNTIME_DIR}` either: besides the bridge, `${XDG_RUNTIME_DIR}/hop` holds every session's kitty remote-control socket, and with those the container can launch commands on the host.
 
-  ```yaml
-  services:
-    devcontainer:
-      volumes:
-        - "${XDG_RUNTIME_DIR}/hop/bridge/api.sock:/run/hop.sock"
-  ```
-
-  `/run/hop.sock` is the shim's built-in default so it needs zero extra config. Caveat: a single-file bind mount pins an inode — if `hopd` restarts and recreates the socket, the container keeps looking at the dead one (the shim fails with `curl: (7) … Could not connect to server`) until the container restarts too. `hopd` must also be running when the container starts: if the socket doesn't exist at compose-up time, container runtimes create a directory at that path instead.
-
-Don't mount `${XDG_RUNTIME_DIR}/hop` or all of `${XDG_RUNTIME_DIR}`. Besides the bridge, `${XDG_RUNTIME_DIR}/hop` holds every session's kitty remote-control socket, and with those the container can launch commands on the host.
+The socket path must fit the ~108-byte unix socket limit. `hopd` skips a session whose root is too deep and logs it to the debug log.
 
 **b. Install the shim into the container at `prepare` time.**
 
@@ -249,20 +239,20 @@ prepare = """
 
 The `sudo` is necessary when the container's `exec` user isn't root — typical for dev container images that run as a `dev` user with passwordless sudo. If your container exec's as root by default, the `sudo` is a harmless no-op. If your container runs as a non-root user *without* sudo configured, install the shim to a user-writable path on `$PATH` instead (e.g. `~/.local/bin/hop`) and adjust accordingly.
 
-**c. Point the shim at the host's socket path when the container mounts the bridge dir.**
+**c. Point the shim at the mounted socket.**
 
-With the bridge-dir mount above (the bridge socket is reachable at the *host's* `$XDG_RUNTIME_DIR/hop/bridge/api.sock` path inside the container), pass `--socket` to bake that path in as the shim's default:
+With the mount above, the session's socket is at `/run/hop/api.sock` inside the container. Pass `--socket` to bake that path in as the shim's default:
 
 ```toml
 prepare = """
   podman-compose -f docker-compose.dev.yml up -d devcontainer \\
-  && hop bridge shim --socket "$XDG_RUNTIME_DIR/hop/bridge/api.sock" \\
+  && hop bridge shim --socket /run/hop/api.sock \\
        | podman-compose -f docker-compose.dev.yml exec -T devcontainer \\
          sudo install -m 755 /dev/stdin /usr/local/bin/hop
 """
 ```
 
-`$XDG_RUNTIME_DIR` is expanded on the **host** before `hop bridge shim` runs, so the resulting shim has the literal path (e.g. `/run/user/1000/hop/bridge/api.sock`) baked in as its default. The shim still honors `$HOP_SOCKET` at run time if you ever need to override.
+The shim still honors `$HOP_SOCKET` at run time if you ever need to override.
 
 **d. Verify.**
 

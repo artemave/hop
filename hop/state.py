@@ -117,7 +117,10 @@ def record_session(
         session_root=session.session_root,
         backend=backend if backend is not None else _HOST_RECORD,
     )
-    (target / f"{session.session_name}.json").write_text(json.dumps(state.to_json()))
+    # hopd reads these on every Sway event; a rename is atomic, a write isn't.
+    staging = target / f".{session.session_name}.json.tmp"
+    staging.write_text(json.dumps(state.to_json()))
+    staging.replace(target / f"{session.session_name}.json")
 
 
 def forget_session(session_name: str, *, sessions_dir: Path | None = None) -> None:

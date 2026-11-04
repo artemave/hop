@@ -5,7 +5,10 @@ from typing import Any, Iterator
 import pytest
 
 import hop.daemon as daemon
+from hop.bridge import SessionBridges, session_socket_path
 from hop.errors import HopError
+from hop.session import ProjectSession
+from hop.state import record_session
 from hop.sway import SwaySubscriptionError
 
 
@@ -161,9 +164,23 @@ def test_serve_mark_reconciler_runs_reconcile_per_window_event(
         ),
     )
 
-    daemon._serve_mark_reconciler(sway)  # pyright: ignore[reportPrivateUsage]  # type: ignore[arg-type]
+    daemon._serve_mark_reconciler(sway, SessionBridges())  # pyright: ignore[reportPrivateUsage]  # type: ignore[arg-type]
 
     assert len(calls) == 2
+
+
+def test_serve_mark_reconciler_opens_bridge_socket_for_recorded_session() -> None:
+    session = ProjectSession(session_root=Path("/p"), session_name="p", workspace_name="s:p")
+    record_session(session)
+    bridges = SessionBridges()
+    sway = StubSubscribingSway(window_events=({"change": "new", "container": {"id": 1}},))
+
+    daemon._serve_mark_reconciler(sway, bridges)  # pyright: ignore[reportPrivateUsage]  # type: ignore[arg-type]
+
+    try:
+        assert session_socket_path(Path("/p")).is_socket()
+    finally:
+        bridges.close_all()
 
 
 def test_serve_mark_reconciler_logs_unhandled_exception(
@@ -182,7 +199,7 @@ def test_serve_mark_reconciler_logs_unhandled_exception(
             raise RuntimeError("reconciler boom")
             yield  # pragma: no cover  # makes this a generator
 
-    daemon._serve_mark_reconciler(_RaisingSway())  # pyright: ignore[reportPrivateUsage]  # type: ignore[arg-type]
+    daemon._serve_mark_reconciler(_RaisingSway(), SessionBridges())  # pyright: ignore[reportPrivateUsage]  # type: ignore[arg-type]
 
     contents = log_path.read_text()
     assert "mark reconciler crashed" in contents

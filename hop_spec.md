@@ -484,13 +484,15 @@ Activated entries in vicinae dispatch via `hop browser` (browser role), `hop ter
 
 `hopd` listens on a per-user unix socket at `$XDG_RUNTIME_DIR/hop/bridge/api.sock` — alone in its directory, so a backend can bind-mount the directory without seeing the kitty sockets in `$XDG_RUNTIME_DIR/hop` — so editor plugins running inside non-host backends (devcontainer, ssh) can dispatch `hop` CLI calls back to the host. The host is always the authority — backends never carry hop state.
 
+Each live local session also gets a **per-session acceptor** at `$XDG_RUNTIME_DIR/hop/bridge/<session root>/api.sock` (the session root's absolute path appended to the bridge directory, so a compose file can rebuild it by interpolation and bind-mount just that directory). A call on a per-session socket always acts on that session: the request's `host` and `cwd` and the focused window are ignored, and stateless commands (`bridge`, `path`) run sessionless as on the shared socket. A backend that can reach only its own session's socket can't act on any other session or on the host. `hopd` keeps the set of per-session sockets in step with `$XDG_RUNTIME_DIR/hop/sessions/` at startup and on every Sway workspace and window event: it opens a socket for each recorded local session, and closes and unlinks the socket of a session that is gone, leaving the directory so a running container's bind mount stays valid. Remote sessions have no per-session socket. A session whose socket path exceeds the unix socket path limit gets none either, and `hopd` writes that to the debug log.
+
 Wire protocol — HTTP/1.0 over `AF_UNIX`:
 
 - Request: `POST /call` with the body as NUL-separated fields framed `host \0 cwd \0 $0 \0 *args`. `host` and `cwd` are the shim's baked ssh host (empty for the in-backend shim) and its `pwd` at call time; `$0` is the shim's own name and is ignored; the rest are forwarded to `hop`.
 - Response on successful dispatch: `200 OK` with body equal to the `hop` subprocess's stdout, header `X-Hop-Exit: <integer>` carrying its exit code, and header `X-Hop-Stderr: <base64>` carrying its stderr (base64-encoded because HTTP headers are text-only).
 - Response on acceptor-level failure: `400` (caller context — no focused session, malformed argv) or `500` (acceptor fault) with a plain-text `text/plain; charset=utf-8` body explaining the problem.
 
-The acceptor dispatches by request shape:
+The shared acceptor dispatches by request shape:
 
 - **Remote session entry** — a call carrying a non-empty `host` and *no* args (`hop` with no subcommand, from a `hop ssh`-installed shim). No session exists yet, so identity comes from the shim's `(host, cwd)`, not from focus: hop is run with `HOP_REMOTE_HOST` / `HOP_REMOTE_CWD` set and builds the remote `ProjectSession` from them.
 - **Everything else** — session identity is resolved on the host from existing Sway state, not from the request. The acceptor queries Sway for the focused window: if its workspace name matches `s:<session>`, the suffix is the session name. This covers every kitty role terminal — shell, editor, test/server/console/… — since they all live on the session workspace, plus any other window inside a session workspace; they carry no per-window session identity in Sway, but the workspace tag is hop's canonical session-to-window mapping.
