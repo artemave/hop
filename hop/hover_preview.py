@@ -1,4 +1,4 @@
-"""Hover preview: a text file's contents in a floating kitty panel.
+"""Hover preview: a text file or image in a floating kitty panel.
 
 With ``[keys].preview`` set, the hover-links watcher previews the file behind
 the hover link under the mouse while the mouse moves with that modifier held.
@@ -8,9 +8,11 @@ kitty OS window's content area through sway and adds the link's cell offset.
 
 from __future__ import annotations
 
+import math
 import os
 import re
 import shutil
+import struct
 import tempfile
 import unicodedata
 from dataclasses import dataclass
@@ -18,7 +20,7 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 from hop.config import PreviewSettings
-from hop.focused import FilePreview
+from hop.focused import FilePreview, ImagePreview
 from hop.hover_links import OPEN_ACTION, parse_hop_url
 from hop.session import ProjectSession
 from hop.state import SessionState, load_sessions, session_from_state
@@ -37,10 +39,12 @@ _BAT_MIN_NUMBER_WIDTH = 4
 # command, deletes the file and stays alive: the panel closes with its last
 # process. The output goes through ``$(…)`` to drop bat's final newline, which
 # would scroll the first line out of a panel exactly as tall as the preview.
-_PANEL_SCRIPT = (
+_TEXT_PANEL_SCRIPT = (
     'file=$1; shift; printf "\\033[?25l\\033[?7l"; out=$("$@" "$file"); printf %s "$out"; '
     'rm -f "$file"; exec sleep infinity'
 )
+# icat talks to the terminal, so its output can't go through ``$(…)``.
+_IMAGE_PANEL_SCRIPT = 'file=$1; shift; printf "\\033[?25l"; "$@" "$file"; rm -f "$file"; exec sleep infinity'
 
 
 def session_preview_settings(
@@ -97,13 +101,14 @@ def find_bat() -> str | None:
 
 @dataclass(frozen=True, slots=True)
 class RenderedPreview:
-    """What the panel shows: ``command`` prints the file holding ``text``
-    into a ``columns`` × ``lines`` panel."""
+    """What the panel shows: ``command`` prints the file holding ``content``
+    into a ``columns`` × ``lines`` panel, run by ``script``."""
 
-    text: str
+    content: str | bytes
     lines: int
     columns: int
     command: tuple[str, ...] = ("cat",)
+    script: str = _TEXT_PANEL_SCRIPT
 
 
 def render_preview(
@@ -143,7 +148,7 @@ def render_preview(
             f"--file-name={preview.path.name}",
             "--",
         )
-        return RenderedPreview(text=preview.text, lines=last - first + 1, columns=columns, command=command)
+        return RenderedPreview(content=preview.text, lines=last - first + 1, columns=columns, command=command)
     gutter = len(str(last))
     rows = {
         number: _fit(f"{number:>{gutter}} {_printable(file_lines[number - 1])}", max_columns)
@@ -154,7 +159,71 @@ def render_preview(
         f"{_REVERSE}{row}{' ' * (columns - _width(row))}{_REVERSE_OFF}" if number == target else row
         for number, row in rows.items()
     )
-    return RenderedPreview(text=text, lines=len(rows), columns=columns)
+    return RenderedPreview(content=text, lines=len(rows), columns=columns)
+
+
+def render_image_preview(
+    preview: ImagePreview, *, kitten: str, max_lines: int, max_columns: int, cell_width: int, cell_height: int
+) -> RenderedPreview | None:
+    """The image at its own size, or scaled down to fit ``max_columns`` ×
+    ``max_lines`` cells of ``cell_width`` × ``cell_height`` pixels; ``None``
+    for an image whose size ``image_size`` can't read."""
+
+    size = image_size(preview.data)
+    if size is None:
+        return None
+    width, height = size
+    scale = min(1, max_columns * cell_width / width, max_lines * cell_height / height)
+    columns = max(1, math.ceil(width * scale / cell_width))
+    lines = max(1, math.ceil(height * scale / cell_height))
+    command = (kitten, "icat", "--transfer-mode=stream", "--align=left", f"--place={columns}x{lines}@0x0")
+    return RenderedPreview(
+        content=preview.data, lines=lines, columns=columns, command=command, script=_IMAGE_PANEL_SCRIPT
+    )
+
+
+def image_size(data: bytes) -> tuple[int, int] | None:
+    """An image's ``(width, height)`` in pixels from its header, for PNG,
+    GIF, JPEG and WebP; ``None`` for anything else."""
+
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return struct.unpack(">II", data[16:24])
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return struct.unpack("<HH", data[6:10])
+    if data.startswith(b"\xff\xd8"):
+        return _jpeg_size(data)
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return _webp_size(data)
+    return None
+
+
+# JPEG start-of-frame markers, which carry the image size; C4, C8 and CC
+# share the range but are other segments.
+_JPEG_FRAME_MARKERS = frozenset(range(0xC0, 0xD0)) - {0xC4, 0xC8, 0xCC}
+
+
+def _jpeg_size(data: bytes) -> tuple[int, int] | None:
+    offset = 2
+    while offset + 9 <= len(data) and data[offset] == 0xFF:
+        marker = data[offset + 1]
+        if marker in _JPEG_FRAME_MARKERS:
+            height, width = struct.unpack(">HH", data[offset + 5 : offset + 9])
+            return width, height
+        offset += 2 + struct.unpack(">H", data[offset + 2 : offset + 4])[0]
+    return None
+
+
+def _webp_size(data: bytes) -> tuple[int, int] | None:
+    chunk = data[12:16]
+    if chunk == b"VP8 ":
+        width, height = struct.unpack("<HH", data[26:30])
+        return width & 0x3FFF, height & 0x3FFF
+    if chunk == b"VP8L":
+        bits = int.from_bytes(data[21:25], "little")
+        return (bits & 0x3FFF) + 1, ((bits >> 14) & 0x3FFF) + 1
+    if chunk == b"VP8X":
+        return int.from_bytes(data[24:27], "little") + 1, int.from_bytes(data[27:30], "little") + 1
+    return None
 
 
 def _printable(line: str) -> str:
@@ -275,7 +344,7 @@ def panel_launch_args(
         f"background={background}",
         "sh",
         "-c",
-        _PANEL_SCRIPT,
+        preview.script,
         "hop-preview",
         str(preview_path),
         *preview.command,
@@ -287,7 +356,8 @@ def write_preview_file(preview: RenderedPreview) -> Path:
 
     base = Path(os.environ.get("XDG_RUNTIME_DIR") or "/tmp") / "hop"
     base.mkdir(parents=True, exist_ok=True)
-    descriptor, path = tempfile.mkstemp(prefix="preview-", suffix=".txt", dir=base)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-        handle.write(preview.text)
+    descriptor, path = tempfile.mkstemp(prefix="preview-", dir=base)
+    content = preview.content.encode() if isinstance(preview.content, str) else preview.content
+    with os.fdopen(descriptor, "wb") as handle:
+        handle.write(content)
     return Path(path)

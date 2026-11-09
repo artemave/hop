@@ -112,11 +112,20 @@ def session_paths_exist(
     )
 
 
+PREVIEW_MAX_IMAGE_BYTES = 20 * 1024 * 1024
+
+
 @dataclass(frozen=True, slots=True)
 class FilePreview:
     path: Path
     line_number: int | None
     text: str
+
+
+@dataclass(frozen=True, slots=True)
+class ImagePreview:
+    path: Path
+    data: bytes
 
 
 def session_file_preview(
@@ -126,10 +135,11 @@ def session_file_preview(
     source_cwd: str | None,
     sessions_loader: Callable[[], dict[str, SessionState]] | None = None,
     backend_loader: Callable[[SessionState], SessionBackend | None] | None = None,
-) -> FilePreview | None:
-    """The text file ``selection`` points to in a named session, or ``None``
-    when it isn't a file reference, the file is gone or binary, or the
-    session's state or backend is gone."""
+) -> FilePreview | ImagePreview | None:
+    """The text file or image ``selection`` points to in a named session, or
+    ``None`` when it isn't a file reference, the file is gone, other binary
+    content or an image over ``PREVIEW_MAX_IMAGE_BYTES``, or the session's
+    state or backend is gone."""
 
     syntactic = parse_visible_output_target(selection)
     if not isinstance(syntactic, SyntacticFileTarget | SyntacticRailsRefTarget):
@@ -146,10 +156,12 @@ def session_file_preview(
     )
     if not isinstance(target, ResolvedFileTarget):
         return None
-    text = backend.read_text_file(session, target.path)
-    if text is None:
+    content = backend.read_preview_file(session, target.path, max_image_bytes=PREVIEW_MAX_IMAGE_BYTES)
+    if content is None:
         return None
-    return FilePreview(path=target.path, line_number=target.line_number, text=text)
+    if isinstance(content, bytes):
+        return ImagePreview(path=target.path, data=content)
+    return FilePreview(path=target.path, line_number=target.line_number, text=content)
 
 
 def selection_base_cwd(state: SessionState, source_cwd: Path | str | None) -> Path:
@@ -294,6 +306,8 @@ def _local_fallback(candidates: list[str], *, base_cwd: Path) -> set[str]:
 
 __all__ = [
     "FilePreview",
+    "ImagePreview",
+    "PREVIEW_MAX_IMAGE_BYTES",
     "focused_session_and_backend",
     "paths_exist",
     "selection_base_cwd",

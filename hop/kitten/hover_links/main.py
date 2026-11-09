@@ -5,6 +5,9 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, cast
 
+from kitty.constants import (  # pyright: ignore[reportMissingImports]
+    kitten_exe as _kitty_kitten_exe,  # pyright: ignore[reportUnknownVariableType]
+)
 from kitty.fast_data_types import (  # pyright: ignore[reportMissingImports]
     add_timer as _kitty_add_timer,  # pyright: ignore[reportUnknownVariableType]
 )
@@ -33,7 +36,7 @@ if _HOP_PARENT not in sys.path:
     sys.path.insert(0, _HOP_PARENT)
 
 from hop.config import PreviewSettings  # noqa: E402
-from hop.focused import FilePreview, session_file_preview, session_paths_exist  # noqa: E402
+from hop.focused import FilePreview, ImagePreview, session_file_preview, session_paths_exist  # noqa: E402
 from hop.hover_links import (  # noqa: E402
     OPEN_ACTION,
     PathExistence,
@@ -54,6 +57,7 @@ from hop.hover_preview import (  # noqa: E402
     panel_placement,
     preview_room,
     preview_selection,
+    render_image_preview,
     render_preview,
     session_preview_settings,
     write_preview_file,
@@ -69,6 +73,7 @@ remove_timer = cast("Callable[[int], None]", _kitty_remove_timer)
 wakeup_main_loop = cast("Callable[[], None]", _kitty_wakeup_main_loop)
 get_os_window_size = cast("Callable[[int], dict[str, Any]]", _kitty_get_os_window_size)
 parse_launch_args = cast("Callable[[list[str]], tuple[Any, list[str]]]", _kitty_parse_launch_args)
+kitten_exe = cast("Callable[[], str]", _kitty_kitten_exe)
 launch = cast("Callable[[Any, Any, list[str]], Any]", _kitty_launch)
 
 _existence = PathExistence(
@@ -86,7 +91,7 @@ _last_moves: dict[int, dict[str, Any]] = {}
 # (window id, link url) the preview is for while the modifier is held over a
 # link; the panel shows only while it still matches.
 _preview_wanted: tuple[int, str] | None = None
-_preview_loaded: tuple[FilePreview, SwayWindowPlacement, int, int] | None = None
+_preview_loaded: tuple[FilePreview | ImagePreview, SwayWindowPlacement, int, int] | None = None
 _preview_timer: int | None = None
 _preview_panel: Any = None
 _bat = find_bat()
@@ -181,7 +186,7 @@ def _update_preview(boss: Any, window: Any) -> None:
 
 def _load_preview(
     boss: Any, window: Any, selection: str, *, column: int, row: int
-) -> tuple[FilePreview, SwayWindowPlacement, int, int] | None:
+) -> tuple[FilePreview | ImagePreview, SwayWindowPlacement, int, int] | None:
     session_name = session_name_from_listen_on(boss.listening_on)
     assert session_name is not None
     preview = session_file_preview(selection, session_name=session_name, source_cwd=window.cwd_of_child)
@@ -220,12 +225,30 @@ def _show_preview(boss: Any) -> None:
 
 
 def _open_preview(
-    boss: Any, window: Any, preview: FilePreview, placement: SwayWindowPlacement, *, column: int, row: int
+    boss: Any,
+    window: Any,
+    preview: FilePreview | ImagePreview,
+    placement: SwayWindowPlacement,
+    *,
+    column: int,
+    row: int,
 ) -> None:
     global _preview_panel
     room = preview_room(row, window.screen.lines)
-    rendered = render_preview(preview, bat=_bat, max_lines=room.lines, max_columns=window.screen.columns)
     size = get_os_window_size(window.os_window_id)
+    if isinstance(preview, ImagePreview):
+        rendered = render_image_preview(
+            preview,
+            kitten=kitten_exe(),
+            max_lines=room.lines,
+            max_columns=window.screen.columns,
+            cell_width=size["cell_width"],
+            cell_height=size["cell_height"],
+        )
+        if rendered is None:
+            return
+    else:
+        rendered = render_preview(preview, bat=_bat, max_lines=room.lines, max_columns=window.screen.columns)
     cells = KittyCells(
         left=window.geometry.left,
         top=window.geometry.top,

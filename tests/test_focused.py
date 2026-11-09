@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Sequence
 
-from hop.focused import FilePreview, paths_exist, session_file_preview, session_paths_exist
+from hop.focused import FilePreview, ImagePreview, paths_exist, session_file_preview, session_paths_exist
 from hop.session import ProjectSession
 from hop.state import CommandBackendRecord, SessionState
 
@@ -86,8 +86,8 @@ class _FakeBackend:
         del session, path
         return False
 
-    def read_text_file(self, session: ProjectSession, path: Path) -> str | None:
-        raise AssertionError(f"unexpected read_text_file of {path}")
+    def read_preview_file(self, session: ProjectSession, path: Path, *, max_image_bytes: int) -> str | bytes | None:
+        raise AssertionError(f"unexpected read_preview_file of {path}")
 
     def materialize_on_host(self, session: ProjectSession, path: Path) -> Path:
         del session
@@ -657,12 +657,32 @@ def test_session_file_preview_skips_a_rails_ref_without_the_action(tmp_path: Pat
     assert preview is None
 
 
-def test_session_file_preview_skips_binary_files(tmp_path: Path) -> None:
+def test_session_file_preview_reads_an_image(tmp_path: Path) -> None:
     session_root = tmp_path.resolve()
-    (session_root / "logo.png").write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\xff\x00")
+    png = (
+        b"\x89PNG\r\n\x1a\n"
+        b"\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
+        b"\x00\x00\x00\rIDATx\x9cc\xf8\xcf\xc0\xf0\x1f\x00\x05\x00\x01\xff\x89\x99=\x1d"
+        b"\x00\x00\x00\x00IEND\xaeB`\x82"
+    )
+    (session_root / "logo.png").write_bytes(png)
 
     preview = session_file_preview(
         "logo.png",
+        session_name="demo",
+        source_cwd=None,
+        sessions_loader=lambda: {"demo": _state("demo", session_root)},
+    )
+
+    assert preview == ImagePreview(path=session_root / "logo.png", data=png)
+
+
+def test_session_file_preview_skips_binary_files(tmp_path: Path) -> None:
+    session_root = tmp_path.resolve()
+    (session_root / "data.bin").write_bytes(b"\x00\x00\x00\x00\xff\xfe\x01\x02hello\x00\x00")
+
+    preview = session_file_preview(
+        "data.bin",
         session_name="demo",
         source_cwd=None,
         sessions_loader=lambda: {"demo": _state("demo", session_root)},

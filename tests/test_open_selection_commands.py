@@ -304,8 +304,10 @@ def test_open_selection_in_window_dispatches_path_unchanged_to_nvim(tmp_path: Pa
         def is_binary_file(self, _session: ProjectSession, _path: Path) -> bool:
             return False
 
-        def read_text_file(self, _session: ProjectSession, path: Path) -> str | None:
-            raise AssertionError(f"unexpected read_text_file of {path}")
+        def read_preview_file(
+            self, _session: ProjectSession, path: Path, *, max_image_bytes: int
+        ) -> str | bytes | None:
+            raise AssertionError(f"unexpected read_preview_file of {path}")
 
     session = open_selection_in_window(
         "app/models/user.rb",

@@ -904,66 +904,96 @@ def test_command_backend_is_binary_file_raises_on_probe_failure(tmp_path: Path) 
         backend.is_binary_file(build_session(tmp_path), Path("/app/logo.png"))
 
 
-# --- read_text_file: one round trip for the hover preview -----------------
+# --- read_preview_file: one round trip for the hover preview --------------
+
+_PNG = (
+    b"\x89PNG\r\n\x1a\n"
+    b"\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
+    b"\x00\x00\x00\rIDATx\x9cc\xf8\xcf\xc0\xf0\x1f\x00\x05\x00\x01\xff\x89\x99=\x1d"
+    b"\x00\x00\x00\x00IEND\xaeB`\x82"
+)
 
 
-def test_command_backend_read_text_file_reads_text_and_empty_files(tmp_path: Path) -> None:
+def test_command_backend_read_preview_file_reads_text_and_empty_files(tmp_path: Path) -> None:
     source = tmp_path / "main.rs"
     source.write_text("fn main() {}\n")
     empty = tmp_path / "blank"
     empty.touch()
 
     session = build_session(tmp_path)
-    assert host_backend().read_text_file(session, source) == "fn main() {}\n"
-    assert host_backend().read_text_file(session, empty) == ""
+    assert host_backend().read_preview_file(session, source, max_image_bytes=1000) == "fn main() {}\n"
+    assert host_backend().read_preview_file(session, empty, max_image_bytes=1000) == ""
 
 
-def test_command_backend_read_text_file_is_none_for_binary_missing_and_directories(tmp_path: Path) -> None:
-    png = tmp_path / "logo.png"
-    png.write_bytes(b"\x89PNG\r\n\x1a\nfake-pixels\x00\x01\x02")
+def test_command_backend_read_preview_file_reads_an_image_as_bytes(tmp_path: Path) -> None:
+    png = tmp_path / "dot.png"
+    png.write_bytes(_PNG)
+
+    assert host_backend().read_preview_file(build_session(tmp_path), png, max_image_bytes=len(_PNG)) == _PNG
+
+
+def test_command_backend_read_preview_file_is_none_for_an_image_over_the_limit(tmp_path: Path) -> None:
+    png = tmp_path / "dot.png"
+    png.write_bytes(_PNG)
+
+    assert host_backend().read_preview_file(build_session(tmp_path), png, max_image_bytes=len(_PNG) - 1) is None
+
+
+def test_command_backend_read_preview_file_reads_an_svg_as_text(tmp_path: Path) -> None:
+    svg = tmp_path / "icon.svg"
+    svg.write_text('<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"></svg>\n')
+
+    assert host_backend().read_preview_file(build_session(tmp_path), svg, max_image_bytes=1000) == svg.read_text()
+
+
+def test_command_backend_read_preview_file_is_none_for_binary_missing_and_directories(tmp_path: Path) -> None:
+    blob = tmp_path / "data.bin"
+    blob.write_bytes(b"\x00\x00\x00\x00\xff\xfe\x01\x02hello\x00\x00")
     (tmp_path / "docs").mkdir()
 
     session = build_session(tmp_path)
-    assert host_backend().read_text_file(session, png) is None
-    assert host_backend().read_text_file(session, tmp_path / "does-not-exist") is None
-    assert host_backend().read_text_file(session, tmp_path / "docs") is None
+    backend = host_backend()
+    assert backend.read_preview_file(session, blob, max_image_bytes=1000) is None
+    assert backend.read_preview_file(session, tmp_path / "does-not-exist", max_image_bytes=1000) is None
+    assert backend.read_preview_file(session, tmp_path / "docs", max_image_bytes=1000) is None
 
 
-def test_command_backend_read_text_file_pipes_one_script_through_prefix(tmp_path: Path) -> None:
-    runner = RecordingRunner(stdout="fn main() {}\n")
+def test_command_backend_read_preview_file_pipes_one_script_through_prefix(tmp_path: Path) -> None:
+    runner = RecordingRunner(stdout="text\nfn main() {}\n")
     backend = backend_from_config(
         make_backend(noninteractive_prefix="compose exec -T devcontainer"),
         runner=runner,
     )
 
-    assert backend.read_text_file(build_session(tmp_path), Path("/app/main.rs")) == "fn main() {}\n"
+    content = backend.read_preview_file(build_session(tmp_path), Path("/app/main.rs"), max_image_bytes=1000)
 
+    assert content == "fn main() {}\n"
     assert len(runner.calls) == 1
     argv, _cwd, stdin = runner.calls[0]
     assert argv == ("sh", "-c", "compose exec -T devcontainer sh")
     assert stdin is not None
-    assert "file -b --mime-encoding" in stdin
+    assert "file -b --mime" in stdin
     assert "/app/main.rs" in stdin
 
 
-def test_command_backend_read_text_file_raises_when_file_command_missing(tmp_path: Path) -> None:
+def test_command_backend_read_preview_file_raises_when_file_command_missing(tmp_path: Path) -> None:
     backend = backend_from_config(
         make_backend(noninteractive_prefix="compose exec -T devcontainer"),
         runner=RecordingRunner(returncode=43),
     )
 
     with pytest.raises(SessionBackendError, match="'file' command is required"):
-        backend.read_text_file(build_session(tmp_path), Path("/app/main.rs"))
+        backend.read_preview_file(build_session(tmp_path), Path("/app/main.rs"), max_image_bytes=1000)
 
 
-def test_command_backend_read_text_file_raises_on_failure(tmp_path: Path) -> None:
+def test_command_backend_read_preview_file_raises_on_failure(tmp_path: Path) -> None:
     backend = backend_from_config(
         make_backend(noninteractive_prefix="compose exec -T devcontainer"),
         runner=RecordingRunner(returncode=1, stderr="container is gone"),
     )
 
-    with pytest.raises(SessionBackendError, match="read_text_file failed"):
-        backend.read_text_file(build_session(tmp_path), Path("/app/main.rs"))
+    with pytest.raises(SessionBackendError, match="read_preview_file failed"):
+        backend.read_preview_file(build_session(tmp_path), Path("/app/main.rs"), max_image_bytes=1000)
 
 
 # --- materialize_on_host: give the host a path it can open ----------------
