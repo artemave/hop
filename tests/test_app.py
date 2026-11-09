@@ -1390,6 +1390,43 @@ def test_registry_session_kitty_overrides_for_entry_uses_merged_config(tmp_path:
     assert not any(o.startswith("clipboard_control") for o in overrides)
 
 
+def test_registry_preview_settings_default_the_background_shift(tmp_path: Path) -> None:
+    from hop.app import SessionBackendRegistry
+    from hop.config import PreviewSettings
+
+    registry = SessionBackendRegistry(
+        global_config_loader=lambda: HopConfig(preview_modifier="shift"), sessions_loader=lambda: {}
+    )
+
+    assert registry.preview_settings_for(_make_session(tmp_path)) == PreviewSettings(
+        modifier="shift", background_shift=10
+    )
+
+
+def test_registry_preview_settings_carry_the_configured_background_shift(tmp_path: Path) -> None:
+    from hop.app import SessionBackendRegistry
+    from hop.config import PreviewSettings
+
+    registry = SessionBackendRegistry(
+        global_config_loader=lambda: HopConfig(preview_modifier="alt", preview_background_shift=25),
+        sessions_loader=lambda: {},
+    )
+
+    assert registry.preview_settings_for(_make_session(tmp_path)) == PreviewSettings(
+        modifier="alt", background_shift=25
+    )
+
+
+def test_registry_preview_settings_are_none_when_disabled(tmp_path: Path) -> None:
+    from hop.app import SessionBackendRegistry
+
+    registry = SessionBackendRegistry(
+        global_config_loader=lambda: HopConfig(preview_modifier=""), sessions_loader=lambda: {}
+    )
+
+    assert registry.preview_settings_for(_make_session(tmp_path)) is None
+
+
 def test_session_base_registry_falls_back_to_host_when_no_config(tmp_path: Path) -> None:
     from hop.app import SessionBackendRegistry
 

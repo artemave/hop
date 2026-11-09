@@ -63,6 +63,21 @@ class SwayWindow:
     pid: int | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class SwayWindowPlacement:
+    """A window's content area on its output, in sway's logical pixels.
+
+    ``x`` and ``y`` are relative to the output's top-left corner, which is
+    where a layer-shell surface anchored there puts its margins.
+    """
+
+    output_name: str
+    output_width: int
+    output_height: int
+    x: int
+    y: int
+
+
 class SwayIpcTransport(Protocol):
     def request(self, message_type: SwayMessageType, payload: bytes = b"") -> bytes: ...
 
@@ -230,6 +245,13 @@ class SwayIpcAdapter:
         _collect_windows(tree, windows=windows)
         return tuple(windows)
 
+    def window_placement(self, *, pid: int, app_id: str) -> SwayWindowPlacement | None:
+        """Where the content of the window owned by ``pid`` with ``app_id``
+        sits on its output, or ``None`` when sway has no such window."""
+
+        response = self._transport.request(SwayMessageType.GET_TREE)
+        return _find_window_placement(json.loads(response.decode()), pid=pid, app_id=app_id, output=None)
+
     def focus_window(self, window_id: int) -> None:
         self.run_command(f"[con_id={window_id}] focus")
 
@@ -319,6 +341,27 @@ def _collect_windows(
 
     for child in node.get("floating_nodes", ()):
         _collect_windows(child, windows=windows, workspace_name=current_workspace_name)
+
+
+def _find_window_placement(node: Any, *, pid: int, app_id: str, output: Any) -> SwayWindowPlacement | None:
+    if node.get("type") == "output":
+        output = node
+    if node.get("pid") == pid and node.get("app_id") == app_id:
+        rect, content, output_rect = node["rect"], node["window_rect"], output["rect"]
+        # ``window_rect`` is relative to the container's ``rect``, which is in
+        # layout coordinates spanning every output.
+        return SwayWindowPlacement(
+            output_name=output["name"],
+            output_width=output_rect["width"],
+            output_height=output_rect["height"],
+            x=rect["x"] + content["x"] - output_rect["x"],
+            y=rect["y"] + content["y"] - output_rect["y"],
+        )
+    for child in (*node.get("nodes", ()), *node.get("floating_nodes", ())):
+        found = _find_window_placement(child, pid=pid, app_id=app_id, output=output)
+        if found is not None:
+            return found
+    return None
 
 
 def _extract_window_class(window_properties: object) -> str | None:

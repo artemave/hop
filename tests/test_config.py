@@ -695,6 +695,82 @@ def test_load_global_config_rejects_wrong_type_keys_open_selection(tmp_path: Pat
         load_global_config(config_file)
 
 
+@pytest.mark.parametrize("modifier", ["ctrl", "shift", "alt", "super", ""])
+def test_load_global_config_parses_keys_preview(tmp_path: Path, modifier: str) -> None:
+    config_file = write(tmp_path / "config.toml", f'[keys]\npreview = "{modifier}"\n')
+
+    assert load_global_config(config_file).preview_modifier == modifier
+
+
+def test_load_global_config_keys_table_without_preview_is_none(tmp_path: Path) -> None:
+    config_file = write(tmp_path / "config.toml", '[keys]\npaste = "ctrl+v"\n')
+
+    assert load_global_config(config_file).preview_modifier is None
+
+
+@pytest.mark.parametrize("value", ['"ctrl+p"', '["shift"]', "1"])
+def test_load_global_config_rejects_keys_preview_that_is_not_a_modifier(tmp_path: Path, value: str) -> None:
+    config_file = write(tmp_path / "config.toml", f"[keys]\npreview = {value}\n")
+
+    with pytest.raises(HopConfigError, match="'keys.preview' must be one of ctrl, shift, alt, super or empty"):
+        load_global_config(config_file)
+
+
+@pytest.mark.parametrize(("value", "expected"), [("0", 0.0), ("12.5", 12.5), ("100", 100.0)])
+def test_load_global_config_parses_preview_background_shift(tmp_path: Path, value: str, expected: float) -> None:
+    config_file = write(tmp_path / "config.toml", f"[preview]\nbackground_shift = {value}\n")
+
+    assert load_global_config(config_file).preview_background_shift == expected
+
+
+def test_load_global_config_preview_table_without_background_shift_is_none(tmp_path: Path) -> None:
+    config_file = write(tmp_path / "config.toml", "[preview]\n")
+
+    assert load_global_config(config_file).preview_background_shift is None
+
+
+@pytest.mark.parametrize("value", ["-1", "101", '"10%"', "true"])
+def test_load_global_config_rejects_preview_background_shift_out_of_range(tmp_path: Path, value: str) -> None:
+    config_file = write(tmp_path / "config.toml", f"[preview]\nbackground_shift = {value}\n")
+
+    with pytest.raises(HopConfigError, match="'preview.background_shift' must be a number from 0 to 100"):
+        load_global_config(config_file)
+
+
+def test_load_global_config_rejects_preview_that_is_not_a_table(tmp_path: Path) -> None:
+    config_file = write(tmp_path / "config.toml", "preview = 10\n")
+
+    with pytest.raises(HopConfigError, match="top-level 'preview' must be a table"):
+        load_global_config(config_file)
+
+
+def test_load_global_config_rejects_unknown_preview_field(tmp_path: Path) -> None:
+    config_file = write(tmp_path / "config.toml", "[preview]\nborder = true\n")
+
+    with pytest.raises(HopConfigError, match="'preview' table has unknown field 'border'"):
+        load_global_config(config_file)
+
+
+def test_merge_configs_preview_background_shift_project_wins() -> None:
+    merged = merge_configs(HopConfig(preview_background_shift=0), HopConfig(preview_background_shift=30))
+
+    assert merged.preview_background_shift == 0
+
+
+def test_merge_configs_preview_background_shift_falls_back_to_global() -> None:
+    merged = merge_configs(HopConfig(), HopConfig(preview_background_shift=30))
+
+    assert merged.preview_background_shift == 30
+
+
+def test_merge_configs_preview_modifier_project_wins() -> None:
+    assert merge_configs(HopConfig(preview_modifier=""), HopConfig(preview_modifier="shift")).preview_modifier == ""
+
+
+def test_merge_configs_preview_modifier_inherits_from_global() -> None:
+    assert merge_configs(HopConfig(), HopConfig(preview_modifier="alt")).preview_modifier == "alt"
+
+
 def test_merge_configs_open_selection_keys_project_wins_wholesale() -> None:
     project = HopConfig(open_selection_keys=("f4",))
     global_ = HopConfig(open_selection_keys=("ctrl+shift+o",))

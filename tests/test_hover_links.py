@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import unicodedata
-from concurrent.futures import Executor, Future
-from typing import Callable, ParamSpec, TypeVar
 
 import pytest
 
@@ -23,9 +21,6 @@ from hop.hover_links import (
     parse_hop_url,
     viewport_lines,
 )
-
-P = ParamSpec("P")
-T = TypeVar("T")
 
 
 class KittyLikeLine:
@@ -77,37 +72,6 @@ def draw(text: str, columns: int = 40, *, soft_wrap: bool = True) -> list[Row]:
     ]
 
 
-class QueuedExecutor(Executor):
-    """Holds submitted work until ``run_all`` — stands in for the watcher's
-    worker thread so a test controls when a lookup lands."""
-
-    def __init__(self) -> None:
-        self.queue: list[Callable[[], None]] = []
-
-    def submit(self, fn: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> Future[T]:
-        future: Future[T] = Future()
-
-        def run() -> None:
-            try:
-                future.set_result(fn(*args, **kwargs))
-            except Exception as error:
-                future.set_exception(error)
-
-        self.queue.append(run)
-        return future
-
-    def run_all(self) -> None:
-        while self.queue:
-            self.queue.pop(0)()
-
-
-class InlineExecutor(QueuedExecutor):
-    def submit(self, fn: Callable[P, T], /, *args: P.args, **kwargs: P.kwargs) -> Future[T]:
-        future = super().submit(fn, *args, **kwargs)
-        self.run_all()
-        return future
-
-
 class PathsExist:
     def __init__(self, existing: set[str]) -> None:
         self.existing = existing
@@ -124,8 +88,8 @@ def show(viewport: ViewportLinks, *lines: list[Row], source_cwd: str | None = No
     viewport.show(viewport_lines([row for line in lines for row in line]), session_name="demo", source_cwd=source_cwd)
 
 
-def resolved_links(existing: set[str], rows: list[Row]) -> list[HoverLink] | None:
-    viewport = ViewportLinks(PathExistence(PathsExist(existing)), InlineExecutor())
+def resolved_links(existing: set[str], rows: list[Row]) -> list[HoverLink]:
+    viewport = ViewportLinks(PathExistence(PathsExist(existing)))
     show(viewport, rows)
     return viewport.links_for(rows)
 
@@ -179,19 +143,14 @@ def test_a_full_row_continues_onto_a_row_that_does_not_start_blank() -> None:
 # --- viewport lookup -----------------------------------------------------------
 
 
-def test_links_are_absent_until_the_viewport_lookup_lands() -> None:
-    executor = QueuedExecutor()
+def test_showing_a_viewport_looks_up_the_links_of_each_line() -> None:
     paths_exist = PathsExist({"app.rb", "lib.rb"})
-    viewport = ViewportLinks(PathExistence(paths_exist), executor)
+    viewport = ViewportLinks(PathExistence(paths_exist))
     first = draw("app.rb gone.rb https://example.com")
     second = draw("lib.rb")
 
     show(viewport, first, second, source_cwd="/work")
-    assert viewport.links_for(first) is None
-    assert viewport.resolving
-    executor.run_all()
 
-    assert not viewport.resolving
     assert viewport.links_for(first) == [
         HoverLink("app.rb", (CellRange(0, 0, 5),)),
         HoverLink("https://example.com", (CellRange(0, 15, 33),)),
@@ -233,47 +192,19 @@ def test_a_file_path_stops_at_a_line_break_at_the_last_column() -> None:
     ]
 
 
-def test_a_line_that_scrolled_out_of_the_viewport_has_no_links() -> None:
-    viewport = ViewportLinks(PathExistence(PathsExist(set())), InlineExecutor())
-    old = draw("old.rb")
-
-    show(viewport, old)
-    show(viewport, draw("new.rb"))
-
-    assert viewport.links_for(old) is None
-
-
-def test_only_the_latest_viewport_shown_during_a_lookup_is_looked_up_next() -> None:
-    asked: list[list[str]] = []
-
-    def paths_exist(candidates: list[str], session_name: str, source_cwd: str | None) -> set[str]:
-        asked.append(candidates)
-        if len(asked) == 1:
-            show(viewport, draw("b.rb"))
-            show(viewport, draw("c.rb"))
-        return set()
-
-    viewport = ViewportLinks(PathExistence(paths_exist), InlineExecutor())
-    show(viewport, draw("a.rb"))
-
-    assert asked == [["a.rb"], ["c.rb"]]
-    assert viewport.links_for(draw("c.rb")) == []
-    assert not viewport.resolving
-
-
 def test_an_unchanged_viewport_is_not_looked_up_again() -> None:
-    executor = QueuedExecutor()
-    viewport = ViewportLinks(PathExistence(PathsExist(set())), executor)
+    paths_exist = PathsExist(set())
+    viewport = ViewportLinks(PathExistence(paths_exist, ttl=0))
 
     show(viewport, draw("a.rb"))
     show(viewport, draw("a.rb"))
 
-    assert len(executor.queue) == 1
+    assert len(paths_exist.calls) == 1
 
 
 def test_the_same_viewport_is_looked_up_again_for_another_cwd() -> None:
     paths_exist = PathsExist(set())
-    viewport = ViewportLinks(PathExistence(paths_exist), InlineExecutor())
+    viewport = ViewportLinks(PathExistence(paths_exist))
 
     show(viewport, draw("app.rb"), source_cwd="/a")
     show(viewport, draw("app.rb"), source_cwd="/b")
@@ -285,7 +216,7 @@ def test_a_failed_lookup_is_logged_and_settles_as_no_links(caplog: pytest.LogCap
     def failing_paths_exist(candidates: list[str], session_name: str, source_cwd: str | None) -> set[str]:
         raise RuntimeError("ssh master gone")
 
-    viewport = ViewportLinks(PathExistence(failing_paths_exist), InlineExecutor())
+    viewport = ViewportLinks(PathExistence(failing_paths_exist))
     rows = draw("app.rb")
     show(viewport, rows)
 

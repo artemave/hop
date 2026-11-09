@@ -44,6 +44,11 @@ BROWSER_ROLE = "browser"
 # accepts; we reject anything else at parse time.
 _WORKSPACE_LAYOUTS = frozenset({"splith", "splitv", "stacking", "tabbed"})
 
+DEFAULT_PREVIEW_BACKGROUND_SHIFT = 10.0
+
+# Modifiers ``[keys].preview`` accepts: the ones kitty reports with each mouse move.
+PREVIEW_MODIFIERS = ("ctrl", "shift", "alt", "super")
+
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
@@ -169,11 +174,27 @@ class HopConfig:
     # applies its default); an empty tuple ⇒ explicitly no binding.
     paste_keys: tuple[str, ...] | None = None
     open_selection_keys: tuple[str, ...] | None = None
+    # ``[keys].preview`` — the modifier that, held while the mouse moves over a
+    # hover link to a text file, previews the file. ``None`` ⇒ unset, ``""`` ⇒
+    # explicitly off; both leave the preview off.
+    preview_modifier: str | None = None
+    # ``[preview].background_shift`` — how far, in percent, the preview
+    # panel's background moves from the terminal's toward white (dark
+    # backgrounds) or black (light ones). ``None`` ⇒ unset.
+    preview_background_shift: float | None = None
     # ``[clipboard].allow_read`` — whether hop injects a ``clipboard_control``
     # override that permits OSC 52 clipboard reads without a per-paste prompt.
     # ``None`` ⇒ unset (consumer defaults to enabled).
     clipboard_allow_read: bool | None = None
     sticky_positions: bool | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PreviewSettings:
+    """The hover preview's settings for a session whose preview is on."""
+
+    modifier: str
+    background_shift: float
 
 
 # Hop's built-in ``host`` backend — the implicit auto-detect fallback. Lives
@@ -233,6 +254,14 @@ def merge_configs(project: HopConfig, global_: HopConfig) -> HopConfig:
             project.open_selection_keys
             if project.open_selection_keys is not None
             else global_with_builtin.open_selection_keys
+        ),
+        preview_modifier=(
+            project.preview_modifier if project.preview_modifier is not None else global_with_builtin.preview_modifier
+        ),
+        preview_background_shift=(
+            project.preview_background_shift
+            if project.preview_background_shift is not None
+            else global_with_builtin.preview_background_shift
         ),
         clipboard_allow_read=(
             project.clipboard_allow_read
@@ -295,6 +324,8 @@ def _layer_builtin_backends(global_: HopConfig) -> HopConfig:
         debug_log=global_.debug_log,
         paste_keys=global_.paste_keys,
         open_selection_keys=global_.open_selection_keys,
+        preview_modifier=global_.preview_modifier,
+        preview_background_shift=global_.preview_background_shift,
         clipboard_allow_read=global_.clipboard_allow_read,
         sticky_positions=global_.sticky_positions,
     )
@@ -444,11 +475,13 @@ _TOP_LEVEL_KEYS = (
     "workspace_layout",
     "debug_log",
     "keys",
+    "preview",
     "clipboard",
     "sticky_positions",
 )
-_KEYS_FIELDS = ("paste", "open_selection")
+_KEYS_FIELDS = ("paste", "open_selection", "preview")
 _CLIPBOARD_FIELDS = ("allow_read",)
+_PREVIEW_FIELDS = ("background_shift",)
 
 
 def _load_config_file(path: Path) -> HopConfig:
@@ -483,7 +516,8 @@ def _parse_top_level(data: dict[str, Any], *, source: Path) -> HopConfig:
     windows = _parse_top_level_windows(data.get("windows"), source=source)
     workspace_layout = _parse_workspace_layout(data.get("workspace_layout"), source=source)
     debug_log = _parse_debug_log(data.get("debug_log"), source=source)
-    paste_keys, open_selection_keys = _parse_keys_table(data.get("keys"), source=source)
+    keys = _parse_keys_table(data.get("keys"), source=source)
+    preview_background_shift = _parse_preview_background_shift(data.get("preview"), source=source)
     clipboard_allow_read = _parse_clipboard_allow_read(data.get("clipboard"), source=source)
     sticky_positions = _parse_sticky_positions(data.get("sticky_positions"), source=source)
     return HopConfig(
@@ -492,8 +526,10 @@ def _parse_top_level(data: dict[str, Any], *, source: Path) -> HopConfig:
         windows=windows,
         workspace_layout=workspace_layout,
         debug_log=debug_log,
-        paste_keys=paste_keys,
-        open_selection_keys=open_selection_keys,
+        paste_keys=keys.paste,
+        open_selection_keys=keys.open_selection,
+        preview_modifier=keys.preview,
+        preview_background_shift=preview_background_shift,
         clipboard_allow_read=clipboard_allow_read,
         sticky_positions=sticky_positions,
     )
@@ -511,17 +547,25 @@ def _parse_sticky_positions(raw: object, *, source: Path) -> bool | None:
     return raw
 
 
-def _parse_keys_table(raw: object, *, source: Path) -> tuple[tuple[str, ...] | None, tuple[str, ...] | None]:
-    """Parse the ``[keys]`` table into ``(paste_keys, open_selection_keys)``.
+@dataclass(frozen=True, slots=True)
+class _Keys:
+    paste: tuple[str, ...] | None = None
+    open_selection: tuple[str, ...] | None = None
+    preview: str | None = None
 
-    Each field is a kitty key spec or a list of them. A field absent from the
+
+def _parse_keys_table(raw: object, *, source: Path) -> _Keys:
+    """Parse the ``[keys]`` table.
+
+    ``paste`` and ``open_selection`` are each a kitty key spec or a list of
+    them; ``preview`` is one of ``PREVIEW_MODIFIERS``. A field absent from the
     table (or the whole table absent) ⇒ ``None`` for that slot (consumer
-    applies its default). An empty string or empty list ⇒ an empty tuple,
-    meaning "bind nothing".
+    applies its default). An empty string or empty list ⇒ empty, meaning
+    "bind nothing".
     """
 
     if raw is None:
-        return None, None
+        return _Keys()
     if not isinstance(raw, dict):
         msg = f"{source}: top-level 'keys' must be a table, got {type(raw).__name__}"
         raise HopConfigError(msg)
@@ -530,14 +574,45 @@ def _parse_keys_table(raw: object, *, source: Path) -> tuple[tuple[str, ...] | N
     if unknown:
         msg = f"{source}: 'keys' table has unknown field {unknown[0]!r}"
         raise HopConfigError(msg)
-    return (
-        _parse_key_specs(table["paste"], field="keys.paste", source=source) if "paste" in table else None,
-        (
+    return _Keys(
+        paste=_parse_key_specs(table["paste"], field="keys.paste", source=source) if "paste" in table else None,
+        open_selection=(
             _parse_key_specs(table["open_selection"], field="keys.open_selection", source=source)
             if "open_selection" in table
             else None
         ),
+        preview=_parse_preview_modifier(table["preview"], source=source) if "preview" in table else None,
     )
+
+
+def _parse_preview_modifier(value: object, *, source: Path) -> str:
+    if value != "" and value not in PREVIEW_MODIFIERS:
+        msg = f"{source}: 'keys.preview' must be one of {', '.join(PREVIEW_MODIFIERS)} or empty, got {value!r}"
+        raise HopConfigError(msg)
+    return cast(str, value)
+
+
+def _parse_preview_background_shift(raw: object, *, source: Path) -> float | None:
+    """Parse ``[preview].background_shift`` — a percentage from 0 to 100, or
+    ``None`` when absent."""
+
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        msg = f"{source}: top-level 'preview' must be a table, got {type(raw).__name__}"
+        raise HopConfigError(msg)
+    table = cast(dict[str, Any], raw)
+    unknown = sorted(set(table) - set(_PREVIEW_FIELDS))
+    if unknown:
+        msg = f"{source}: 'preview' table has unknown field {unknown[0]!r}"
+        raise HopConfigError(msg)
+    if "background_shift" not in table:
+        return None
+    value = table["background_shift"]
+    if isinstance(value, bool) or not isinstance(value, int | float) or not 0 <= value <= 100:
+        msg = f"{source}: 'preview.background_shift' must be a number from 0 to 100, got {value!r}"
+        raise HopConfigError(msg)
+    return float(value)
 
 
 def _parse_key_specs(value: object, *, field: str, source: Path) -> tuple[str, ...]:

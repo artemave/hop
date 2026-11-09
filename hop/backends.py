@@ -76,6 +76,8 @@ REMOTE_INTEGRATION_SHELL = f"exec {REMOTE_KITTEN_PATH} run-shell"
 # "path doesn't exist" from inside the shell script (so the caller can
 # distinguish missing-file from other cat failures by exit code alone).
 _READ_FILE_NOT_FOUND_EXIT = 42
+_READ_TEXT_FILE_NO_FILE_COMMAND_EXIT = 43
+_READ_TEXT_FILE_BINARY_EXIT = 44
 
 
 class SessionBackendError(HopError):
@@ -126,6 +128,8 @@ class SessionBackend(Protocol):
     def read_file(self, session: ProjectSession, path: Path) -> str: ...
 
     def read_files(self, session: ProjectSession, paths: Sequence[Path]) -> dict[Path, str]: ...
+
+    def read_text_file(self, session: ProjectSession, path: Path) -> str | None: ...
 
     def write_file(self, session: ProjectSession, path: Path, data: bytes) -> None: ...
 
@@ -836,6 +840,41 @@ class CommandBackend:
         if result.returncode != 0:
             stderr = (result.stderr or result.stdout or "").strip()
             msg = f"backend {self.name!r} read_file failed for {path}: {stderr}"
+            raise SessionBackendError(msg)
+        return result.stdout
+
+    def read_text_file(self, session: ProjectSession, path: Path) -> str | None:
+        """The contents of ``path`` when it's a regular text file, else ``None``.
+
+        One round trip for what ``is_binary_file`` and ``read_file`` take two:
+        the hover preview pays it on every hovered link, and through a
+        container or ssh prefix each trip is slow. Text vs binary is decided
+        by ``file --mime-encoding`` like ``is_binary_file``.
+        """
+
+        substituted_prefix = substitute(self.noninteractive_prefix, session=session, host=self._host)
+        quoted = shlex.quote(str(path))
+        script = (
+            f"p={quoted}\n"
+            f'[ -f "$p" ] || exit {_READ_FILE_NOT_FOUND_EXIT}\n'
+            'if [ -s "$p" ]; then\n'
+            f"  command -v file >/dev/null 2>&1 || exit {_READ_TEXT_FILE_NO_FILE_COMMAND_EXIT}\n"
+            f'  [ "$(file -b --mime-encoding "$p")" = binary ] && exit {_READ_TEXT_FILE_BINARY_EXIT}\n'
+            "fi\n"
+            'cat "$p"\n'
+        )
+        composed = f"{substituted_prefix} sh".lstrip()
+        argv = self.noninteractive_transport(composed)
+        result = self.runner(argv, runner_cwd(self.host, session.session_root), stdin=script)
+        debug.log_command(argv, session.session_root, result)
+        if result.returncode in (_READ_FILE_NOT_FOUND_EXIT, _READ_TEXT_FILE_BINARY_EXIT):
+            return None
+        if result.returncode == _READ_TEXT_FILE_NO_FILE_COMMAND_EXIT:
+            msg = f"backend {self.name!r}: the 'file' command is required to preview {path} but was not found"
+            raise SessionBackendError(msg)
+        if result.returncode != 0:
+            stderr = (result.stderr or result.stdout or "").strip()
+            msg = f"backend {self.name!r} read_text_file failed for {path}: {stderr}"
             raise SessionBackendError(msg)
         return result.stdout
 

@@ -57,8 +57,10 @@ from hop.commands.term import focus_terminal
 from hop.commands.trust import trust_command
 from hop.commands.wait import WaitTimeoutError, wait_command
 from hop.config import (
+    DEFAULT_PREVIEW_BACKGROUND_SHIFT,
     PROJECT_CONFIG_FILE,
     HopConfig,
+    PreviewSettings,
     load_global_config,
     merge_configs,
     parse_project_config_text,
@@ -273,6 +275,18 @@ class SessionBackendRegistry:
 
     def session_kitty_overrides_for_entry(self, session: ProjectSession) -> tuple[str, ...]:
         return session_kitty_overrides(self._merged_config(session))
+
+    def preview_settings_for(self, session: ProjectSession) -> PreviewSettings | None:
+        """The hover preview's settings, or ``None`` when the preview is off."""
+
+        config = self._merged_config(session)
+        if not config.preview_modifier:
+            return None
+        shift = config.preview_background_shift
+        return PreviewSettings(
+            modifier=config.preview_modifier,
+            background_shift=DEFAULT_PREVIEW_BACKGROUND_SHIFT if shift is None else shift,
+        )
 
     def _merged_config(self, session: ProjectSession) -> HopConfig:
         global_config = self._global_config_loader()

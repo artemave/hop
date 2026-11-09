@@ -904,6 +904,68 @@ def test_command_backend_is_binary_file_raises_on_probe_failure(tmp_path: Path) 
         backend.is_binary_file(build_session(tmp_path), Path("/app/logo.png"))
 
 
+# --- read_text_file: one round trip for the hover preview -----------------
+
+
+def test_command_backend_read_text_file_reads_text_and_empty_files(tmp_path: Path) -> None:
+    source = tmp_path / "main.rs"
+    source.write_text("fn main() {}\n")
+    empty = tmp_path / "blank"
+    empty.touch()
+
+    session = build_session(tmp_path)
+    assert host_backend().read_text_file(session, source) == "fn main() {}\n"
+    assert host_backend().read_text_file(session, empty) == ""
+
+
+def test_command_backend_read_text_file_is_none_for_binary_missing_and_directories(tmp_path: Path) -> None:
+    png = tmp_path / "logo.png"
+    png.write_bytes(b"\x89PNG\r\n\x1a\nfake-pixels\x00\x01\x02")
+    (tmp_path / "docs").mkdir()
+
+    session = build_session(tmp_path)
+    assert host_backend().read_text_file(session, png) is None
+    assert host_backend().read_text_file(session, tmp_path / "does-not-exist") is None
+    assert host_backend().read_text_file(session, tmp_path / "docs") is None
+
+
+def test_command_backend_read_text_file_pipes_one_script_through_prefix(tmp_path: Path) -> None:
+    runner = RecordingRunner(stdout="fn main() {}\n")
+    backend = backend_from_config(
+        make_backend(noninteractive_prefix="compose exec -T devcontainer"),
+        runner=runner,
+    )
+
+    assert backend.read_text_file(build_session(tmp_path), Path("/app/main.rs")) == "fn main() {}\n"
+
+    assert len(runner.calls) == 1
+    argv, _cwd, stdin = runner.calls[0]
+    assert argv == ("sh", "-c", "compose exec -T devcontainer sh")
+    assert stdin is not None
+    assert "file -b --mime-encoding" in stdin
+    assert "/app/main.rs" in stdin
+
+
+def test_command_backend_read_text_file_raises_when_file_command_missing(tmp_path: Path) -> None:
+    backend = backend_from_config(
+        make_backend(noninteractive_prefix="compose exec -T devcontainer"),
+        runner=RecordingRunner(returncode=43),
+    )
+
+    with pytest.raises(SessionBackendError, match="'file' command is required"):
+        backend.read_text_file(build_session(tmp_path), Path("/app/main.rs"))
+
+
+def test_command_backend_read_text_file_raises_on_failure(tmp_path: Path) -> None:
+    backend = backend_from_config(
+        make_backend(noninteractive_prefix="compose exec -T devcontainer"),
+        runner=RecordingRunner(returncode=1, stderr="container is gone"),
+    )
+
+    with pytest.raises(SessionBackendError, match="read_text_file failed"):
+        backend.read_text_file(build_session(tmp_path), Path("/app/main.rs"))
+
+
 # --- materialize_on_host: give the host a path it can open ----------------
 
 

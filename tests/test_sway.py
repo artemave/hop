@@ -17,6 +17,7 @@ from hop.sway import (
     SwayMessageType,
     SwaySubscriptionError,
     SwayWindow,
+    SwayWindowPlacement,
     UnixSocketSwayIpcTransport,
 )
 
@@ -216,6 +217,59 @@ def test_list_windows_flattens_the_sway_tree_with_workspace_context() -> None:
             focused=False,
         ),
     )
+
+
+def _placement_tree() -> bytes:
+    def window(pid: int, app_id: str, x: int, y: int) -> dict[str, object]:
+        return {
+            "pid": pid,
+            "app_id": app_id,
+            "rect": {"x": x, "y": y, "width": 800, "height": 600},
+            "window_rect": {"x": 2, "y": 24, "width": 796, "height": 574},
+        }
+
+    return json.dumps(
+        {
+            "type": "root",
+            "nodes": [
+                {
+                    "type": "output",
+                    "name": "eDP-1",
+                    "rect": {"x": 0, "y": 0, "width": 1920, "height": 1200},
+                    "nodes": [{"type": "workspace", "nodes": [window(42, "hop:shell", 10, 30)]}],
+                },
+                {
+                    "type": "output",
+                    "name": "DP-2",
+                    "rect": {"x": 1920, "y": 0, "width": 2560, "height": 1440},
+                    "nodes": [
+                        {
+                            "type": "workspace",
+                            "nodes": [window(7, "hop:shell", 2000, 40)],
+                            "floating_nodes": [window(42, "hop:server", 2100, 300)],
+                        }
+                    ],
+                },
+            ],
+        }
+    ).encode()
+
+
+def test_window_placement_is_the_content_area_relative_to_its_output() -> None:
+    sway = SwayIpcAdapter(transport=StubSwayTransport(responses={SwayMessageType.GET_TREE: _placement_tree()}))
+
+    assert sway.window_placement(pid=42, app_id="hop:server") == SwayWindowPlacement(
+        output_name="DP-2", output_width=2560, output_height=1440, x=182, y=324
+    )
+    assert sway.window_placement(pid=42, app_id="hop:shell") == SwayWindowPlacement(
+        output_name="eDP-1", output_width=1920, output_height=1200, x=12, y=54
+    )
+
+
+def test_window_placement_is_none_without_a_matching_window() -> None:
+    sway = SwayIpcAdapter(transport=StubSwayTransport(responses={SwayMessageType.GET_TREE: _placement_tree()}))
+
+    assert sway.window_placement(pid=42, app_id="hop:editor") is None
 
 
 def test_window_commands_use_sway_criteria_by_container_id() -> None:

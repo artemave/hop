@@ -8,3 +8,8 @@ import pytest
 @pytest.fixture(autouse=True)
 def isolate_trust_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data-home"))
+
+
+@pytest.fixture(autouse=True)
+def isolate_sessions_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HOP_SESSIONS_DIR", str(tmp_path / "sessions"))

@@ -14,6 +14,7 @@ outside hop sessions.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable
 
@@ -23,12 +24,14 @@ from hop.session import ProjectSession
 from hop.state import SessionState, load_sessions, session_from_state
 from hop.sway import SwayIpcAdapter
 from hop.targets import (
+    ResolvedFileTarget,
     SyntacticFileTarget,
     SyntacticRailsRefTarget,
     parse_visible_output_target,
     rails_action_line,
     rails_controller_path,
     resolve_file_candidate,
+    resolve_target,
 )
 
 WORKSPACE_PREFIX = "s:"
@@ -107,6 +110,46 @@ def session_paths_exist(
         backend=backend,
         base_cwd=selection_base_cwd(state, source_cwd),
     )
+
+
+@dataclass(frozen=True, slots=True)
+class FilePreview:
+    path: Path
+    line_number: int | None
+    text: str
+
+
+def session_file_preview(
+    selection: str,
+    *,
+    session_name: str,
+    source_cwd: str | None,
+    sessions_loader: Callable[[], dict[str, SessionState]] | None = None,
+    backend_loader: Callable[[SessionState], SessionBackend | None] | None = None,
+) -> FilePreview | None:
+    """The text file ``selection`` points to in a named session, or ``None``
+    when it isn't a file reference, the file is gone or binary, or the
+    session's state or backend is gone."""
+
+    syntactic = parse_visible_output_target(selection)
+    if not isinstance(syntactic, SyntacticFileTarget | SyntacticRailsRefTarget):
+        return None
+    state = (sessions_loader or load_sessions)().get(session_name)
+    if state is None:
+        return None
+    backend = (backend_loader or _default_backend_loader)(state)
+    if backend is None:
+        return None
+    session = session_from_state(state)
+    target = resolve_target(
+        syntactic, session=session, backend=backend, terminal_cwd=selection_base_cwd(state, source_cwd)
+    )
+    if not isinstance(target, ResolvedFileTarget):
+        return None
+    text = backend.read_text_file(session, target.path)
+    if text is None:
+        return None
+    return FilePreview(path=target.path, line_number=target.line_number, text=text)
 
 
 def selection_base_cwd(state: SessionState, source_cwd: Path | str | None) -> Path:
@@ -249,4 +292,11 @@ def _local_fallback(candidates: list[str], *, base_cwd: Path) -> set[str]:
     return surviving
 
 
-__all__ = ["focused_session_and_backend", "paths_exist", "selection_base_cwd", "session_paths_exist"]
+__all__ = [
+    "FilePreview",
+    "focused_session_and_backend",
+    "paths_exist",
+    "selection_base_cwd",
+    "session_file_preview",
+    "session_paths_exist",
+]

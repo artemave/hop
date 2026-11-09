@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Sequence
 
-from hop.focused import paths_exist, session_paths_exist
+from hop.focused import FilePreview, paths_exist, session_file_preview, session_paths_exist
 from hop.session import ProjectSession
 from hop.state import CommandBackendRecord, SessionState
 
@@ -85,6 +85,9 @@ class _FakeBackend:
     def is_binary_file(self, session: ProjectSession, path: Path) -> bool:
         del session, path
         return False
+
+    def read_text_file(self, session: ProjectSession, path: Path) -> str | None:
+        raise AssertionError(f"unexpected read_text_file of {path}")
 
     def materialize_on_host(self, session: ProjectSession, path: Path) -> Path:
         del session
@@ -601,3 +604,109 @@ def test_session_paths_exist_uses_the_recorded_backend_by_default(tmp_path: Path
     )
 
     assert result == {"app.rb"}
+
+
+# --- session_file_preview ----------------------------------------------------
+
+
+def test_session_file_preview_reads_the_file_relative_to_source_cwd(tmp_path: Path) -> None:
+    session_root = tmp_path.resolve()
+    (session_root / "src").mkdir()
+    (session_root / "src" / "app.rb").write_text("one\ntwo\n")
+
+    preview = session_file_preview(
+        "app.rb:2",
+        session_name="demo",
+        source_cwd=str(session_root / "src"),
+        sessions_loader=lambda: {"demo": _state("demo", session_root)},
+    )
+
+    assert preview == FilePreview(path=session_root / "src" / "app.rb", line_number=2, text="one\ntwo\n")
+
+
+def test_session_file_preview_finds_a_rails_action(tmp_path: Path) -> None:
+    session_root = tmp_path.resolve()
+    controllers = session_root / "app" / "controllers"
+    controllers.mkdir(parents=True)
+    source = "class UsersController\n  def show\n  end\nend\n"
+    (controllers / "users_controller.rb").write_text(source)
+
+    preview = session_file_preview(
+        "UsersController#show",
+        session_name="demo",
+        source_cwd=None,
+        sessions_loader=lambda: {"demo": _state("demo", session_root)},
+    )
+
+    assert preview == FilePreview(path=controllers / "users_controller.rb", line_number=2, text=source)
+
+
+def test_session_file_preview_skips_a_rails_ref_without_the_action(tmp_path: Path) -> None:
+    session_root = tmp_path.resolve()
+    controllers = session_root / "app" / "controllers"
+    controllers.mkdir(parents=True)
+    (controllers / "users_controller.rb").write_text("class UsersController\nend\n")
+
+    preview = session_file_preview(
+        "UsersController#show",
+        session_name="demo",
+        source_cwd=None,
+        sessions_loader=lambda: {"demo": _state("demo", session_root)},
+    )
+
+    assert preview is None
+
+
+def test_session_file_preview_skips_binary_files(tmp_path: Path) -> None:
+    session_root = tmp_path.resolve()
+    (session_root / "logo.png").write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\xff\x00")
+
+    preview = session_file_preview(
+        "logo.png",
+        session_name="demo",
+        source_cwd=None,
+        sessions_loader=lambda: {"demo": _state("demo", session_root)},
+    )
+
+    assert preview is None
+
+
+def test_session_file_preview_skips_directories(tmp_path: Path) -> None:
+    session_root = tmp_path.resolve()
+    (session_root / "src").mkdir()
+
+    preview = session_file_preview(
+        "src/",
+        session_name="demo",
+        source_cwd=None,
+        sessions_loader=lambda: {"demo": _state("demo", session_root)},
+    )
+
+    assert preview is None
+
+
+def test_session_file_preview_skips_urls(tmp_path: Path) -> None:
+    preview = session_file_preview(
+        "https://example.com",
+        session_name="demo",
+        source_cwd=None,
+        sessions_loader=lambda: {"demo": _state("demo", tmp_path)},
+    )
+
+    assert preview is None
+
+
+def test_session_file_preview_is_none_when_session_state_is_gone() -> None:
+    assert session_file_preview("app.rb", session_name="demo", source_cwd=None, sessions_loader=lambda: {}) is None
+
+
+def test_session_file_preview_is_none_when_backend_unresolvable(tmp_path: Path) -> None:
+    preview = session_file_preview(
+        "app.rb",
+        session_name="demo",
+        source_cwd=None,
+        sessions_loader=lambda: {"demo": _state("demo", tmp_path)},
+        backend_loader=lambda _state: None,
+    )
+
+    assert preview is None

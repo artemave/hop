@@ -3,18 +3,13 @@
 The kitty watcher at ``hop/kitten/hover_links/main.py`` shows each window's
 viewport to a ``ViewportLinks`` whenever its text changes, and paints the
 hovered logical line (the hovered row plus the rows soft-wrapped onto it)
-from what that lookup found. The watcher runs on kitty's boss (UI) thread,
-while an existence check may be a ``podman exec`` or an ssh round trip — so
-lookups run on an executor, and the watcher polls for the result to paint
-the hovered line as soon as it lands.
+from what that lookup found.
 """
 
 from __future__ import annotations
 
 import logging
-import threading
 import time
-from concurrent.futures import Executor
 from dataclasses import dataclass
 from typing import Callable, Protocol, Sequence
 from urllib.parse import quote, unquote
@@ -248,24 +243,21 @@ class PathExistence:
         self._paths_exist = paths_exist
         self._ttl = ttl
         self._clock = clock
-        self._lock = threading.Lock()
         self._known: dict[_PathKey, tuple[bool, float]] = {}
 
     def existing(self, candidates: list[str], session_name: str, source_cwd: str | None) -> set[str]:
         now = self._clock()
         known: dict[str, bool] = {}
-        with self._lock:
-            for candidate in candidates:
-                entry = self._known.get((session_name, source_cwd, candidate))
-                if entry is not None and now - entry[1] < self._ttl:
-                    known[candidate] = entry[0]
+        for candidate in candidates:
+            entry = self._known.get((session_name, source_cwd, candidate))
+            if entry is not None and now - entry[1] < self._ttl:
+                known[candidate] = entry[0]
         unknown = [candidate for candidate in candidates if candidate not in known]
         found: set[str] = self._paths_exist(unknown, session_name, source_cwd) if unknown else set()
-        with self._lock:
-            if len(self._known) + len(unknown) > MAX_CACHED_PATHS:
-                self._known.clear()
-            for candidate in unknown:
-                self._known[(session_name, source_cwd, candidate)] = (candidate in found, now)
+        if len(self._known) + len(unknown) > MAX_CACHED_PATHS:
+            self._known.clear()
+        for candidate in unknown:
+            self._known[(session_name, source_cwd, candidate)] = (candidate in found, now)
         return {candidate for candidate, exists in known.items() if exists} | found
 
 
@@ -273,65 +265,36 @@ _ViewportKey = tuple[str, str | None, tuple[str, ...]]
 
 
 class ViewportLinks:
-    """One window's visible targets, resolved in the background.
+    """One window's visible targets.
 
     ``show`` hands over the viewport's logical lines whenever they may have
-    changed; a lookup runs for the latest viewport only, however many were
-    shown while the previous one was in flight.
+    changed, and looks them up unless they are the ones already shown.
     """
 
-    def __init__(self, existence: PathExistence, executor: Executor) -> None:
+    def __init__(self, existence: PathExistence) -> None:
         self._existence = existence
-        self._executor = executor
-        self._lock = threading.Lock()
         self._shown: _ViewportKey | None = None
-        self._in_flight = False
         self._resolved: dict[str, list[VisibleOutputMatch]] = {}
 
     def show(self, lines: Sequence[str], *, session_name: str, source_cwd: str | None) -> None:
         key = (session_name, source_cwd, tuple(lines))
-        with self._lock:
-            if key == self._shown:
-                return
-            self._shown = key
-            if self._in_flight:
-                return
-            self._in_flight = True
-        self._executor.submit(self._resolve_latest)
+        if key == self._shown:
+            return
+        self._shown = key
+        self._resolved = self._resolve(key)
 
-    @property
-    def resolving(self) -> bool:
-        with self._lock:
-            return self._in_flight
-
-    def links_for(self, rows: Sequence[Row]) -> list[HoverLink] | None:
-        """The logical line's links, or ``None`` until a lookup covering it lands.
+    def links_for(self, rows: Sequence[Row]) -> list[HoverLink]:
+        """The links of a logical line of the shown viewport.
 
         ``rows`` are the logical line's visible rows; each link's ranges
         index into them.
         """
 
         text, cells = line_text(rows)
-        with self._lock:
-            matches = self._resolved.get(text)
-        if matches is None:
-            return None
         return [
             HoverLink(selection=match.selection, ranges=_cell_ranges(rows, cells[match.start : match.end]))
-            for match in matches
+            for match in self._resolved[text]
         ]
-
-    def _resolve_latest(self) -> None:
-        while True:
-            with self._lock:
-                key = self._shown
-            assert key is not None
-            resolved = self._resolve(key)
-            with self._lock:
-                self._resolved = resolved
-                if self._shown == key:
-                    self._in_flight = False
-                    return
 
     def _resolve(self, key: _ViewportKey) -> dict[str, list[VisibleOutputMatch]]:
         session_name, source_cwd, lines = key

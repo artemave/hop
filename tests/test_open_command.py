@@ -46,6 +46,9 @@ class StubBackend:
     def is_binary_file(self, _session: ProjectSession, path: Path) -> bool:
         return path.name in self._binary_names
 
+    def read_text_file(self, _session: ProjectSession, path: Path) -> str | None:
+        raise AssertionError(f"unexpected read_text_file of {path}")
+
     def materialize_on_host(self, _session: ProjectSession, path: Path) -> Path:
         # The local-host stub leaves the path where it is — no copy needed.
         return path
