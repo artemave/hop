@@ -111,17 +111,17 @@ The picker scans visible terminal output and dispatches supported selections to 
 
 File-shaped tokens that don't exist in the focused session's backend - including inside a devcontainer or on a remote ssh host - are not highlighted.
 
-### Hover links
-
-The same targets also become hyperlinks under the mouse: hover one and click to dispatch it, no picker needed. Targets soft-wrapped across rows are linked as a whole. A hop link replaces any link the program printed itself (OSC 8) that overlaps it. Clicking any web URL in a session window - hop's link or not - opens it in the session browser, with the backend's localhost translation applied. In a program that captures the mouse (e.g. Claude Code's fullscreen UI), a plain click belongs to the program - shift+click a link instead.
-
-With [`[keys].preview`](#global-config) set to a modifier, moving the mouse over a link to a text file or image while holding that modifier and resting it there for 300ms shows the file around the linked line (or the image, up to 20MB) in a floating panel next to the link, on a background slightly lighter (or, on a light theme, darker) than the terminal's ([`[preview].background_shift`](#global-config)), syntax-highlighted when [bat](https://github.com/sharkdp/bat) (or Debian's `batcat`) is installed on the host. The panel closes on the next move without the modifier or off the link. The panel is a Wayland layer-shell surface placed using sway's window positions.
-
-This needs a kitty build whose watchers support `on_mouse_move` and `screen.set_hyperlink_for_range()` - upstream kitty has neither. hop registers the watcher in every session kitty regardless; kitty builds without these features never call it.
-
 ### Binary files open on the host
 
 Choosing a `.png` (or similar) in the open-selection kitten opens the file with your host's `xdg-open` instead of nvim - so PNGs land in your image viewer, PDFs in your reader, archives in your file manager, etc. This seamlessly works over ssh as well. Directories are the exception: they open in nvim.
+
+## Hover links
+
+The same hints kitten targets also become hyperlinks under the mouse: hover one and click to dispatch it, no picker needed. In a program that captures the mouse (e.g. Claude Code's fullscreen UI), a plain click belongs to the program - shift+click a link instead.
+
+With [`[keys].preview`](#global-config) set to a modifier, hold it and rest the mouse on a link to a file or image to preview it in a popup. Text is syntax-highlighted when [bat](https://github.com/sharkdp/bat) is installed.
+
+Hover links and preview need the [artemave/kitty](https://github.com/artemave/kitty) fork ([releases](https://github.com/artemave/kitty/releases)); with upstream kitty they do nothing.
 
 ## Configuration
 
@@ -131,7 +131,7 @@ A hop config has several named sections plus a few scalar settings, all optional
 - `[layouts.<name>]` - a named layout: an `activate` probe plus `[layouts.<name>.windows.<role>]` sub-tables that come up together when the probe matches. See [Layouts and windows](#layouts-and-windows).
 - `[windows.<role>]` - a top-level window. Keys: `command`, `activate`, `position`, `env`, and for the editor `open_keys` / `open_keys_with_line`. See [Layouts and windows](#layouts-and-windows).
 - `[keys]` - session-kitty keybindings hop injects at bootstrap; each is a kitty key spec or a list of them, and an empty string or list disables it. `paste` (default `["ctrl+v", "ctrl+shift+v"]`) binds the [clipboard-image paste kitten](#special-windows); `open_selection` (default `["ctrl+shift+o"]`) binds the [visible-output picker](#open-visible-output-targets-from-kitty). `preview` is a single modifier - `ctrl`, `shift`, `alt` or `super` - that turns on the [hover-link file preview](#hover-links); unset or empty leaves it off.
-- `[preview]` - `background_shift` (number from 0 to 100, default `10`) is how many percent the [hover-link file preview](#hover-links)'s background moves from the terminal's toward white, or toward black on a light theme.
+- `[preview]` - `background_shift` (percent, default `10`): how much lighter than the terminal the [preview](#hover-links) popup is (darker on a light theme).
 - `[clipboard]` - `allow_read` (bool, default `true`) controls whether hop injects a `clipboard_control` override permitting OSC 52 clipboard reads without a per-paste prompt.
 - `sticky_positions` (bool, default `true`) - global on/off switch for the sticky-`position` feature. See [Layouts and windows](#layouts-and-windows).
 - `workspace_layout = "<mode>"` - sway workspace layout applied at first session entry. One of `splith`, `splitv`, `stacking`, `tabbed`.
