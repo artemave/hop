@@ -119,6 +119,11 @@ Choosing a `.png` (or similar) in the open-selection kitten opens the file with 
 
 The same hints kitten targets also become hyperlinks under the mouse: hover one and click to dispatch it, no picker needed. In a program that captures the mouse (e.g. Claude Code's fullscreen UI), a plain click belongs to the program - shift+click a link instead.
 
+<details>
+  <summary>Demo</summary>
+  https://github.com/user-attachments/assets/50775b32-c084-4bb2-9352-109d76b77883
+</details>
+
 With [`[keys].preview`](#global-config) set to a modifier, hold it and rest the mouse on a link to a file or image to preview it in a popup. Text is syntax-highlighted when [bat](https://github.com/sharkdp/bat) is installed.
 
 Hover links and preview need the [artemave/kitty](https://github.com/artemave/kitty) fork ([releases](https://github.com/artemave/kitty/releases)); with upstream kitty they do nothing.
