@@ -329,7 +329,16 @@ def test_existing_visible_output_targets_never_offers_bare_punctuation() -> None
     matches = existing_visible_output_targets(". .. / ./ ./bin foo.rb:.", paths_exist)
 
     assert [m.selection for m in matches] == ["./bin", "foo.rb:."]
-    assert asked == [["./bin", "foo.rb:.", "foo.rb"]]
+    assert asked == [["./bin", "foo.rb:.", "foo.rb:", "foo.rb"]]
+
+
+def test_existing_visible_output_targets_finds_a_path_ending_a_sentence() -> None:
+    path = "/tmp/claude-1000/-workspace/0e2e2c35-0349-483c-acdf-b6dbadb9ac39/scratchpad/online_migrations_issue.md"
+    text = f"  The draft is still at {path}."
+
+    matches = existing_visible_output_targets(text, lambda candidates: {path})
+
+    assert matches == [VisibleOutputMatch(start=24, end=24 + len(path), selection=path)]
 
 
 def test_existing_visible_output_targets_picks_the_existing_colon_separated_parts() -> None:

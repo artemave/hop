@@ -219,53 +219,60 @@ def existing_visible_output_targets_per_text(
     ``paths_exist`` call covering all of them."""
 
     per_text = [(text, find_visible_output_targets(text)) for text in texts]
-    colon_splits = [
-        {m: _colon_delimited_parts(text, m) for m in matches if not _is_url_selection(m.selection)}
+    candidate_parts = [
+        {m: _candidate_parts(text, m) for m in matches if not _is_url_selection(m.selection)}
         for text, matches in per_text
     ]
     candidates = list(
-        dict.fromkeys(part.selection for splits in colon_splits for parts in splits.values() for part in parts)
+        dict.fromkeys(part.selection for splits in candidate_parts for parts in splits.values() for part in parts)
     )
     existing: set[str] = paths_exist(candidates) if candidates else set()
-    return [_offered(matches, splits, existing) for (_, matches), splits in zip(per_text, colon_splits, strict=True)]
+    return [_offered(matches, splits, existing) for (_, matches), splits in zip(per_text, candidate_parts, strict=True)]
 
 
 def _offered(
     matches: list[VisibleOutputMatch],
-    colon_splits: dict[VisibleOutputMatch, list[VisibleOutputMatch]],
+    candidate_parts: dict[VisibleOutputMatch, list[VisibleOutputMatch]],
     existing: set[str],
 ) -> list[VisibleOutputMatch]:
     offered: list[VisibleOutputMatch] = []
     for match in matches:
-        if match not in colon_splits:
+        if match not in candidate_parts:
             offered.append(match)
             continue
         picked: list[VisibleOutputMatch] = []
-        for part in colon_splits[match]:
+        for part in candidate_parts[match]:
             if part.selection in existing and all(part.end <= p.start or part.start >= p.end for p in picked):
                 picked.append(part)
         offered.extend(sorted(picked, key=lambda p: p.start))
     return offered
 
 
-def _colon_delimited_parts(text: str, match: VisibleOutputMatch) -> list[VisibleOutputMatch]:
-    """Every run of whole colon-separated segments of ``match``, longest first.
+def _candidate_parts(text: str, match: VisibleOutputMatch) -> list[VisibleOutputMatch]:
+    """Every run of whole colon-separated segments of ``match``, with and
+    without trailing periods, longest first.
 
-    Colons are legal in file names (``db-2026-02-02T14:10:07.dump``) but also
-    join a path to its line number or to surrounding prose (``error:foo.rb``),
-    so which run names the file is only known once existence is checked.
+    Colons and dots are legal in file names (``db-2026-02-02T14:10:07.dump``)
+    but also join a path to its line number or to surrounding prose
+    (``error:foo.rb``, ``see foo.rb.``), so which run names the file is only
+    known once existence is checked.
     """
 
     colons = [i for i in range(match.start, match.end) if text[i] == ":"]
     starts = [match.start, *(i + 1 for i in colons)]
     ends = [*colons, match.end]
-    parts = [
-        VisibleOutputMatch(start=start, end=end, selection=_without_row_breaks(text[start:end]))
+    spans = {
+        span
         for first, start in enumerate(starts)
         for end in ends[first:]
+        for span in ((start, end), (start, start + len(text[start:end].rstrip("."))))
+    }
+    parts = [
+        VisibleOutputMatch(start=start, end=end, selection=_without_row_breaks(text[start:end]))
+        for start, end in spans
         if _NAMES_SOMETHING.search(text, start, end)
     ]
-    return sorted(parts, key=lambda p: p.start - p.end)
+    return sorted(parts, key=lambda p: (p.start - p.end, p.start))
 
 
 def _without_row_breaks(token: str) -> str:
