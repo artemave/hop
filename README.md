@@ -130,6 +130,14 @@ With [`[keys].preview`](#global-config) set to a modifier, hold it and rest the 
 
 Hover links and preview need the [artemave/kitty](https://github.com/artemave/kitty) fork ([releases](https://github.com/artemave/kitty/releases)); with upstream kitty they do nothing.
 
+### Claude Code file links
+
+Claude Code draws a markdown link by its label alone (`[app](src/app.ts#L3)` shows `app`), so hover links can't find the path in the text. The `hop-file-links` Claude Code plugin points every file reference in Claude's replies - plain `path:line`, inline code and markdown links - at `hop://open/<path>:<line>`, which hover links open and preview like any other target. Install it at a Claude Code prompt:
+
+```
+/plugin install hop-file-links --marketplace artemave/hop
+```
+
 ## Configuration
 
 A hop config has several named sections plus a few scalar settings, all optional:

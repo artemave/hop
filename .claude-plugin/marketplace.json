@@ -1,0 +1,5 @@
+{
+  "name": "hop",
+  "owner": { "name": "artemave" },
+  "plugins": [{ "name": "hop-file-links", "source": "./integrations/claude-code" }]
+}

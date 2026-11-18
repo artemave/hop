@@ -1,0 +1,1 @@
+{ "name": "hop-file-links", "version": "0.1.0", "description": "Point file references in replies at hop://open/<path>:<line> so hop opens and previews them" }
