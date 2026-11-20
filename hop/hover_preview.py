@@ -1,7 +1,8 @@
-"""Hover preview: a text file or image in a floating kitty panel.
+"""Hover preview: a text file, image or web page card in a floating kitty panel.
 
-With ``[keys].preview`` set, the hover-links watcher previews the file behind
-the hover link under the mouse while the mouse moves with that modifier held.
+With ``[keys].preview`` set, the hover-links watcher previews the file or web
+page behind the link under the mouse while the mouse moves with that modifier
+held.
 The panel is a layer-shell ``os-panel`` placed next to the link: hop finds the
 kitty OS window's content area through sway and adds the link's cell offset.
 """
@@ -14,24 +15,34 @@ import re
 import shutil
 import struct
 import tempfile
+import textwrap
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import TYPE_CHECKING, Callable, Sequence
 
 from hop.config import PreviewSettings
 from hop.focused import FilePreview, ImagePreview
-from hop.hover_links import OPEN_ACTION, parse_hop_url
+from hop.hover_links import OPEN_ACTION, action_for_clicked_url
 from hop.session import ProjectSession
 from hop.state import SessionState, load_sessions, session_from_state
 from hop.sway import SwayWindowPlacement
-from hop.targets import SyntacticFileTarget, SyntacticRailsRefTarget, parse_visible_output_target
+from hop.targets import parse_visible_output_target
+
+if TYPE_CHECKING:
+    from hop.link_preview import LinkCard
 
 TAB_WIDTH = 4
+LINK_CARD_MAX_COLUMNS = 80
+_CARD_MARGIN = 1
 
 _REVERSE = "\x1b[7m"
 _REVERSE_OFF = "\x1b[27m"
+_BOLD = "\x1b[1m"
+_DIM = "\x1b[2m"
+_NORMAL_INTENSITY = "\x1b[22m"
 _CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f]")
+_WORD = re.compile(r"\w+")
 # bat right-aligns line numbers to at least this many digits, then a space.
 _BAT_MIN_NUMBER_WIDTH = 4
 # The panel's child hides the cursor, turns line wrap off so the terminal cuts
@@ -45,6 +56,12 @@ _TEXT_PANEL_SCRIPT = (
 )
 # icat talks to the terminal, so its output can't go through ``$(…)``.
 _IMAGE_PANEL_SCRIPT = 'file=$1; shift; printf "\\033[?25l"; "$@" "$file"; rm -f "$file"; exec sleep infinity'
+# A link card with an image: icat draws the image, then the text, which starts
+# by moving the cursor below it.
+_CARD_PANEL_SCRIPT = (
+    'file=$1; image=$2; shift 2; printf "\\033[?25l\\033[?7l"; "$@" "$image"; cat "$file"; '
+    'rm -f "$file" "$image"; exec sleep infinity'
+)
 
 
 def session_preview_settings(
@@ -67,13 +84,14 @@ def session_preview_settings(
 
 
 def preview_selection(url: str) -> str | None:
-    """The file reference a hover link opens, or ``None`` for any other link."""
+    """The file reference or web URL a link opens, or ``None`` for any other
+    link."""
 
-    parsed = parse_hop_url(url)
-    if parsed is None or parsed[0] != OPEN_ACTION:
+    clicked = action_for_clicked_url(url)
+    if clicked is None or clicked[0] != OPEN_ACTION:
         return None
-    selection = parsed[1]
-    if not isinstance(parse_visible_output_target(selection), SyntacticFileTarget | SyntacticRailsRefTarget):
+    selection = clicked[1]
+    if parse_visible_output_target(selection) is None:
         return None
     return selection
 
@@ -101,14 +119,15 @@ def find_bat() -> str | None:
 
 @dataclass(frozen=True, slots=True)
 class RenderedPreview:
-    """What the panel shows: ``command`` prints the file holding ``content``
-    into a ``columns`` × ``lines`` panel, run by ``script``."""
+    """What the panel shows: ``script`` runs ``command`` on the files holding
+    ``content`` and ``image`` in a ``columns`` × ``lines`` panel."""
 
     content: str | bytes
     lines: int
     columns: int
     command: tuple[str, ...] = ("cat",)
     script: str = _TEXT_PANEL_SCRIPT
+    image: bytes | None = None
 
 
 def render_preview(
@@ -169,17 +188,78 @@ def render_image_preview(
     ``max_lines`` cells of ``cell_width`` × ``cell_height`` pixels; ``None``
     for an image whose size ``image_size`` can't read."""
 
-    size = image_size(preview.data)
+    cells = _image_cells(preview.data, max_lines, max_columns, cell_width=cell_width, cell_height=cell_height)
+    if cells is None:
+        return None
+    columns, lines = cells
+    return RenderedPreview(
+        content=preview.data,
+        lines=lines,
+        columns=columns,
+        command=_icat(kitten, columns, lines),
+        script=_IMAGE_PANEL_SCRIPT,
+    )
+
+
+def render_link_card(
+    card: LinkCard, *, kitten: str, max_lines: int, max_columns: int, cell_width: int, cell_height: int
+) -> RenderedPreview:
+    """The site (dim), the title (bold) and the description wrapped (left
+    out when the title has all its words), under the card's image scaled to
+    fit the lines the text leaves, inside a one-cell margin. At most
+    ``LINK_CARD_MAX_COLUMNS`` wide, margin included."""
+
+    width = min(max_columns, LINK_CARD_MAX_COLUMNS) - 2 * _CARD_MARGIN
+    room = max(1, max_lines - 2 * _CARD_MARGIN)
+    rows = [(_DIM, card.site)]
+    if card.title is not None:
+        rows += [(_BOLD, line) for line in textwrap.wrap(_printable(card.title), width)]
+    if card.description is not None and not _repeats(card.description, card.title):
+        rows += [("", line) for line in textwrap.wrap(_printable(card.description), width)]
+    rows = [(style, _fit(_printable(text), width)) for style, text in rows[:room]]
+    columns = max(_width(text) for _, text in rows)
+    margin = " " * _CARD_MARGIN
+    text = "\n".join(f"{margin}{style}{text}{_NORMAL_INTENSITY}" if style else margin + text for style, text in rows)
+    image_room = room - len(rows)
+    cells = (
+        None
+        if card.image is None or image_room < 1
+        else _image_cells(card.image, image_room, width, cell_width=cell_width, cell_height=cell_height)
+    )
+    if cells is None:
+        return RenderedPreview(
+            content="\n" * _CARD_MARGIN + text,
+            lines=len(rows) + 2 * _CARD_MARGIN,
+            columns=columns + 2 * _CARD_MARGIN,
+        )
+    image_columns, image_lines = cells
+    return RenderedPreview(
+        content=f"\x1b[{_CARD_MARGIN + image_lines + 1};1H{text}",
+        lines=image_lines + len(rows) + 2 * _CARD_MARGIN,
+        columns=max(columns, image_columns) + 2 * _CARD_MARGIN,
+        command=_icat(kitten, image_columns, image_lines, offset=_CARD_MARGIN),
+        script=_CARD_PANEL_SCRIPT,
+        image=card.image,
+    )
+
+
+def _repeats(description: str, title: str | None) -> bool:
+    return title is not None and set(_WORD.findall(description.lower())) <= set(_WORD.findall(title.lower()))
+
+
+def _image_cells(
+    data: bytes, max_lines: int, max_columns: int, *, cell_width: int, cell_height: int
+) -> tuple[int, int] | None:
+    size = image_size(data)
     if size is None:
         return None
     width, height = size
     scale = min(1, max_columns * cell_width / width, max_lines * cell_height / height)
-    columns = max(1, math.ceil(width * scale / cell_width))
-    lines = max(1, math.ceil(height * scale / cell_height))
-    command = (kitten, "icat", "--transfer-mode=stream", "--align=left", f"--place={columns}x{lines}@0x0")
-    return RenderedPreview(
-        content=preview.data, lines=lines, columns=columns, command=command, script=_IMAGE_PANEL_SCRIPT
-    )
+    return max(1, math.ceil(width * scale / cell_width)), max(1, math.ceil(height * scale / cell_height))
+
+
+def _icat(kitten: str, columns: int, lines: int, *, offset: int = 0) -> tuple[str, ...]:
+    return (kitten, "icat", "--transfer-mode=stream", "--align=left", f"--place={columns}x{lines}@{offset}x{offset}")
 
 
 def image_size(data: bytes) -> tuple[int, int] | None:
@@ -322,9 +402,9 @@ def panel_background(rgb: int, *, shift: float) -> str:
 
 
 def panel_launch_args(
-    placement: PanelPlacement, preview: RenderedPreview, preview_path: Path, *, background: str
+    placement: PanelPlacement, preview: RenderedPreview, preview_paths: Sequence[Path], *, background: str
 ) -> list[str]:
-    """kitty ``launch`` arguments for the panel showing ``preview_path``."""
+    """kitty ``launch`` arguments for the panel showing ``preview_paths``."""
 
     settings = (
         "edge=none",
@@ -346,18 +426,29 @@ def panel_launch_args(
         "-c",
         preview.script,
         "hop-preview",
-        str(preview_path),
+        *(str(path) for path in preview_paths),
         *preview.command,
     ]
 
 
-def write_preview_file(preview: RenderedPreview) -> Path:
-    """A file holding the preview for the panel to print; the panel deletes it."""
+def write_preview_files(preview: RenderedPreview) -> tuple[Path, ...]:
+    """Files holding the preview's content and image for the panel to
+    print; the panel deletes them."""
 
+    content = preview.content.encode() if isinstance(preview.content, str) else preview.content
+    return tuple(_write_runtime_file(data) for data in (content, preview.image) if data is not None)
+
+
+def new_runtime_file() -> Path:
+    """An empty file under ``$XDG_RUNTIME_DIR/hop`` for a helper to write."""
+
+    return _write_runtime_file(b"")
+
+
+def _write_runtime_file(data: bytes) -> Path:
     base = Path(os.environ.get("XDG_RUNTIME_DIR") or "/tmp") / "hop"
     base.mkdir(parents=True, exist_ok=True)
     descriptor, path = tempfile.mkstemp(prefix="preview-", dir=base)
-    content = preview.content.encode() if isinstance(preview.content, str) else preview.content
     with os.fdopen(descriptor, "wb") as handle:
-        handle.write(content)
+        handle.write(data)
     return Path(path)

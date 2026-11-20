@@ -845,13 +845,14 @@ class CommandBackend:
         return result.stdout
 
     def read_preview_file(self, session: ProjectSession, path: Path, *, max_image_bytes: int) -> str | bytes | None:
-        """What the hover preview shows of ``path``: its text, an image's
-        bytes, or ``None`` for anything else — a missing file, a directory,
-        other binary content, or an image over ``max_image_bytes``.
+        """What the hover preview shows of ``path``: its text, an image's or
+        a PDF's bytes, or ``None`` for anything else — a missing file, a
+        directory, other binary content, or an image or PDF over
+        ``max_image_bytes``.
 
         One round trip, since the hover preview pays it on every hovered
         link and through a container or ssh prefix each trip is slow. The
-        kind comes from ``file --mime``; an SVG is text. An image travels
+        kind comes from ``file --mime``; an SVG is text. An image or PDF travels
         as base64 so the runner's text-mode output carries it intact.
         """
 
@@ -865,7 +866,7 @@ class CommandBackend:
             '  mime=$(file -b --mime "$p")\n'
             '  case "$mime" in\n'
             "    image/svg*) ;;\n"
-            "    image/*)\n"
+            "    image/*|application/pdf*)\n"
             f'      [ "$(wc -c < "$p")" -le {max_image_bytes} ] || exit {_READ_PREVIEW_FILE_TOO_LARGE_EXIT}\n'
             '      echo image; base64 "$p"; exit ;;\n'
             "  esac\n"

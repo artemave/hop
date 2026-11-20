@@ -939,6 +939,17 @@ def test_command_backend_read_preview_file_is_none_for_an_image_over_the_limit(t
     assert host_backend().read_preview_file(build_session(tmp_path), png, max_image_bytes=len(_PNG) - 1) is None
 
 
+def test_command_backend_read_preview_file_reads_a_pdf_as_bytes_up_to_the_limit(
+    tmp_path: Path, pdf_document: bytes
+) -> None:
+    pdf = tmp_path / "doc.pdf"
+    pdf.write_bytes(pdf_document)
+    session = build_session(tmp_path)
+
+    assert host_backend().read_preview_file(session, pdf, max_image_bytes=len(pdf_document)) == pdf_document
+    assert host_backend().read_preview_file(session, pdf, max_image_bytes=len(pdf_document) - 1) is None
+
+
 def test_command_backend_read_preview_file_reads_an_svg_as_text(tmp_path: Path) -> None:
     svg = tmp_path / "icon.svg"
     svg.write_text('<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"></svg>\n')

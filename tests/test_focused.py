@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Sequence
 
 from hop.focused import FilePreview, ImagePreview, paths_exist, session_file_preview, session_paths_exist
+from hop.pdf import first_page_png
 from hop.session import ProjectSession
 from hop.state import CommandBackendRecord, SessionState
 
@@ -675,6 +676,20 @@ def test_session_file_preview_reads_an_image(tmp_path: Path) -> None:
     )
 
     assert preview == ImagePreview(path=session_root / "logo.png", data=png)
+
+
+def test_session_file_preview_shows_a_pdfs_first_page(tmp_path: Path, pdf_document: bytes) -> None:
+    session_root = tmp_path.resolve()
+    (session_root / "doc.pdf").write_bytes(pdf_document)
+    (session_root / "broken.pdf").write_bytes(b"%PDF-1.4\nnot really\n")
+
+    def preview(name: str) -> FilePreview | ImagePreview | None:
+        return session_file_preview(
+            name, session_name="demo", source_cwd=None, sessions_loader=lambda: {"demo": _state("demo", session_root)}
+        )
+
+    assert preview("doc.pdf") == ImagePreview(path=session_root / "doc.pdf", data=first_page_png(pdf_document) or b"")
+    assert preview("broken.pdf") is None
 
 
 def test_session_file_preview_skips_binary_files(tmp_path: Path) -> None:

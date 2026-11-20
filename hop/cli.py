@@ -200,6 +200,14 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         return run_paste_helper(session_name=args[1], write_path=args[2], mime=args[3])
 
+    # Internal entrypoint: the hover-links watcher launches `hop __link-preview
+    # <session> <url> <write-path>` via kitty's `run_background_process`, so
+    # the page fetch happens off the kitty boss thread.
+    if args[:1] == ["__link-preview"]:
+        from hop.link_preview import run_link_preview_helper
+
+        return run_link_preview_helper(session_name=args[1], url=args[2], write_path=args[3])
+
     if args[:1] == ["__trust-prompt"]:
         from hop import trust_prompt
 

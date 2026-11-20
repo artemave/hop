@@ -16,16 +16,19 @@ from hop.hover_preview import (
     find_bat,
     image_size,
     link_columns,
+    new_runtime_file,
     panel_background,
     panel_launch_args,
     panel_placement,
     preview_room,
     preview_selection,
     render_image_preview,
+    render_link_card,
     render_preview,
     session_preview_settings,
-    write_preview_file,
+    write_preview_files,
 )
+from hop.link_preview import LinkCard
 from hop.session import ProjectSession, resolve_project_session
 from hop.state import CommandBackendRecord, SessionState
 from hop.sway import SwayWindowPlacement
@@ -72,17 +75,20 @@ def test_session_preview_settings_is_none_when_session_state_is_gone() -> None:
     assert session_preview_settings("demo", sessions_loader=lambda: {}) is None
 
 
-@pytest.mark.parametrize("selection", ["app/models/user.rb:42", "UsersController#show"])
-def test_preview_selection_is_the_file_reference_a_link_opens(selection: str) -> None:
+@pytest.mark.parametrize("selection", ["app/models/user.rb:42", "UsersController#show", "https://example.com/a?b=c d"])
+def test_preview_selection_is_the_file_reference_or_url_a_link_opens(selection: str) -> None:
     assert preview_selection(hop_url("open", selection)) == selection
+
+
+def test_preview_selection_is_a_plain_web_link_itself() -> None:
+    assert preview_selection("https://example.com/page") == "https://example.com/page"
 
 
 @pytest.mark.parametrize(
     "url",
     [
-        hop_url("open", "https://example.com/app.rb"),
+        hop_url("open", " "),
         hop_url("copy", "app.rb"),
-        "https://example.com/app.rb",
         "file:///srv/app.rb",
     ],
 )
@@ -304,7 +310,7 @@ def test_panel_launch_args_place_a_focusless_panel_showing_the_file() -> None:
     args = panel_launch_args(
         PanelPlacement(output_name="DP-2", left=134, top=114),
         RenderedPreview(content="x", lines=6, columns=40),
-        Path("/run/user/1000/hop/preview-1.txt"),
+        (Path("/run/user/1000/hop/preview-1.txt"),),
         background="#1a1a1a",
     )
 
@@ -341,7 +347,7 @@ def test_panel_launch_args_run_an_image_without_capturing_its_output() -> None:
     assert rendered is not None
 
     args = panel_launch_args(
-        PanelPlacement(output_name="DP-2", left=0, top=0), rendered, Path("/run/preview-1"), background="#000000"
+        PanelPlacement(output_name="DP-2", left=0, top=0), rendered, (Path("/run/preview-1"),), background="#000000"
     )
 
     assert args[-10:] == [
@@ -358,22 +364,39 @@ def test_panel_launch_args_run_an_image_without_capturing_its_output() -> None:
     ]
 
 
-def test_write_preview_file_writes_an_image_as_is(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_write_preview_files_writes_an_image_as_is(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
     data = _png(1, 1) + b"\xff\x00"
 
-    path = write_preview_file(RenderedPreview(content=data, lines=1, columns=1))
+    (path,) = write_preview_files(RenderedPreview(content=data, lines=1, columns=1))
 
     assert path.read_bytes() == data
 
 
-def test_write_preview_file_writes_into_the_runtime_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_write_preview_files_writes_into_the_runtime_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
 
-    path = write_preview_file(RenderedPreview(content="日本 x", lines=1, columns=7))
+    (path,) = write_preview_files(RenderedPreview(content="日本 x", lines=1, columns=7))
 
     assert path.parent == tmp_path / "hop"
     assert path.read_text(encoding="utf-8") == "日本 x"
+
+
+def test_write_preview_files_writes_the_text_then_the_image(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+
+    text, image = write_preview_files(RenderedPreview(content="t", lines=1, columns=1, image=b"img"))
+
+    assert (text.read_text(), image.read_bytes()) == ("t", b"img")
+
+
+def test_new_runtime_file_is_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+
+    path = new_runtime_file()
+
+    assert path.parent == tmp_path / "hop"
+    assert path.read_bytes() == b""
 
 
 # --- images ------------------------------------------------------------------
@@ -467,3 +490,90 @@ def test_render_image_preview_is_none_for_an_image_of_unknown_size() -> None:
     )
 
     assert rendered is None
+
+
+# --- link cards --------------------------------------------------------------
+
+DIM = "\x1b[2m"
+BOLD = "\x1b[1m"
+NORMAL = "\x1b[22m"
+
+
+def _card(card: LinkCard, *, max_lines: int = 20, max_columns: int = 100) -> RenderedPreview:
+    return render_link_card(
+        card, kitten="/k", max_lines=max_lines, max_columns=max_columns, cell_width=10, cell_height=20
+    )
+
+
+def test_render_link_card_prints_the_site_title_and_wrapped_description_inside_a_margin() -> None:
+    rendered = _card(LinkCard(site="example.com", title="A\ttitle", description="word " * 20), max_columns=30)
+
+    assert rendered == RenderedPreview(
+        content=f"\n {DIM}example.com{NORMAL}\n {BOLD}A   title{NORMAL}\n"
+        + "\n".join([" word word word word word"] * 4),
+        lines=8,
+        columns=26,
+    )
+
+
+@pytest.mark.parametrize(
+    "description",
+    ["If you live in the terminal, kitty is made for you! - kovidgoyal/kitty", "MADE for you"],
+)
+def test_render_link_card_leaves_out_a_description_the_title_repeats(description: str) -> None:
+    rendered = _card(
+        LinkCard(
+            site="GitHub",
+            title="GitHub - kovidgoyal/kitty: If you live in the terminal, kitty is made for you!",
+            description=description,
+        )
+    )
+
+    assert rendered.lines == 4
+
+
+def test_render_link_card_keeps_a_description_with_words_the_title_lacks() -> None:
+    rendered = _card(LinkCard(site="s", title="Made for you", description="Made for you and me"))
+
+    assert rendered.content == f"\n {DIM}s{NORMAL}\n {BOLD}Made for you{NORMAL}\n Made for you and me"
+
+
+def test_render_link_card_is_at_most_link_card_max_columns_wide() -> None:
+    rendered = _card(LinkCard(site="s", description="x" * 200), max_columns=500)
+
+    assert rendered.columns == 80
+
+
+def test_render_link_card_cuts_the_text_to_the_room() -> None:
+    rendered = _card(LinkCard(site="s", title="t", description="d"), max_lines=4)
+
+    assert rendered.content == f"\n {DIM}s{NORMAL}\n {BOLD}t{NORMAL}"
+    assert rendered.lines == 4
+
+
+def test_render_link_card_puts_the_image_above_the_text() -> None:
+    rendered = _card(LinkCard(site="example.com", title="Title", image=_png(400, 100)), max_lines=10)
+
+    assert rendered == RenderedPreview(
+        content=f"\x1b[7;1H {DIM}example.com{NORMAL}\n {BOLD}Title{NORMAL}",
+        lines=9,
+        columns=42,
+        command=("/k", "icat", "--transfer-mode=stream", "--align=left", "--place=40x5@1x1"),
+        script='file=$1; image=$2; shift 2; printf "\\033[?25l\\033[?7l"; "$@" "$image"; cat "$file"; '
+        'rm -f "$file" "$image"; exec sleep infinity',
+        image=_png(400, 100),
+    )
+
+
+def test_render_link_card_scales_the_image_into_the_lines_the_text_leaves() -> None:
+    rendered = _card(LinkCard(site="s", image=_png(1000, 1000)), max_lines=5)
+
+    assert (rendered.columns, rendered.lines) == (6, 5)
+    assert rendered.command[-1] == "--place=4x2@1x1"
+
+
+@pytest.mark.parametrize("image", [b"not an image", _png(10, 10)])
+def test_render_link_card_drops_an_image_it_cant_show(image: bytes) -> None:
+    rendered = _card(LinkCard(site="s", title="t", image=image), max_lines=4)
+
+    assert rendered == RenderedPreview(content=f"\n {DIM}s{NORMAL}\n {BOLD}t{NORMAL}", lines=4, columns=3)

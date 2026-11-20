@@ -20,6 +20,7 @@ from typing import Callable, Iterable
 
 from hop.backends import SessionBackend
 from hop.kitty import get_focused_window_cwd
+from hop.pdf import first_page_png, is_pdf
 from hop.session import ProjectSession
 from hop.state import SessionState, load_sessions, session_from_state
 from hop.sway import SwayIpcAdapter
@@ -160,6 +161,9 @@ def session_file_preview(
     if content is None:
         return None
     if isinstance(content, bytes):
+        if is_pdf(content):
+            page = first_page_png(content)
+            return None if page is None else ImagePreview(path=target.path, data=page)
         return ImagePreview(path=target.path, data=content)
     return FilePreview(path=target.path, line_number=target.line_number, text=content)
 

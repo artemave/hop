@@ -126,13 +126,13 @@ https://github.com/user-attachments/assets/50775b32-c084-4bb2-9352-109d76b77883
 
 </details>
 
-With [`[keys].preview`](#global-config) set to a modifier, hold it and rest the mouse on a link to a file or image to preview it in a popup. Text is syntax-highlighted when [bat](https://github.com/sharkdp/bat) is installed.
+With [`[keys].preview`](#global-config) set to a modifier, hold it and rest the mouse on a link to a file, image or PDF to preview it in a popup. Text is syntax-highlighted when [bat](https://github.com/sharkdp/bat) is installed; a PDF shows its first page when `pdftoppm` (poppler) is. A web link previews as a card with the page's title, description and image; a GitHub issue or pull request is read with [gh](https://cli.github.com) when it's installed, so private repos preview too.
 
 Hover links and preview need the [artemave/kitty](https://github.com/artemave/kitty) fork ([releases](https://github.com/artemave/kitty/releases)); with upstream kitty they do nothing.
 
 ### Claude Code file links
 
-Claude Code draws a markdown link by its label alone (`[app](src/app.ts#L3)` shows `app`), so hover links can't find the path in the text. The `hop-file-links` Claude Code plugin points every file reference in Claude's replies - plain `path:line`, inline code and markdown links - at `hop://open/<path>:<line>`, which hover links open and preview like any other target. Install it at a Claude Code prompt:
+Claude Code draws a markdown link by its label alone (`[app](src/app.ts#L3)` shows `app`), so hover links can't find the path in the text. The `hop-file-links` Claude Code plugin points every file reference in Claude's replies - plain `path:line`, inline code and markdown links - at `hop://open/<path>:<line>`, which hover links open and preview like any other target. Web links need no plugin: Claude Code links them itself, and they preview as cards. Install it at a Claude Code prompt:
 
 ```
 /plugin install hop-file-links --marketplace artemave/hop

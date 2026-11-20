@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import os
+import shutil
 import sys
+import time
+from functools import partial
 from pathlib import Path
 from typing import Any, Callable, cast
 
@@ -52,21 +55,28 @@ from hop.hover_preview import (  # noqa: E402
     KittyCells,
     find_bat,
     link_columns,
+    new_runtime_file,
     panel_background,
     panel_launch_args,
     panel_placement,
     preview_room,
     preview_selection,
     render_image_preview,
+    render_link_card,
     render_preview,
     session_preview_settings,
-    write_preview_file,
+    write_preview_files,
 )
 from hop.kitten.dispatch import dispatch_selected_match  # noqa: E402
 from hop.kitty import session_name_from_listen_on  # noqa: E402
+from hop.link_preview import LinkCard  # noqa: E402
 from hop.sway import SwayIpcAdapter, SwayWindowPlacement  # noqa: E402
+from hop.targets import SyntacticUrlTarget, parse_visible_output_target  # noqa: E402
 
 PREVIEW_IDLE_SECONDS = 0.3
+LINK_CARD_TTL_SECONDS = 300.0
+
+Preview = FilePreview | ImagePreview | LinkCard
 
 add_timer = cast("Callable[[Callable[[int | None], None], float, bool], int]", _kitty_add_timer)
 remove_timer = cast("Callable[[int], None]", _kitty_remove_timer)
@@ -91,10 +101,16 @@ _last_moves: dict[int, dict[str, Any]] = {}
 # (window id, link url) the preview is for while the modifier is held over a
 # link; the panel shows only while it still matches.
 _preview_wanted: tuple[int, str] | None = None
-_preview_loaded: tuple[FilePreview | ImagePreview, SwayWindowPlacement, int, int] | None = None
+_preview_anchor: tuple[int, int] = (0, 0)
+_preview_loaded: tuple[Preview, SwayWindowPlacement, int, int] | None = None
 _preview_timer: int | None = None
 _preview_panel: Any = None
 _bat = find_bat()
+# url -> (when it was fetched, its card or None when it has none)
+_link_cards: dict[str, tuple[float, LinkCard | None]] = {}
+_link_fetches: set[str] = set()
+# The url whose card the wanted preview waits for.
+_awaited_link: str | None = None
 
 
 def on_mouse_move(boss: Any, window: Any, data: dict[str, Any]) -> None:
@@ -157,7 +173,7 @@ def _paint_hovered(boss: Any, window: Any) -> None:
 
 
 def _update_preview(boss: Any, window: Any) -> None:
-    global _preview_settings, _preview_loaded
+    global _preview_settings, _preview_loaded, _preview_anchor
     if _preview_settings is _UNREAD:
         session_name = session_name_from_listen_on(boss.listening_on)
         assert session_name is not None
@@ -179,24 +195,61 @@ def _update_preview(boss: Any, window: Any) -> None:
     wanted = (window.id, url)
     if wanted != _preview_wanted:
         _want_preview(boss, wanted)
-        _preview_loaded = _load_preview(boss, window, selection, column=columns[0], row=move["y"])
+        _preview_anchor = (columns[0], move["y"])
+        target = parse_visible_output_target(selection)
+        if isinstance(target, SyntacticUrlTarget):
+            _request_link_card(boss, window, target.url)
+        else:
+            session_name = session_name_from_listen_on(boss.listening_on)
+            assert session_name is not None
+            preview = session_file_preview(selection, session_name=session_name, source_cwd=window.cwd_of_child)
+            _preview_loaded = _placed(boss, window, preview)
     if _preview_panel is None:
         _restart_preview_timer(boss)
 
 
-def _load_preview(
-    boss: Any, window: Any, selection: str, *, column: int, row: int
-) -> tuple[FilePreview | ImagePreview, SwayWindowPlacement, int, int] | None:
+def _request_link_card(boss: Any, window: Any, url: str) -> None:
+    global _preview_loaded, _awaited_link
+    cached = _link_cards.get(url)
+    if cached is not None and time.monotonic() - cached[0] < LINK_CARD_TTL_SECONDS:
+        _preview_loaded = _placed(boss, window, cached[1])
+        return
+    _awaited_link = url
+    if url in _link_fetches:
+        return
     session_name = session_name_from_listen_on(boss.listening_on)
     assert session_name is not None
-    preview = session_file_preview(selection, session_name=session_name, source_cwd=window.cwd_of_child)
+    write_path = new_runtime_file()
+    _link_fetches.add(url)
+    boss.run_background_process(
+        [shutil.which("hop") or "hop", "__link-preview", session_name, url, str(write_path)],
+        notify_on_death=partial(_on_link_card, boss, url, write_path),
+    )
+
+
+def _on_link_card(boss: Any, url: str, write_path: Path, exit_status: int, error: Exception | None) -> None:
+    global _preview_loaded, _awaited_link
+    _link_fetches.discard(url)
+    card = LinkCard.from_json(write_path.read_text(encoding="utf-8")) if error is None and exit_status == 0 else None
+    write_path.unlink(missing_ok=True)
+    _link_cards[url] = (time.monotonic(), card)
+    if url != _awaited_link:
+        return
+    _awaited_link = None
+    assert _preview_wanted is not None
+    _preview_loaded = _placed(boss, boss.window_id_map[_preview_wanted[0]], card)
+    if _preview_timer is None and _preview_panel is None:
+        _show_preview(boss)
+
+
+def _placed(boss: Any, window: Any, preview: Preview | None) -> tuple[Preview, SwayWindowPlacement, int, int] | None:
     if preview is None:
         return None
     app_id = boss.os_window_map[window.os_window_id].wm_class
     placement = SwayIpcAdapter().window_placement(pid=os.getpid(), app_id=app_id)
     if placement is None:
         return None
-    return preview, placement, column, row
+    return preview, placement, *_preview_anchor
 
 
 def _restart_preview_timer(boss: Any) -> None:
@@ -227,7 +280,7 @@ def _show_preview(boss: Any) -> None:
 def _open_preview(
     boss: Any,
     window: Any,
-    preview: FilePreview | ImagePreview,
+    preview: Preview,
     placement: SwayWindowPlacement,
     *,
     column: int,
@@ -247,6 +300,15 @@ def _open_preview(
         )
         if rendered is None:
             return
+    elif isinstance(preview, LinkCard):
+        rendered = render_link_card(
+            preview,
+            kitten=kitten_exe(),
+            max_lines=room.lines,
+            max_columns=window.screen.columns,
+            cell_width=size["cell_width"],
+            cell_height=size["cell_height"],
+        )
     else:
         rendered = render_preview(preview, bat=_bat, max_lines=room.lines, max_columns=window.screen.columns)
     cells = KittyCells(
@@ -269,17 +331,18 @@ def _open_preview(
     assert _preview_settings is not None
     background = panel_background(window.screen.color_profile.default_bg.rgb, shift=_preview_settings.background_shift)
     opts, args = parse_launch_args(
-        panel_launch_args(panel, rendered, write_preview_file(rendered), background=background)
+        panel_launch_args(panel, rendered, write_preview_files(rendered), background=background)
     )
     _preview_panel = launch(boss, opts, args)
 
 
 def _want_preview(boss: Any, wanted: tuple[int, str] | None) -> None:
-    global _preview_wanted, _preview_loaded, _preview_panel
+    global _preview_wanted, _preview_loaded, _preview_panel, _awaited_link
     if wanted == _preview_wanted:
         return
     _preview_wanted = wanted
     _preview_loaded = None
+    _awaited_link = None
     _cancel_preview_timer()
     if _preview_panel is not None:
         boss.mark_window_for_close(_preview_panel)
